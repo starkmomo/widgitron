@@ -1,6 +1,6 @@
 [package]
 name = "widgitron"
-version = "0.2.1"
+version = "0.2.2"
 description = "A modular desktop widget framework for researchers and developers"
 authors = ["you"]
 edition = "2021"
@@ -30,5 +30,9 @@ lazy_static = "1.4"
 shellexpand = "3.1"
 tauri-plugin-autostart = "2"
 tauri-plugin-window-state = "2"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Security_Cryptography"] }
 quick-xml = "0.40.0"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+

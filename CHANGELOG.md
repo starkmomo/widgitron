@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2] - 2026-06-03
+
+### Highlights
+- **Quota Monitor**: Added support for multi-progress bar monitoring and subscription package display toggle.
+- **Paper Deadlines**: Added CORE and CCF conference rank information and filtering.
+- **Arxiv Radar**: Fixed intermittent fetch failures by implementing robust URL percent-encoding and quote-wrapping for multi-word search phrases. Added validation of HTTP response status codes.
+- **UI/UX Polish**: Beautiful dashboard sidebar, customized setting list styles, and widget color unification.
+
 ## [0.2.1] - 2026-05-14
 
 ### Highlights

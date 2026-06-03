@@ -1,6 +1,6 @@
 # Widgitron
 
-![Version](https://img.shields.io/badge/version-0.2.1-blue)
+![Version](https://img.shields.io/badge/version-0.2.2-blue)
 ![Rust](https://img.shields.io/badge/rust-1.75+-brown)
 ![Tauri](https://img.shields.io/badge/tauri-2.0-blue)
 ![React](https://img.shields.io/badge/react-19-blue)
@@ -16,6 +16,10 @@
 Widgitron is a modern, cross-platform dashboard built with **Tauri**, **Rust**, and **React**. It provides a premium, glassmorphic UI for monitoring GPUs, conference deadlines, and arxiv research papers.
 
 <p align="center">
+  <img src="assets/quota_monitor.png" width="50%" />
+  <img src="assets/gpu_monitor.png" width="46%" />
+</p>
+<p align="center">
   <img src="assets/deadline_demo.gif" width="49%" />
   <img src="assets/arxiv_radar_demo.gif" width="47%" />
 </p>
@@ -30,6 +34,7 @@ Widgitron is a modern, cross-platform dashboard built with **Tauri**, **Rust**, 
 - [x] Paper deadline countdown widget
 - [x] Advanced widget theme customization
 - [x] Arxiv Radar: paper card with swipe gestures
+- [x] Agent quota monitor widget (Codex, Cursor, etc.)
 
 
 ## 🚀 Quick Start
