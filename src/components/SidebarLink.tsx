@@ -7,9 +7,10 @@ interface SidebarLinkProps {
   active: boolean;
   onClick: () => void;
   theme?: string;
+  badge?: React.ReactNode;
 }
 
-export function SidebarLink({ icon, label, active, onClick, theme = "dark" }: SidebarLinkProps) {
+export function SidebarLink({ icon, label, active, onClick, theme = "dark", badge }: SidebarLinkProps) {
   const isLight = theme === "light";
   return (
     <button
@@ -39,7 +40,8 @@ export function SidebarLink({ icon, label, active, onClick, theme = "dark" }: Si
         {icon}
       </span>
       <span className={`font-bold text-sm ${active ? (isLight ? "text-white" : "text-white") : ""}`}>{label}</span>
-      {active && (
+      {badge && <div className="ml-auto flex items-center">{badge}</div>}
+      {active && !badge && (
         <motion.div
           layoutId="active-indicator"
           className={`ml-auto w-1.5 h-1.5 rounded-full ${isLight ? "bg-white" : "bg-blue-400"}`}

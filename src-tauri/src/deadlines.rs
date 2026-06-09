@@ -127,7 +127,7 @@ pub fn process_deadlines(
                 }
             }
             Err(e) => {
-                println!("Error parsing Paper Deadlines YAML: {}", e);
+                log::error!("Error parsing Paper Deadlines YAML: {}", e);
             }
         }
     });
@@ -139,6 +139,9 @@ pub async fn start_paper_monitor(app: AppHandle, state: Arc<GlobalState>) {
         .timeout(Duration::from_secs(30))
         .build()
         .unwrap_or_default();
+
+    // Startup delay to let frontend initialize cleanly
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     loop {
         let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
@@ -159,7 +162,7 @@ pub async fn start_paper_monitor(app: AppHandle, state: Arc<GlobalState>) {
         match client.get(url).send().await {
             Ok(res) => {
                 if let Ok(text) = res.text().await {
-                    println!(
+                    log::info!(
                         "Fetched Paper Deadlines YAML ({} bytes)",
                         text.len()
                     );
@@ -177,17 +180,19 @@ pub async fn start_paper_monitor(app: AppHandle, state: Arc<GlobalState>) {
                 }
             }
             Err(e) => {
-                println!("Error fetching paper deadlines: {}", e);
+                log::error!("Error fetching paper deadlines: {}", e);
             }
         }
 
         let interval = config.update_interval.unwrap_or(3600);
-        for _ in 0..interval {
+        let check_interval = 5;
+        let loops = interval / check_interval;
+        for _ in 0..loops {
+            tokio::time::sleep(Duration::from_secs(check_interval)).await;
             let ac = config_store::read_config::<AppConfig>(&app, "app_config.json");
             if !ac.deadline_enabled.unwrap_or(true) {
                 break;
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 }

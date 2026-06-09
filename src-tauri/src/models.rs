@@ -68,7 +68,7 @@ impl Default for ArxivConfig {
         Self {
             keywords: vec!["gaussian".into(), "vla".into(), "llm".into()],
             categories: vec!["cs".into()],
-            update_interval: 43200, // 12 hours
+            update_interval: 3600, // 1 hour
             show_card_hints: Some(true),
         }
     }

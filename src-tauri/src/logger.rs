@@ -23,8 +23,8 @@ impl SimpleLogger {
 
 impl log::Log for SimpleLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        // Only capture WARN and ERROR — skip noisy INFO/DEBUG
-        metadata.level() <= log::Level::Warn
+        // Allow up to INFO level to be handled by the logger (for console printing)
+        metadata.level() <= log::Level::Info
     }
 
     fn log(&self, record: &log::Record) {
@@ -39,10 +39,13 @@ impl log::Log for SimpleLogger {
                 record.args()
             );
 
-            if let Ok(mut file) = self.file.lock() {
-                let _ = file.write_all(log_line.as_bytes());
-                // sync_all guarantees bytes hit disk — important for catching crashes
-                let _ = file.sync_all();
+            // ONLY write to the log file if it is WARN or ERROR (keeps file size small)
+            if record.level() <= log::Level::Warn {
+                if let Ok(mut file) = self.file.lock() {
+                    let _ = file.write_all(log_line.as_bytes());
+                    // sync_all guarantees bytes hit disk — important for catching crashes
+                    let _ = file.sync_all();
+                }
             }
 
             // Mirror to stderr as a secondary safety net
@@ -106,10 +109,10 @@ pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
     // Remove old logs, keep the 20 most recent
     prune_old_logs(&log_dir, 20);
 
-    // Initialize custom logger — WARN and ERROR only
+    // Initialize custom logger — enable INFO filter for console logging
     let logger = SimpleLogger::new(log_path.clone()).map_err(|e| e.to_string())?;
     log::set_boxed_logger(Box::new(logger))
-        .map(|()| log::set_max_level(log::LevelFilter::Warn))
+        .map(|()| log::set_max_level(log::LevelFilter::Info))
         .map_err(|e| e.to_string())?;
 
     // Setup panic hook — writes synchronously so crash logs are never lost

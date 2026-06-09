@@ -41,7 +41,7 @@ pub async fn set_desktop_mode(app: AppHandle, label: String, enabled: bool) -> R
             let hwnd = HWND(hwnd_raw.0 as *mut _);
 
             if enabled {
-                println!("Enabling desktop mode for {}", label);
+                log::info!("Enabling desktop mode for {}", label);
                 
                 use windows::Win32::Foundation::RECT;
                 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
@@ -87,7 +87,7 @@ pub async fn set_desktop_mode(app: AppHandle, label: String, enabled: bool) -> R
                 };
 
                 if let Some(parent) = target_parent {
-                    println!("Found target desktop handle (Progman/WorkerW): {:?}", parent);
+                    log::info!("Found target desktop handle (Progman/WorkerW): {:?}", parent);
                     
                     use windows::Win32::Foundation::POINT;
                     let pt = POINT { x: rect.left, y: rect.top };
@@ -123,7 +123,7 @@ pub async fn set_desktop_mode(app: AppHandle, label: String, enabled: bool) -> R
                         use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
                         let _ = SetFocus(Some(hwnd));
                     }
-                    println!("Desktop mode set successfully at local ({}, {})", pt.x, pt.y);
+                    log::info!("Desktop mode set successfully at local ({}, {})", pt.x, pt.y);
 
                     // 5. Force a repaint via Tauri API to fix transparent bug without breaking resize grip
                     if let Ok(size) = win.inner_size() {
@@ -135,10 +135,10 @@ pub async fn set_desktop_mode(app: AppHandle, label: String, enabled: bool) -> R
                         });
                     }
                 } else {
-                    println!("Failed to find desktop handle");
+                    log::error!("Failed to find desktop handle");
                 }
             } else {
-                println!("Disabling desktop mode for {}", label);
+                log::info!("Disabling desktop mode for {}", label);
                 use windows::Win32::Foundation::RECT;
                 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
                 let mut rect = RECT::default();

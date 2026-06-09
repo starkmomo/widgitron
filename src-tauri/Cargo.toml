@@ -1,6 +1,6 @@
 [package]
 name = "widgitron"
-version = "0.2.2"
+version = "0.2.3"
 description = "A modular desktop widget framework for researchers and developers"
 authors = ["you"]
 edition = "2021"
@@ -35,4 +35,6 @@ quick-xml = "0.40.0"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 aes-gcm = "0.10"
 base64 = "0.22"
+semver = "1.0"
+
 

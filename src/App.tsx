@@ -94,6 +94,7 @@ function App() {
   const [quotaData, setQuotaData] = useState<any[]>([]);
   const [quotaConfig, setQuotaConfig] = useState<any>({ items: [] });
   const [isRefreshingQuota, setIsRefreshingQuota] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<any>(null);
 
   const handleRefreshArxiv = async () => {
     if (isRefreshingArxiv) return;
@@ -123,6 +124,7 @@ function App() {
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
   const [currentTheme, setCurrentTheme] = useState<WidgetTheme | null>(null);
   const pendingToggles = useRef<Set<string>>(new Set());
+  const saveQuotaTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     const win = appWindow;
@@ -135,25 +137,32 @@ function App() {
     const init = async () => {
       try {
         console.log("Initializing window:", win.label);
-        const gc = await invoke("get_gpu_config");
-        if (!active) return;
-        const pc = await invoke("get_paper_config");
-        if (!active) return;
-        const arc = await invoke("get_arxiv_config");
-        if (!active) return;
-        const ac = (await invoke("get_app_config")) as any;
-        if (!active) return;
-        const initialDeadlines: any = await invoke("get_deadlines");
-        if (!active) return;
-        const initialGpuData: any = await invoke("get_gpu_data");
-        if (!active) return;
-        const initialArxiv: any = await invoke("get_arxiv_papers");
-        if (!active) return;
-        const qc = await invoke("get_quota_config");
-        if (!active) return;
-        const initialQuotas = await invoke("get_quota_data");
-        if (!active) return;
-        const tc: WidgetThemeConfig = await invoke("get_theme_config");
+        const [
+          gc,
+          pc,
+          arc,
+          ac,
+          initialDeadlines,
+          initialGpuData,
+          initialArxiv,
+          qc,
+          initialQuotas,
+          tc,
+          autostartEnabled
+        ] = (await Promise.all([
+          invoke("get_gpu_config"),
+          invoke("get_paper_config"),
+          invoke("get_arxiv_config"),
+          invoke("get_app_config"),
+          invoke("get_deadlines"),
+          invoke("get_gpu_data"),
+          invoke("get_arxiv_papers"),
+          invoke("get_quota_config"),
+          invoke("get_quota_data"),
+          invoke("get_theme_config"),
+          isEnabled()
+        ])) as [any, any, any, any, any, any, any, any, any, WidgetThemeConfig, boolean];
+
         if (!active) return;
 
         setGpuConfig(gc);
@@ -166,8 +175,7 @@ function App() {
         setArxivPapers(initialArxiv);
         setQuotaConfig(qc);
         setQuotaData(initialQuotas as any[]);
-        setIsAutostart(await isEnabled());
-        if (!active) return;
+        setIsAutostart(autostartEnabled);
         setThemeConfig(tc);
 
         const label = win.label;
@@ -201,33 +209,35 @@ function App() {
           }, 500);
         }
 
-        const windows = await getAllWebviewWindows();
-        if (!active) return;
-        const initialActive = [];
-        for (const w of windows) {
-          if (w.label.startsWith("widget-") && (await w.isVisible())) {
-            initialActive.push(w.label);
-          }
-        }
-        if (!active) return;
-        setActiveWidgets(initialActive);
-
-        interval = setInterval(async () => {
-          try {
-            const wins = await getAllWebviewWindows();
-            if (!active) return;
-            const activeW = [];
-            for (const w of wins) {
-              if (w.label.startsWith("widget-") && (await w.isVisible())) {
-                activeW.push(w.label);
-              }
+        if (win.label === "main") {
+          const windows = await getAllWebviewWindows();
+          if (!active) return;
+          const initialActive = [];
+          for (const w of windows) {
+            if (w.label.startsWith("widget-") && (await w.isVisible())) {
+              initialActive.push(w.label);
             }
-            if (!active) return;
-            setActiveWidgets(activeW);
-          } catch (e) {
-            console.error("Failed to query active windows in interval", e);
           }
-        }, 1000);
+          if (!active) return;
+          setActiveWidgets(initialActive);
+
+          interval = setInterval(async () => {
+            try {
+              const wins = await getAllWebviewWindows();
+              if (!active) return;
+              const activeW = [];
+              for (const w of wins) {
+                if (w.label.startsWith("widget-") && (await w.isVisible())) {
+                  activeW.push(w.label);
+                }
+              }
+              if (!active) return;
+              setActiveWidgets(activeW);
+            } catch (e) {
+              console.error("Failed to query active windows in interval", e);
+            }
+          }, 2000);
+        }
 
         const u1 = await win.onResized(async () => {
           try {
@@ -367,6 +377,20 @@ function App() {
         invoke<any[]>("get_arxiv_papers").then((res) => {
           if (active) setArxivPapers(res);
         }).catch(console.error);
+
+        // Check for updates on startup & every 12 hours in background
+        const runUpdateCheck = () => {
+          invoke<any>("check_for_updates").then((res) => {
+            if (active) setUpdateInfo(res);
+          }).catch((err) => {
+            console.error("Failed to check for updates:", err);
+          });
+        };
+
+        runUpdateCheck();
+
+        const updateInterval = setInterval(runUpdateCheck, 12 * 60 * 60 * 1000);
+        unlisteners.push(() => clearInterval(updateInterval));
       } catch (e) {
         console.error("Init failed", e);
       }
@@ -402,6 +426,9 @@ function App() {
       active = false;
       if (interval) clearInterval(interval);
       unlisteners.forEach((f) => f());
+      if (saveQuotaTimeoutRef.current) {
+        clearTimeout(saveQuotaTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -491,10 +518,16 @@ function App() {
 
     // Notify widgets instantly (e.g. show_account_name toggle)
     emit("quota_config_update", newConfig);
-    // Fire-and-forget: save to disk in background
-    invoke("save_quota_config", { config: newConfig }).catch((e: any) => {
-      console.error("Save quota config failed", e);
-    });
+
+    // Debounce saving to disk & fetching
+    if (saveQuotaTimeoutRef.current) {
+      clearTimeout(saveQuotaTimeoutRef.current);
+    }
+    saveQuotaTimeoutRef.current = setTimeout(() => {
+      invoke("save_quota_config", { config: newConfig }).catch((e: any) => {
+        console.error("Save quota config failed", e);
+      });
+    }, 500);
   };
 
   const onSaveThemes = async (config: WidgetThemeConfig) => {
@@ -773,6 +806,9 @@ function App() {
             active={activeTab === "settings"}
             onClick={() => setActiveTab("settings")}
             theme={appConfig.theme}
+            badge={updateInfo?.has_update ? (
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shadow-[0_0_8px_#f59e0b]" />
+            ) : undefined}
           />
         </nav>
       </aside>
@@ -1665,6 +1701,8 @@ function App() {
                   setIsAutostart(await isEnabled());
                 }}
                 activeWidgets={activeWidgets}
+                updateInfo={updateInfo}
+                setUpdateInfo={setUpdateInfo}
               />
             )}
           </AnimatePresence>

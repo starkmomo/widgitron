@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Sun, Moon, X, Plus, RotateCcw, Settings, Cpu, Calendar, BookOpen, Coins, Info, GripVertical, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence, Reorder, useDragControls } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { WidgetThemeConfig } from "../types/theme";
 import { MasterSwitch } from "../components/MasterSwitch";
 import { ThemeManagementSection } from "./ThemeManagementSection";
@@ -167,6 +168,8 @@ interface SettingsPanelProps {
   isAutostart: boolean;
   onToggleAutostart: () => void;
   activeWidgets: string[];
+  updateInfo: any;
+  setUpdateInfo: (info: any) => void;
 }
 
 export function SettingsPanel({
@@ -184,7 +187,9 @@ export function SettingsPanel({
   onSaveThemes,
   isAutostart,
   onToggleAutostart,
-  activeWidgets
+  activeWidgets,
+  updateInfo,
+  setUpdateInfo
 }: SettingsPanelProps) {
   const [localGpu, setLocalGpu] = useState<any>(gpuConfig);
   const [localPaper, setLocalPaper] = useState<any>(paperConfig);
@@ -192,6 +197,62 @@ export function SettingsPanel({
   const [localQuota, setLocalQuota] = useState<any>(quotaConfig);
   const [activeSection, setActiveSection] = useState<string>("general");
   const [openProviderId, setOpenProviderId] = useState<string | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "completed" | "error">("idle");
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    const setup = async () => {
+      unlisten = await listen<any>("ota_download_progress", (event) => {
+        const { state, progress, error } = event.payload;
+        setDownloadState(state);
+        setDownloadProgress(progress);
+        if (state === "error" && error) {
+          setUpdateError(error);
+        }
+      });
+    };
+    setup();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const handleCheckUpdate = async () => {
+    setIsCheckingUpdate(true);
+    setUpdateError(null);
+    try {
+      const res = await invoke<any>("check_for_updates");
+      setUpdateInfo(res);
+    } catch (err) {
+      console.error(err);
+      setUpdateError(String(err));
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleStartUpdate = async () => {
+    if (!updateInfo?.download_url || !updateInfo?.asset_name) {
+      setUpdateError("No download link found for Windows installer.");
+      return;
+    }
+    setUpdateError(null);
+    setDownloadProgress(0);
+    setDownloadState("downloading");
+    try {
+      await invoke("download_and_install_update", {
+        downloadUrl: updateInfo.download_url,
+        assetName: updateInfo.asset_name,
+      });
+    } catch (err) {
+      console.error(err);
+      setUpdateError(String(err));
+      setDownloadState("error");
+    }
+  };
 
   const tabs = [
     { id: "general", label: "General", icon: Settings },
@@ -762,12 +823,12 @@ export function SettingsPanel({
                   <button
                     key={c}
                     onClick={() => {
-                      const next = { ...localArxiv, category: c };
+                      const next = { ...localArxiv, categories: [c] };
                       setLocalArxiv(next);
                       onSaveArxiv(next);
                     }}
                     className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
-                      localArxiv.category === c
+                      (localArxiv.categories?.[0] || "cs") === c
                         ? "bg-pink-500 text-white shadow-lg shadow-pink-500/20"
                         : appConfig.theme === "light"
                         ? "bg-slate-100 text-slate-500 border border-slate-200"
@@ -812,7 +873,7 @@ export function SettingsPanel({
                   Update Interval (Hours)
                 </label>
                 <span className="text-[10px] font-black text-pink-500 bg-pink-500/10 px-2 py-0.5 rounded-md">
-                  {Math.round((localArxiv.update_interval || 43200) / 3600)}h
+                  {Math.round((localArxiv.update_interval || 3600) / 3600)}h
                 </span>
               </div>
               <input
@@ -820,7 +881,7 @@ export function SettingsPanel({
                 min="3600"
                 max="86400"
                 step="3600"
-                value={localArxiv.update_interval || 43200}
+                value={localArxiv.update_interval || 3600}
                 onChange={(e) => {
                   const nextVal = parseInt(e.target.value);
                   const next = { ...localArxiv, update_interval: nextVal };
@@ -830,7 +891,7 @@ export function SettingsPanel({
                 className="w-full h-1.5 bg-pink-600/20 rounded-lg appearance-none cursor-pointer accent-pink-600"
               />
             </div>
-            <div className="flex items-center justify-between p-4 rounded-2xl bg-white/5 border border-white/5">
+            <div className="flex items-center justify-between p-4 rounded-2xl bg-white/5 border border-white/5 gap-4">
               <div className="space-y-1">
                 <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
                   Show Interaction Hints
@@ -997,7 +1058,7 @@ export function SettingsPanel({
           </h3>
           <div className="flex items-center justify-center gap-2">
             <span className="px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 text-[10px] font-black uppercase tracking-widest border border-blue-500/10">
-              v0.2.2 Stable
+              v0.2.3 Stable
             </span>
             <span className="px-3 py-1 rounded-full bg-purple-500/10 text-purple-500 text-[10px] font-black uppercase tracking-widest border border-purple-500/10">
               Research Edition
@@ -1019,6 +1080,108 @@ export function SettingsPanel({
             github.com/starkmomo/widgitron
           </a>.
         </p>
+
+        {/* OTA Update Card */}
+        <div className={`w-full max-w-md p-6 border border-[var(--dashboard-border)] rounded-2xl text-left flex flex-col gap-4 ${
+          appConfig.theme === "light" ? "bg-slate-50" : "bg-black/20"
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <RotateCcw size={14} className={`text-blue-500 ${isCheckingUpdate ? "animate-spin" : ""}`} />
+              <span className={`text-[11px] font-black uppercase tracking-wider ${appConfig.theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
+                Software Update
+              </span>
+            </div>
+            {!updateInfo?.has_update && (
+              <button
+                onClick={handleCheckUpdate}
+                disabled={isCheckingUpdate}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-50 pointer-events-auto"
+              >
+                {isCheckingUpdate ? "Checking..." : "Check Now"}
+              </button>
+            )}
+          </div>
+
+          {/* Status display */}
+          {updateError && (
+            <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] rounded-xl italic font-medium leading-relaxed">
+              Error: {updateError}
+            </div>
+          )}
+
+          {updateInfo?.has_update ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
+                    Update Available: {updateInfo.latest_version}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    Current version: {updateInfo.current_version}
+                  </div>
+                </div>
+                <span className="px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-500 text-[9px] font-black uppercase tracking-widest border border-amber-500/10 animate-pulse">
+                  New
+                </span>
+              </div>
+
+              {updateInfo.release_notes && (
+                <div className={`p-3 rounded-xl max-h-36 overflow-y-auto text-[10px] font-medium leading-relaxed custom-scrollbar border border-[var(--dashboard-border)] ${
+                  appConfig.theme === "light" ? "bg-white text-slate-600" : "bg-black/30 text-slate-400"
+                }`}>
+                  <div className="font-bold mb-1 uppercase tracking-wider text-[9px] text-slate-500">Release Notes:</div>
+                  <pre className="whitespace-pre-wrap font-sans font-medium text-[10px] break-all">
+                    {updateInfo.release_notes}
+                  </pre>
+                </div>
+              )}
+
+              {downloadState === "idle" && (
+                <button
+                  onClick={handleStartUpdate}
+                  className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-lg shadow-blue-500/20 text-center"
+                >
+                  Download and Install Update
+                </button>
+              )}
+
+              {downloadState === "downloading" && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                    <span>Downloading...</span>
+                    <span>{downloadProgress}%</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-black/20 rounded-full overflow-hidden border border-white/5">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-300"
+                      style={{ width: `${downloadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {downloadState === "completed" && (
+                <div className="text-center py-2 text-xs font-bold text-emerald-400 animate-pulse">
+                  Download completed. Launching installer...
+                </div>
+              )}
+
+              {downloadState === "error" && (
+                <button
+                  onClick={handleStartUpdate}
+                  className="w-full py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all text-center"
+                >
+                  Retry Download
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+              {updateInfo ? "Your software is up to date." : "Check to see if updates are available."}
+            </div>
+          )}
+        </div>
         <div className="pt-6 flex items-center gap-8 border-t border-white/5 w-full justify-center">
           <div className="flex flex-col items-center gap-1">
             <span className="text-[10px] text-slate-600 font-bold uppercase tracking-widest">Engine</span>
@@ -1071,6 +1234,9 @@ export function SettingsPanel({
               )}
               <Icon size={16} className="relative z-10 flex-shrink-0" />
               <span className="relative z-10 truncate">{tab.label}</span>
+              {tab.id === "about" && updateInfo?.has_update && (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse relative z-10 ml-auto flex-shrink-0 shadow-[0_0_6px_#f59e0b]" />
+              )}
             </button>
           );
         })}

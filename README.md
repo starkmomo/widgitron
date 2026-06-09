@@ -1,17 +1,33 @@
-# Widgitron
+<p align="center">
+  <img src="icons/widgitron.png" alt="Widgitron Logo" width="120" style="border-radius: 24px; box-shadow: 0 8px 30px rgba(0,0,0,0.15);" />
+</p>
 
-![Version](https://img.shields.io/badge/version-0.2.2-blue)
-![Rust](https://img.shields.io/badge/rust-1.75+-brown)
-![Tauri](https://img.shields.io/badge/tauri-2.0-blue)
-![React](https://img.shields.io/badge/react-19-blue)
-![License](https://img.shields.io/badge/license-MIT-orange)
+<h1 align="center">Widgitron</h1>
 
-<img src="icons/widgitron.png" alt="Widgitron Logo" width="150">
+<p align="center">
+  <strong>A high-performance, modular desktop widget framework for researchers and developers.</strong>
+</p>
 
-**A high-performance, modular desktop widget framework for researchers and developers.**
+<p align="center">
+  <a href="https://github.com/starkmomo/widgitron/releases">
+    <img src="https://img.shields.io/badge/Version-v0.2.3-8B5CF6?style=flat-square&labelColor=2E1065&logo=github&logoColor=white" alt="Version" />
+  </a>
+  <a href="https://www.rust-lang.org/">
+    <img src="https://img.shields.io/badge/Rust-1.75%2B-F97316?style=flat-square&logo=rust&logoColor=white&labelColor=431407" alt="Rust" />
+  </a>
+  <a href="https://tauri.app/">
+    <img src="https://img.shields.io/badge/Tauri-2.0-24C6C1?style=flat-square&logo=tauri&logoColor=white&labelColor=083344" alt="Tauri" />
+  </a>
+  <a href="https://react.dev/">
+    <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=white&labelColor=172554" alt="React" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-10B981?style=flat-square&labelColor=022C22" alt="License" />
+  </a>
+</p>
 
 > [!TIP]
-> Windows users can download the pre-compiled standalone executable directly from the [Releases](https://github.com/caizhuojiang/widgitron/releases) page.
+> Windows users can download the pre-compiled standalone executable directly from the [Releases](https://github.com/starkmomo/widgitron/releases) page.
 
 Widgitron is a modern, cross-platform dashboard built with **Tauri**, **Rust**, and **React**. It provides a premium, glassmorphic UI for monitoring GPUs, conference deadlines, and arxiv research papers.
 
@@ -43,7 +59,7 @@ Widgitron is a modern, cross-platform dashboard built with **Tauri**, **Rust**, 
 
 ```bash
 # Clone the repository
-git clone https://github.com/caizhuojiang/widgitron.git
+git clone https://github.com/starkmomo/widgitron.git
 cd widgitron
 
 # Install dependencies
@@ -59,27 +75,6 @@ pnpm tauri dev
 # Build production executable
 pnpm tauri build
 ```
-
-## 📊 Built-in Widgets
-
-### GPU Monitor
-
-Intelligent remote GPU monitoring optimized for HPC environments:
-- 📡 **HPC Compliant**: Uses persistent SSH to minimize load on login nodes.
-- 🚀 **Slurm Support**: Real-time job tracking and Job ID management.
-
-### Paper Deadline Monitor
-
-Keep track of conference deadlines with high-precision countdowns:
-- ⏳ **Real-time Countdowns**: Precise tracking down to the second.
-- 🎯 **Smart Filtering**: Filter by conference types or research areas.
-
-### Arxiv Radar
-
-Stay ahead of the curve with real-time research monitoring:
-- 🔍 **Keyword Filtering**: Targeted tracking of specific research topics (e.g., LLM, VLA).
-- 📁 **Smart Libraries**: Organize papers into "Saved" for future reading or "Discarded" to clear clutter.
-- 📱 **Gesture Controls**: Swipe right to save, left to discard, and up to open the PDF.
 
 ## 🤝 Contributing
 

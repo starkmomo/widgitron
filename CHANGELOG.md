@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.3] - 2026-06-09
+
+### Highlights
+- **OTA Update System**: Integrated full automatic in-app software update checking, asynchronous installer download with progress tracking, and silent startup.
+- **Stability Polish**: Robust network request timeouts and event-listener cleanup optimization to guarantee smooth performance.
+
 ## [0.2.2] - 2026-06-03
 
 ### Highlights

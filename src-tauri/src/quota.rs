@@ -1044,6 +1044,7 @@ pub async fn perform_quota_fetch(
                         fetched_items.append(&mut items);
                     }
                     Err(e) => {
+                        log::error!("Failed to fetch Antigravity quota: {}", e);
                         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                         fetched_items.push(QuotaItem {
                             id: "antigravity".to_string(),
@@ -1070,6 +1071,7 @@ pub async fn perform_quota_fetch(
                         fetched_items.push(resolved_item);
                     }
                     Err(e) => {
+                        log::error!("Failed to fetch Codex quota: {}", e);
                         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                         fetched_items.push(QuotaItem {
                             id: "codex".to_string(),
@@ -1096,6 +1098,7 @@ pub async fn perform_quota_fetch(
                         fetched_items.push(resolved_item);
                     }
                     Err(e) => {
+                        log::error!("Failed to fetch Cursor quota: {}", e);
                         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                         fetched_items.push(QuotaItem {
                             id: "cursor".to_string(),
@@ -1124,10 +1127,12 @@ pub async fn perform_quota_fetch(
                     Err(e) => {
                         let is_network_error = e.contains("Network error") || e.contains("error sending request") || e.contains("timeout");
                         if is_network_error {
+                            log::warn!("Copilot network error (retained): {}", e);
                             let mut retained_item = item.clone();
                             retained_item.error_msg = None;
                             fetched_items.push(retained_item);
                         } else {
+                            log::error!("Failed to fetch Copilot quota: {}", e);
                             let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                             fetched_items.push(QuotaItem {
                                 id: "copilot".to_string(),
@@ -1181,6 +1186,7 @@ pub async fn perform_quota_fetch(
             };
 
             if url.is_empty() {
+                log::error!("Failed to fetch custom quota '{}': API URL is empty", resolved_item.name);
                 resolved_item.error_msg = Some("API URL is empty".into());
                 resolved_item.last_update = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
                 fetched_items.push(resolved_item);
@@ -1195,6 +1201,7 @@ pub async fn perform_quota_fetch(
             let res = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
+                    log::error!("Network error for custom quota provider '{}': {}", resolved_item.name, e);
                     resolved_item.error_msg = Some(format!("Network error: {}", e));
                     resolved_item.last_update = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
                     fetched_items.push(resolved_item);
@@ -1203,6 +1210,7 @@ pub async fn perform_quota_fetch(
             };
 
             if !res.status().is_success() {
+                log::error!("HTTP status error {} for custom quota provider '{}'", res.status(), resolved_item.name);
                 resolved_item.error_msg = Some(format!("HTTP error status: {}", res.status()));
                 resolved_item.last_update = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
                 fetched_items.push(resolved_item);
@@ -1212,6 +1220,7 @@ pub async fn perform_quota_fetch(
             let text = match res.text().await {
                 Ok(t) => t,
                 Err(e) => {
+                    log::error!("Failed to read response body for custom quota provider '{}': {}", resolved_item.name, e);
                     resolved_item.error_msg = Some(format!("Failed to retrieve response body: {}", e));
                     resolved_item.last_update = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
                     fetched_items.push(resolved_item);
@@ -1226,6 +1235,7 @@ pub async fn perform_quota_fetch(
                         resolved_item.current_value = Some(num);
                         resolved_item.error_msg = None;
                     } else {
+                        log::error!("Response for custom quota provider '{}' is not valid JSON", resolved_item.name);
                         resolved_item.error_msg = Some("Response is not valid JSON".into());
                     }
                     resolved_item.last_update = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -1280,10 +1290,12 @@ pub async fn perform_quota_fetch(
                         resolved_item.current_value = Some(num);
                         resolved_item.error_msg = None;
                     } else {
+                        log::error!("Extracted value is not numeric for custom quota provider '{}': {}", resolved_item.name, v);
                         resolved_item.error_msg = Some(format!("Extracted value is not numeric: {}", v));
                     }
                 }
                 None => {
+                    log::error!("Could not find path '{}' in JSON response for custom quota provider '{}'", resolved_item.json_path.as_deref().unwrap_or(""), resolved_item.name);
                     resolved_item.error_msg = Some("Could not find the specified path in JSON response".into());
                 }
             }
@@ -1310,6 +1322,31 @@ pub async fn perform_quota_fetch(
     Ok(config.items)
 }
 
+fn is_fetch_config_different(a: &QuotaConfig, b: &QuotaConfig) -> bool {
+    let map_a: std::collections::HashMap<&str, &QuotaItem> = a.items.iter().map(|item| (item.id.as_str(), item)).collect();
+    let map_b: std::collections::HashMap<&str, &QuotaItem> = b.items.iter().map(|item| (item.id.as_str(), item)).collect();
+
+    if map_a.len() != map_b.len() {
+        return true;
+    }
+
+    for (id, item_a) in &map_a {
+        match map_b.get(id) {
+            Some(item_b) => {
+                if item_a.provider != item_b.provider
+                    || item_a.api_key != item_b.api_key
+                    || item_a.api_url != item_b.api_url
+                    || item_a.json_path != item_b.json_path
+                {
+                    return true;
+                }
+            }
+            None => return true,
+        }
+    }
+    false
+}
+
 /// Polling monitor thread for quota items
 pub async fn start_quota_monitor(app: AppHandle, state: std::sync::Arc<GlobalState>) {
     // Emit cached data to any widgets already listening (state was pre-loaded in setup)
@@ -1320,6 +1357,9 @@ pub async fn start_quota_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
             }
         }
     }
+
+    // Startup delay to let frontend initialize cleanly
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     loop {
         let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
@@ -1345,27 +1385,26 @@ pub async fn start_quota_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
         }
 
         if let Err(e) = perform_quota_fetch(&app, &state).await {
-            crate::println!("Error updating Quota: {}. Retrying in 60s.", e);
+            log::error!("Error updating Quota: {}. Retrying in 60s.", e);
             tokio::time::sleep(Duration::from_secs(60)).await;
             continue;
         }
 
         // Wait for interval, break early if config changes
         let last_config = config_store::read_config::<QuotaConfig>(&app, "quota_config.json");
-        for _ in 0..interval {
+        let check_interval = 5;
+        let loops = interval / check_interval;
+        for _ in 0..loops {
+            tokio::time::sleep(Duration::from_secs(check_interval)).await;
             let ac = config_store::read_config::<AppConfig>(&app, "app_config.json");
             if !ac.quota_enabled.unwrap_or(true) {
                 break;
             }
 
             let current_config = config_store::read_config::<QuotaConfig>(&app, "quota_config.json");
-            let current_str = serde_json::to_string(&current_config.items).unwrap_or_default();
-            let last_str = serde_json::to_string(&last_config.items).unwrap_or_default();
-            if current_str != last_str {
+            if is_fetch_config_different(&last_config, &current_config) {
                 break;
             }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 }

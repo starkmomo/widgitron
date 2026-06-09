@@ -5165,7 +5165,7 @@ dependencies = [
 
 [[package]]
 name = "widgitron"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -5177,6 +5177,7 @@ dependencies = [
  "quick-xml 0.40.1",
  "reqwest 0.12.28",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

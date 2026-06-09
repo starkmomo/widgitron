@@ -113,7 +113,7 @@ pub async fn save_theme_config(
 }
 
 pub async fn create_widget_impl(app: AppHandle, id: String, title: String) -> Result<(), String> {
-    println!("Creating/Showing widget: {} ({})", title, id);
+    log::info!("Creating/Showing widget: {} ({})", title, id);
     if let Some(win) = app.get_webview_window(&id) {
         let _ = win.show();
         let _ = win.set_focus();
@@ -133,7 +133,11 @@ pub async fn create_widget_impl(app: AppHandle, id: String, title: String) -> Re
                 let _ = win.show();
                 let _ = win.set_focus();
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                let err_str = e.to_string();
+                log::error!("Failed to build widget window '{}': {}", id, err_str);
+                return Err(err_str);
+            }
         }
     }
 
@@ -296,9 +300,13 @@ pub async fn get_arxiv_saved_papers(app: AppHandle) -> Result<Vec<ArxivPaper>, S
 
 #[tauri::command]
 pub async fn open_link(app: AppHandle, url: String) -> Result<(), String> {
-    println!("Opening link: {}", url);
+    log::info!("Opening link: {}", url);
     use tauri_plugin_opener::OpenerExt;
-    app.opener().open_url(&url, None::<String>).map_err(|e| e.to_string())
+    app.opener().open_url(&url, None::<String>).map_err(|e| {
+        let err_str = e.to_string();
+        log::error!("Failed to open link '{}': {}", url, err_str);
+        err_str
+    })
 }
 
 #[tauri::command]
@@ -329,10 +337,18 @@ pub async fn open_log_dir(app: AppHandle) -> Result<(), String> {
     let log_dir = app.path().app_log_dir().unwrap_or_else(|_| {
         std::env::current_dir().unwrap_or_default().join("logs")
     });
-    std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        let err_str = e.to_string();
+        log::error!("Failed to create log directory '{:?}': {}", log_dir, err_str);
+        return Err(err_str);
+    }
     use tauri_plugin_opener::OpenerExt;
     let path_str = log_dir.to_string_lossy().to_string();
-    app.opener().open_url(&path_str, None::<String>).map_err(|e| e.to_string())
+    app.opener().open_url(&path_str, None::<String>).map_err(|e| {
+        let err_str = e.to_string();
+        log::error!("Failed to open log directory '{}': {}", path_str, err_str);
+        err_str
+    })
 }
 
 #[tauri::command]
@@ -351,8 +367,13 @@ pub async fn save_quota_config(
     // Write config to disk
     config_store::write_config(&app, "quota_config.json", &config)?;
     
-    // Trigger immediate fetch to update values for the new config
-    let _ = crate::quota::perform_quota_fetch(&app, &*state).await;
+    // Update in-memory state and emit event to all windows
+    {
+        if let Ok(mut state_quota) = state.quota_data.lock() {
+            *state_quota = config.items.clone();
+        }
+    }
+    let _ = app.emit("quota_update", &config.items);
     
     Ok(())
 }

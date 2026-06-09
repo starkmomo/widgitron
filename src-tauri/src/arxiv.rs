@@ -187,6 +187,9 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
         }
     }
 
+    // Startup delay to let frontend initialize cleanly
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
     let mut is_startup = true;
     let mut backoff_secs = 60;
 
@@ -222,7 +225,7 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed < Duration::from_secs(1800) { // 30 minutes
                             skip_fetch = true;
-                            println!("Arxiv cache is fresh (< 30m). Skipping initial fetch on startup.");
+                            log::info!("Arxiv cache is fresh (< 30m). Skipping initial fetch on startup.");
                         }
                     }
                 }
@@ -236,7 +239,7 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
                     backoff_secs = 60;
                 }
                 Err(e) => {
-                    println!("Error fetching Arxiv: {}. Retrying in {}s.", e, backoff_secs);
+                    log::error!("Error fetching Arxiv: {}. Retrying in {}s.", e, backoff_secs);
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                     // Exponential backoff: double the sleep time up to 15 minutes (900s)
                     backoff_secs = std::cmp::min(backoff_secs * 2, 900);
@@ -246,7 +249,10 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
         }
 
         let last_config = config_store::read_config::<ArxivConfig>(&app, "arxiv_config.json");
-        for _ in 0..interval {
+        let check_interval = 5;
+        let loops = interval / check_interval;
+        for _ in 0..loops {
+            tokio::time::sleep(Duration::from_secs(check_interval)).await;
             let ac = config_store::read_config::<AppConfig>(&app, "app_config.json");
             if !ac.arxiv_enabled.unwrap_or(true) { break; }
             
@@ -254,8 +260,6 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
             if current_config.keywords != last_config.keywords || current_config.categories != last_config.categories || current_config.update_interval != last_config.update_interval {
                 break;
             }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 }

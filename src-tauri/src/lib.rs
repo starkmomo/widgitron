@@ -35,6 +35,7 @@ mod logger;
 mod quota;
 mod vscode_secrets;
 mod antigravity;
+mod ota;
 
 pub fn run() {
     tauri::Builder::default()
@@ -76,7 +77,9 @@ pub fn run() {
             commands::refresh_quota,
             commands::update_manual_quota,
             commands::restore_widget_position,
-            commands::log_frontend_error
+            commands::log_frontend_error,
+            ota::check_for_updates,
+            ota::download_and_install_update
         ])
         .setup(|app| {
             // Initialize Logger & Panic Hook
