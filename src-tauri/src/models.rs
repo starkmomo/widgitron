@@ -12,6 +12,7 @@ pub struct ServerConfig {
     pub user: Option<String>,
     pub password: Option<String>,
     pub key_file: Option<String>,
+    pub use_ssh_config: Option<bool>,
     pub use_slurm: Option<bool>,
 }
 
@@ -142,7 +143,10 @@ pub struct QuotaItem {
     /// `"local"` (IDE / local login) or `"api_key"`. When unset, provider default applies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_mode: Option<String>,
+    #[serde(default)]
     pub api_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_api_key: Option<String>,
     pub api_url: Option<String>,
     pub json_path: Option<String>,
     pub max_quota: Option<f64>,

@@ -34,6 +34,7 @@ mod logger;
 mod models;
 mod ota;
 mod quota;
+mod secrets;
 mod utils;
 mod vscode_secrets;
 mod widget_layout;

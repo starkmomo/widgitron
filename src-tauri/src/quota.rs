@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::models::{AppConfig, QuotaBar, QuotaConfig, QuotaItem, GlobalState};
-use crate::config_store;
+use crate::{config_store, secrets};
 use crate::vscode_secrets;
 
 const REMOVED_QUOTA_PROVIDERS: &[&str] = &["minimax-cn", "openai-compatible"];
@@ -41,6 +41,7 @@ pub fn sanitize_quota_config(mut config: QuotaConfig) -> QuotaConfig {
 
 pub fn read_quota_config(app: &AppHandle) -> QuotaConfig {
     let mut config = config_store::read_config::<QuotaConfig>(app, "quota_config.json");
+    decrypt_quota_config_secrets(&mut config);
     let removed = strip_removed_quota_providers(&mut config);
     if removed > 0 {
         log::info!(
@@ -48,11 +49,44 @@ pub fn read_quota_config(app: &AppHandle) -> QuotaConfig {
             removed,
             if removed == 1 { "y" } else { "ies" }
         );
-        if let Err(err) = config_store::write_config(app, "quota_config.json", &config) {
+        if let Err(err) = write_quota_config(app, &config) {
             log::warn!("Failed to persist sanitized quota_config.json: {}", err);
         }
     }
     config
+}
+
+pub fn write_quota_config(app: &AppHandle, config: &QuotaConfig) -> Result<(), String> {
+    let mut disk_config = config.clone();
+    encrypt_quota_config_secrets(&mut disk_config)?;
+    config_store::write_config(app, "quota_config.json", &disk_config)
+}
+
+fn encrypt_quota_config_secrets(config: &mut QuotaConfig) -> Result<(), String> {
+    for item in &mut config.items {
+        let key = item.api_key.trim();
+        if key.is_empty() {
+            item.encrypted_api_key = None;
+            continue;
+        }
+        item.encrypted_api_key = Some(secrets::encrypt_secret(key)?);
+        item.api_key.clear();
+    }
+    Ok(())
+}
+
+fn decrypt_quota_config_secrets(config: &mut QuotaConfig) {
+    for item in &mut config.items {
+        if let Some(encrypted) = item.encrypted_api_key.as_deref() {
+            match secrets::decrypt_secret(encrypted) {
+                Ok(decrypted) => item.api_key = decrypted,
+                Err(err) => {
+                    log::warn!("Failed to decrypt API key for quota item '{}': {}", item.id, err);
+                    item.api_key.clear();
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -192,6 +226,7 @@ fn build_quota_fetch_error_item(item: &QuotaItem, error: &str) -> QuotaItem {
         name: item.name.clone(),
         provider: item.provider.clone(),
         api_key: String::new(),
+        encrypted_api_key: None,
         api_url: item.api_url.clone(),
         json_path: item.json_path.clone(),
         max_quota: item.max_quota,
@@ -923,6 +958,7 @@ fn build_antigravity_quota_item(
         account_label,
         provider: "antigravity".to_string(),
         api_key: "".to_string(),
+        encrypted_api_key: None,
         api_url: None,
         json_path: None,
         max_quota: Some(100.0),
@@ -1212,6 +1248,7 @@ async fn fetch_codex_quota(_show_account_name: bool) -> Result<QuotaItem, String
         account_label,
         provider: "codex".to_string(),
         api_key: "".to_string(),
+        encrypted_api_key: None,
         api_url: None,
         json_path: None,
         max_quota: Some(100.0),
@@ -1380,6 +1417,7 @@ async fn fetch_copilot_quota(_show_account_name: bool, api_key_override: &str) -
             account_label: raw_email,
             provider: "copilot".to_string(),
             api_key: String::new(),
+            encrypted_api_key: None,
             api_url: None,
             json_path: None,
             max_quota: Some(100.0),
@@ -1473,6 +1511,7 @@ async fn fetch_cursor_quota(_show_account_name: bool) -> Result<QuotaItem, Strin
         account_label,
         provider: "cursor".to_string(),
         api_key: "".to_string(),
+        encrypted_api_key: None,
         api_url: None,
         json_path: None,
         max_quota: Some(100.0),
@@ -1699,6 +1738,7 @@ fn build_qoder_cn_quota_item(
         account_label,
         provider: "qoder-cn".to_string(),
         api_key: String::new(),
+        encrypted_api_key: None,
         api_url: None,
         json_path: None,
         max_quota: max_val,
@@ -2036,6 +2076,7 @@ async fn fetch_pioneer_quota(item: &QuotaItem) -> Result<QuotaItem, String> {
         name: item.name.clone(),
         provider: "pioneer".to_string(),
         api_key: String::new(),
+        encrypted_api_key: None,
         api_url: None,
         json_path: None,
         max_quota: max_val,
@@ -2114,6 +2155,7 @@ async fn fetch_claude_code_quota(item: &QuotaItem) -> Result<QuotaItem, String> 
             name: item.name.clone(),
             provider: "claude-code".to_string(),
             api_key: String::new(),
+            encrypted_api_key: None,
             api_url: None,
             json_path: None,
             max_quota: None,
@@ -2189,6 +2231,7 @@ async fn fetch_claude_code_quota(item: &QuotaItem) -> Result<QuotaItem, String> 
         name: item.name.clone(),
         provider: "claude-code".to_string(),
         api_key: String::new(),
+        encrypted_api_key: None,
         api_url: None,
         json_path: None,
         max_quota: max_val,
@@ -2683,7 +2726,7 @@ fn persist_quota_fetch_results(app: &AppHandle, fetched: &[QuotaItem]) -> Result
     }
 
     if changed {
-        config_store::write_config(app, "quota_config.json", &config)?;
+        write_quota_config(app, &config)?;
     }
     Ok(())
 }
@@ -2750,6 +2793,9 @@ fn merge_quota_item_config(fetched: &mut QuotaItem, source: &QuotaItem) {
     if !source.api_key.is_empty() {
         fetched.api_key = source.api_key.clone();
     }
+    if source.encrypted_api_key.is_some() {
+        fetched.encrypted_api_key = source.encrypted_api_key.clone();
+    }
     if source.auth_mode.is_some() {
         fetched.auth_mode = source.auth_mode.clone();
     }
@@ -2791,6 +2837,7 @@ fn is_fetch_config_different(a: &QuotaConfig, b: &QuotaConfig) -> bool {
                 if item_a.provider != item_b.provider
                     || item_a.auth_mode != item_b.auth_mode
                     || item_a.api_key != item_b.api_key
+                    || item_a.encrypted_api_key != item_b.encrypted_api_key
                     || item_a.api_url != item_b.api_url
                     || item_a.json_path != item_b.json_path
                 {

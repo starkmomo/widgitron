@@ -509,7 +509,23 @@ function GpuServerCard({
             }`}
           />
         </div>
-        <div className="col-span-4 flex items-center gap-4 pt-2">
+        <div className="col-span-4 flex flex-wrap items-center gap-4 pt-2">
+          <button
+            onClick={() => updateServer(idx, "use_ssh_config", !s.use_ssh_config, true)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+              s.use_ssh_config
+                ? "bg-blue-500/20 text-blue-400 border border-blue-500/20 shadow-lg shadow-blue-500/10"
+                : "bg-black/40 text-slate-500 border border-white/5 hover:border-white/20"
+            }`}
+          >
+            <div className={`w-2 h-2 rounded-full ${s.use_ssh_config ? "bg-blue-400 animate-pulse" : "bg-slate-600"}`} />
+            Use ~/.ssh/config
+          </button>
+          {s.use_ssh_config && (
+            <span className="text-[9px] text-blue-500/60 font-medium italic">
+              Host can be an SSH config alias; OpenSSH resolved HostName, User, Port and IdentityFile are applied.
+            </span>
+          )}
           <button
             onClick={() => updateServer(idx, "use_slurm", !s.use_slurm, true)}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
@@ -823,9 +839,9 @@ export function SettingsPanel({
         {
           id: `server-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           host: "",
-          user: "root",
+          user: "",
           password: "",
-          port: 22
+          use_ssh_config: false
         }
       ]
     };

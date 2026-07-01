@@ -19,6 +19,7 @@ export interface ServerConfig {
   user?: string;
   password?: string;
   key_file?: string;
+  use_ssh_config?: boolean;
   use_slurm?: boolean;
 }
 
@@ -34,6 +35,7 @@ export interface QuotaItemConfig {
   provider: string;
   auth_mode?: string;
   api_key?: string;
+  encrypted_api_key?: string | null;
   api_url?: string;
   json_path?: string;
   max_quota?: number;
@@ -135,6 +137,7 @@ export interface QuotaItem {
   provider: string;
   auth_mode?: string | null;
   api_key: string;
+  encrypted_api_key?: string | null;
   api_url?: string | null;
   json_path?: string | null;
   max_quota?: number | null;
