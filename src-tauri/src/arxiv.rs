@@ -4,15 +4,45 @@ use tauri::{AppHandle, Emitter};
 use crate::models::{AppConfig, ArxivConfig, ArxivPaper, GlobalState};
 use crate::config_store;
 
+fn normalize_keyword(keyword: &str) -> String {
+    keyword.trim().trim_matches('"').to_lowercase()
+}
+
+fn matched_keywords_for_paper(paper: &ArxivPaper, keywords: &[String]) -> Vec<String> {
+    let haystack = format!("{} {}", paper.title, paper.summary).to_lowercase();
+    keywords
+        .iter()
+        .filter_map(|keyword| {
+            let normalized = normalize_keyword(keyword);
+            if !normalized.is_empty() && haystack.contains(&normalized) {
+                Some(keyword.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 pub async fn perform_arxiv_fetch(
     app: &AppHandle,
     state: &GlobalState,
 ) -> Result<Vec<ArxivPaper>, String> {
-    let client = reqwest::Client::builder()
+    let app_config = config_store::read_config::<AppConfig>(app, "app_config.json");
+    let mut client_builder = reqwest::Client::builder()
         .user_agent("Widgitron/1.0 (contact: researcher@widgitron.app)")
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
+        .timeout(Duration::from_secs(30));
+
+    if let Some(proxy_url) = app_config
+        .arxiv_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let proxy = reqwest::Proxy::all(proxy_url)
+            .map_err(|e| format!("Invalid Arxiv proxy '{}': {}", proxy_url, e))?;
+        client_builder = client_builder.proxy(proxy);
+    }
+
+    let client = client_builder.build().map_err(|e| e.to_string())?;
 
     let config = config_store::read_config::<ArxivConfig>(app, "arxiv_config.json");
 
@@ -64,6 +94,7 @@ pub async fn perform_arxiv_fetch(
     
     let mut current_paper = ArxivPaper {
         id: String::new(), title: String::new(), summary: String::new(),
+        matched_keywords: Vec::new(),
         authors: Vec::new(), link: String::new(), published: String::new()
     };
     let mut in_entry = false;
@@ -73,7 +104,7 @@ pub async fn perform_arxiv_fetch(
     use quick_xml::events::Event;
     loop {
         match reader.read_event_into(&mut buf) {
-            Err(e) => { return Err(format!("Error parsing arxiv XML: {}", e)); },
+            Err(e) => return Err(format!("Error parsing arxiv XML: {}", e)),
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => {
                 let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
@@ -81,10 +112,13 @@ pub async fn perform_arxiv_fetch(
                     in_entry = true;
                     current_paper = ArxivPaper {
                         id: String::new(), title: String::new(), summary: String::new(),
-                        authors: Vec::new(), link: String::new(), published: String::new()
+        matched_keywords: Vec::new(),
+        authors: Vec::new(), link: String::new(), published: String::new()
                     };
                 } else if in_entry {
-                    if name == "author" { in_author = true; }
+                    if name == "author" {
+                        in_author = true;
+                    }
                     else if name == "name" && in_author {
                         current_paper.authors.push(String::new());
                     }
@@ -128,6 +162,7 @@ pub async fn perform_arxiv_fetch(
                 let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 if name == "entry" {
                     in_entry = false;
+                    current_paper.matched_keywords = matched_keywords_for_paper(&current_paper, kws);
                     papers.push(current_paper.clone());
                 } else if name == "author" {
                     in_author = false;

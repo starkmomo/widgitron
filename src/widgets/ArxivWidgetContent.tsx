@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Activity, Check } from "lucide-react";
+import { Activity, Check, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
 import type { ArxivConfig, ArxivPaper } from "../types/config";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
@@ -9,6 +9,7 @@ import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveData";
 import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
+import { UNCATEGORIZED_ARXIV_KEYWORD, filterArxivPapersByKeywords, formatArxivKeywordLabel, getArxivKeywords, getPaperArxivKeywords } from "../utils/arxivKeywords";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
@@ -33,11 +34,28 @@ export function ArxivWidgetContent() {
   const [arxivBackendError, setArxivBackendError] = useState<string | null>(null);
   const [arxivRefreshError, setArxivRefreshError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
+  const [keywordMenuOpen, setKeywordMenuOpen] = useState(false);
   const [exitDirection, setExitDirection] = useState<SwipeDirection | undefined>(undefined);
   const [serviceEnabled, setServiceEnabled] = useState(true);
   const [dashboardTheme, setDashboardTheme] = useState<"light" | "dark">("dark");
   const currentTheme = useWidgetTheme("arxiv");
+  const arxivKeywords = getArxivKeywords(arxivConfig.keywords);
+  const hasOtherArxivMatches = papers.some((paper) => getPaperArxivKeywords(paper, arxivConfig.keywords).length === 0);
+  const arxivKeywordOptions = hasOtherArxivMatches ? [...arxivKeywords, UNCATEGORIZED_ARXIV_KEYWORD] : arxivKeywords;
+  const visiblePapers = filterArxivPapersByKeywords(papers, selectedKeywords, arxivConfig.keywords);
+  const currentPaper = visiblePapers[currentIndex];
 
+  useEffect(() => {
+    setSelectedKeywords((prev) => prev.filter((keyword) => arxivKeywordOptions.includes(keyword)));
+    setCurrentIndex(0);
+  }, [arxivConfig.keywords, hasOtherArxivMatches]);
+
+  useEffect(() => {
+    if (visiblePapers.length > 0 && currentIndex >= visiblePapers.length) {
+      setCurrentIndex(0);
+    }
+  }, [currentIndex, visiblePapers.length]);
   useEffect(() => {
     let active = true;
     const unlisteners: (() => void)[] = [];
@@ -68,7 +86,12 @@ export function ArxivWidgetContent() {
               clearBackend: () => setArxivBackendError(null),
             },
           },
-          { arxivSetter: setPapers }
+          {
+            onArxivUpdate: (payload) => {
+              setPapers(payload);
+              setCurrentIndex(0);
+            },
+          }
         );
         if (!active) {
           u1();
@@ -125,7 +148,10 @@ export function ArxivWidgetContent() {
               clearData: () => setPapers([]),
               clearRefreshError: () => setArxivRefreshError(null),
               clearBackendError: () => setArxivBackendError(null),
-              onExtra: () => setCurrentIndex(0),
+              onExtra: () => {
+                setCurrentIndex(0);
+                setKeywordMenuOpen(false);
+              },
             },
           });
         });
@@ -150,7 +176,7 @@ export function ArxivWidgetContent() {
   if (!currentTheme) return null;
 
   const handleAction = async (direction: SwipeDirection) => {
-    const paper = papers[currentIndex];
+    const paper = currentPaper;
     if (!paper) return;
 
     setExitDirection(direction);
@@ -179,7 +205,6 @@ export function ArxivWidgetContent() {
   const mainText = getT("Main Text", "#ffffff");
   const subText = getT("Sub Text", "#94a3b8");
 
-  const currentPaper = papers[currentIndex];
 
   return (
     <div className={`h-full flex flex-col p-2 select-none`} style={{ color: mainText }}>
@@ -210,7 +235,89 @@ export function ArxivWidgetContent() {
           CACHED_LABELS.arxiv.refresh
         )}
       />
-
+      {serviceEnabled && arxivKeywordOptions.length > 0 && (
+        <div className="relative mb-3" data-no-drag="true">
+          <button
+            type="button"
+            onClick={() => setKeywordMenuOpen((open) => !open)}
+            className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
+            style={{
+              borderColor: keywordMenuOpen ? accent : `${subText}33`,
+              backgroundColor: keywordMenuOpen ? `${accent}18` : "rgba(255,255,255,0.04)",
+              color: selectedKeywords.length > 0 ? accent : subText,
+            }}
+            title={selectedKeywords.length === 0 ? "All keywords" : selectedKeywords.map(formatArxivKeywordLabel).join(", ")}
+          >
+            <span className="truncate">
+              {selectedKeywords.length === 0
+                ? "All keywords"
+                : selectedKeywords.length === 1
+                ? formatArxivKeywordLabel(selectedKeywords[0])
+                : `${selectedKeywords.length} keywords selected`}
+            </span>
+            <ChevronDown
+              size={12}
+              className={`shrink-0 transition-transform ${keywordMenuOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          {keywordMenuOpen && (
+            <div
+              className="absolute left-0 right-0 top-full z-50 mt-1 max-h-40 overflow-y-auto rounded-lg border shadow-2xl backdrop-blur-md"
+              style={{
+                borderColor: `${subText}33`,
+                backgroundColor: "rgba(15, 23, 42, 0.94)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedKeywords([]);
+                  setCurrentIndex(0);
+                  setKeywordMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest hover:bg-white/10 transition-colors"
+                style={{ color: selectedKeywords.length === 0 ? accent : subText }}
+              >
+                <span
+                  className="w-3 h-3 rounded border flex items-center justify-center shrink-0"
+                  style={{ borderColor: selectedKeywords.length === 0 ? accent : `${subText}55` }}
+                >
+                  {selectedKeywords.length === 0 && <Check size={9} />}
+                </span>
+                All keywords
+              </button>
+              {arxivKeywordOptions.map((keyword) => {
+                const active = selectedKeywords.includes(keyword);
+                return (
+                  <button
+                    key={keyword}
+                    type="button"
+                    onClick={() => {
+                      setSelectedKeywords((prev) =>
+                        prev.includes(keyword)
+                          ? prev.filter((selected) => selected !== keyword)
+                          : [...prev, keyword]
+                      );
+                      setCurrentIndex(0);
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest hover:bg-white/10 transition-colors"
+                    style={{ color: active ? accent : subText }}
+                    title={keyword}
+                  >
+                    <span
+                      className="w-3 h-3 rounded border flex items-center justify-center shrink-0"
+                      style={{ borderColor: active ? accent : `${subText}55` }}
+                    >
+                      {active && <Check size={9} />}
+                    </span>
+                    <span className="truncate">{formatArxivKeywordLabel(keyword)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex-1 relative perspective-1000" data-no-drag="true">
         {!serviceEnabled ? (
           <div

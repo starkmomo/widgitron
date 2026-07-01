@@ -509,7 +509,23 @@ function GpuServerCard({
             }`}
           />
         </div>
-        <div className="col-span-4 flex items-center gap-4 pt-2">
+        <div className="col-span-4 flex flex-wrap items-center gap-4 pt-2">
+          <button
+            onClick={() => updateServer(idx, "use_ssh_config", !s.use_ssh_config, true)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+              s.use_ssh_config
+                ? "bg-blue-500/20 text-blue-400 border border-blue-500/20 shadow-lg shadow-blue-500/10"
+                : "bg-black/40 text-slate-500 border border-white/5 hover:border-white/20"
+            }`}
+          >
+            <div className={`w-2 h-2 rounded-full ${s.use_ssh_config ? "bg-blue-400 animate-pulse" : "bg-slate-600"}`} />
+            Use ~/.ssh/config
+          </button>
+          {s.use_ssh_config && (
+            <span className="text-[9px] text-blue-500/60 font-medium italic">
+              Host can be an SSH config alias; OpenSSH resolved HostName, User, Port and IdentityFile are applied.
+            </span>
+          )}
           <button
             onClick={() => updateServer(idx, "use_slurm", !s.use_slurm, true)}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
@@ -554,6 +570,14 @@ interface SettingsPanelProps {
   setUpdateCheckError?: (err: string | null) => void;
 }
 
+const formatArxivKeywordsInput = (keywords?: string[]) => (keywords || []).join(", ");
+
+const parseArxivKeywordsInput = (value: string) =>
+  value
+    .split(",")
+    .map((keyword) => keyword.trim())
+    .filter(Boolean);
+
 export function SettingsPanel({
   gpuConfig,
   paperConfig,
@@ -578,6 +602,10 @@ export function SettingsPanel({
   const [localGpu, setLocalGpu] = useState<GpuConfig>(() => sanitizeGpuConfig(gpuConfig));
   const [localPaper, setLocalPaper] = useState<PaperConfig>(paperConfig);
   const [localArxiv, setLocalArxiv] = useState<ArxivConfig>(arxivConfig);
+  const [arxivProxyInput, setArxivProxyInput] = useState(appConfig.arxiv_proxy || "");
+  const [arxivKeywordsInput, setArxivKeywordsInput] = useState(() =>
+    formatArxivKeywordsInput(arxivConfig.keywords)
+  );
   const [localQuota, setLocalQuota] = useState<QuotaConfig>(() =>
     stripUnsupportedQuotaProviders(quotaConfig)
   );
@@ -771,6 +799,9 @@ export function SettingsPanel({
   ];
 
   useEffect(() => {
+    setArxivProxyInput(appConfig.arxiv_proxy || "");
+  }, [appConfig.arxiv_proxy]);
+  useEffect(() => {
     setLocalGpu(sanitizeGpuConfig(gpuConfig));
   }, [gpuConfig]);
 
@@ -780,6 +811,7 @@ export function SettingsPanel({
 
   useEffect(() => {
     setLocalArxiv(arxivConfig);
+    setArxivKeywordsInput(formatArxivKeywordsInput(arxivConfig.keywords));
   }, [arxivConfig]);
 
   // Only sync quotaConfig once on first real load to prevent race conditions
@@ -823,9 +855,9 @@ export function SettingsPanel({
         {
           id: `server-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           host: "",
-          user: "root",
+          user: "",
           password: "",
-          port: 22
+          use_ssh_config: false
         }
       ]
     };
@@ -1053,6 +1085,29 @@ export function SettingsPanel({
           </button>
         </div>
 
+        <div className="border-t border-[var(--dashboard-border)] pt-6 grid grid-cols-1 md:grid-cols-[1fr_320px] gap-4 items-center">
+          <div className="space-y-1">
+            <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
+              Arxiv Proxy
+            </div>
+            <p className="text-[10px] text-slate-400">
+              Optional proxy URL used only when fetching arxiv papers. Leave blank to connect directly.
+            </p>
+          </div>
+          <input
+            type="text"
+            value={arxivProxyInput}
+            onChange={(e) => setArxivProxyInput(e.target.value)}
+            onBlur={(e) => onSaveApp({ ...appConfig, arxiv_proxy: e.target.value.trim() })}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            className={`w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
+              appConfig.theme === "light"
+                ? "bg-white border-slate-200 text-slate-900 focus:bg-white"
+                : "bg-black/40 border-white/10 text-white focus:bg-black/60"
+            }`}
+            placeholder="http://127.0.0.1:7890"
+          />
+        </div>
         <div className="border-t border-[var(--dashboard-border)] pt-6 flex items-center justify-between">
           <div className="space-y-1">
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
@@ -1440,16 +1495,19 @@ export function SettingsPanel({
               </label>
               <input
                 type="text"
-                value={(localArxiv.keywords || []).join(", ")}
+                value={arxivKeywordsInput}
                 onChange={(e) => {
-                  const kws = e.target.value
-                    .split(",")
-                    .map((k) => k.trim())
-                    .filter((k) => k);
-                  const next = { ...localArxiv, keywords: kws };
+                  const input = e.target.value;
+                  const next = { ...localArxiv, keywords: parseArxivKeywordsInput(input) };
+                  setArxivKeywordsInput(input);
                   setLocalArxiv(next);
                 }}
-                onBlur={() => onSaveArxiv(localArxiv)}
+                onBlur={() => {
+                  const next = { ...localArxiv, keywords: parseArxivKeywordsInput(arxivKeywordsInput) };
+                  setLocalArxiv(next);
+                  setArxivKeywordsInput(formatArxivKeywordsInput(next.keywords));
+                  onSaveArxiv(next);
+                }}
                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                 className={`w-full px-4 py-2.5 rounded-xl text-xs font-bold border transition-all ${
                   appConfig.theme === "light"

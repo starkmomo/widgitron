@@ -4,18 +4,332 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::net::TcpStream;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::config_store;
+use crate::{config_store, secrets};
 use crate::models::{AppConfig, GlobalState, GpuConfig, GpuInfo, ServerConfig, ServerGpuData};
 
 const GPU_CACHE_FILE: &str = "gpu_data_cache.json";
 
+
+pub fn read_gpu_config(app: &AppHandle) -> GpuConfig {
+    let mut config = config_store::read_config::<GpuConfig>(app, "gpu_monitor.json");
+    decrypt_gpu_config_secrets(&mut config);
+    config
+}
+
+pub fn write_gpu_config(app: &AppHandle, config: &GpuConfig) -> Result<(), String> {
+    let mut disk_config = config.clone();
+    encrypt_gpu_config_secrets(&mut disk_config)?;
+    config_store::write_config(app, "gpu_monitor.json", &disk_config)
+}
+
+fn encrypt_gpu_config_secrets(config: &mut GpuConfig) -> Result<(), String> {
+    for server in &mut config.servers {
+        if let Some(password) = server.password.as_mut() {
+            if !password.trim().is_empty() {
+                *password = secrets::encrypt_secret(password)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decrypt_gpu_config_secrets(config: &mut GpuConfig) {
+    for server in &mut config.servers {
+        if let Some(password) = server.password.as_mut() {
+            if secrets::is_encrypted_secret(password) {
+                match secrets::decrypt_secret(password) {
+                    Ok(decrypted) => *password = decrypted,
+                    Err(err) => {
+                        log::warn!("Failed to decrypt SSH password for {}: {}", server.host, err);
+                        password.clear();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct SshConfigHost {
+    host_name: Option<String>,
+    user: Option<String>,
+    port: Option<u16>,
+    identity_files: Vec<String>,
+    proxy_jump: Option<String>,
+    proxy_command: Option<String>,
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            if !home.is_empty() {
+                return Some(PathBuf::from(home));
+            }
+        }
+    }
+    let expanded = shellexpand::tilde("~").to_string();
+    if expanded.starts_with('~') { None } else { Some(PathBuf::from(expanded)) }
+}
+
+fn ssh_pattern_matches(pattern: &str, host: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return host.starts_with(prefix);
+    }
+    pattern.eq_ignore_ascii_case(host)
+}
+
+fn read_ssh_config_file_for_host(host: &str) -> Option<SshConfigHost> {
+    let path = user_home_dir()?.join(".ssh").join("config");
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut current_matches = false;
+    let mut found = false;
+    let mut cfg = SshConfigHost::default();
+
+    for raw_line in content.lines() {
+        let line = raw_line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(key) = parts.next() else { continue; };
+        let value = parts.collect::<Vec<_>>().join(" ");
+        if key.eq_ignore_ascii_case("Host") {
+            current_matches = value
+                .split_whitespace()
+                .any(|pattern| ssh_pattern_matches(pattern, host));
+            found |= current_matches;
+            continue;
+        }
+        if !current_matches {
+            continue;
+        }
+        match key.to_ascii_lowercase().as_str() {
+            "hostname" if cfg.host_name.is_none() => cfg.host_name = Some(value),
+            "user" if cfg.user.is_none() => cfg.user = Some(value),
+            "port" if cfg.port.is_none() => cfg.port = value.parse().ok(),
+            "identityfile" => cfg.identity_files.push(value),
+            "proxyjump" if cfg.proxy_jump.is_none() => cfg.proxy_jump = Some(value),
+            "proxycommand" if cfg.proxy_command.is_none() => cfg.proxy_command = Some(value),
+            _ => {}
+        }
+    }
+
+    found.then_some(cfg)
+}
+
+fn parse_ssh_resolved_config(content: &str) -> Option<SshConfigHost> {
+    let mut cfg = SshConfigHost::default();
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let Some(key) = parts.next() else { continue; };
+        let value = parts.next().unwrap_or("").trim();
+        if value.is_empty() {
+            continue;
+        }
+        match key.to_ascii_lowercase().as_str() {
+            "hostname" => cfg.host_name = Some(value.to_string()),
+            "user" => cfg.user = Some(value.to_string()),
+            "port" => cfg.port = value.parse().ok(),
+            "identityfile" if value != "none" => cfg.identity_files.push(value.to_string()),
+            "proxyjump" if value != "none" => cfg.proxy_jump = Some(value.to_string()),
+            "proxycommand" if value != "none" => cfg.proxy_command = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    (cfg.host_name.is_some()
+        || cfg.user.is_some()
+        || cfg.port.is_some()
+        || !cfg.identity_files.is_empty())
+        .then_some(cfg)
+}
+
+fn read_openssh_config_for_host(host: &str) -> Option<SshConfigHost> {
+    let host = host.trim();
+    if host.is_empty() {
+        return None;
+    }
+
+    #[cfg(windows)]
+    let output = Command::new("ssh")
+        .args(["-G", host])
+        .creation_flags(0x08000000)
+        .output()
+        .ok()?;
+
+    #[cfg(not(windows))]
+    let output = Command::new("ssh").args(["-G", host]).output().ok()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !stderr.is_empty() {
+            log::warn!("ssh -G {} failed: {}", host, stderr);
+        }
+        return None;
+    }
+
+    parse_ssh_resolved_config(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn read_ssh_config_for_host(host: &str) -> Option<SshConfigHost> {
+    read_openssh_config_for_host(host).or_else(|| read_ssh_config_file_for_host(host))
+}
+
+fn resolve_server_connection_config(server: &ServerConfig) -> ServerConfig {
+    if !server.use_ssh_config.unwrap_or(false) {
+        return server.clone();
+    }
+    let Some(ssh_cfg) = read_ssh_config_for_host(&server.host) else {
+        log::warn!("No SSH config entry found for {}", server.host);
+        return server.clone();
+    };
+    let mut resolved = server.clone();
+    if let Some(host_name) = ssh_cfg.host_name.as_deref() {
+        if !host_name.trim().is_empty() {
+            resolved.host = host_name.to_string();
+        }
+    }
+    if let Some(user) = ssh_cfg.user.as_deref() {
+        if !user.trim().is_empty() {
+            resolved.user = Some(user.to_string());
+        }
+    }
+    if ssh_cfg.port.is_some() {
+        resolved.port = ssh_cfg.port;
+    }
+    if resolved.key_file.as_deref().unwrap_or("").trim().is_empty() {
+        resolved.key_file = ssh_cfg
+            .identity_files
+            .iter()
+            .find(|path| {
+                let expanded = shellexpand::tilde(path).to_string();
+                std::path::Path::new(&expanded).exists()
+            })
+            .cloned()
+            .or_else(|| ssh_cfg.identity_files.first().cloned());
+    }
+    if ssh_cfg.proxy_jump.is_some() || ssh_cfg.proxy_command.is_some() {
+        log::warn!(
+            "SSH config for {} uses ProxyJump/ProxyCommand, which is not supported by the built-in ssh2 client",
+            server.host
+        );
+    }
+    log::info!(
+        "Resolved SSH config {} -> {}@{}:{}",
+        server.host,
+        resolved.user.as_deref().unwrap_or(""),
+        resolved.host,
+        resolved.port.unwrap_or(22)
+    );
+    resolved
+}
+
+fn openssh_target(server: &ServerConfig) -> String {
+    if server.use_ssh_config.unwrap_or(false) {
+        server.host.trim().to_string()
+    } else if let Some(user) = server.user.as_deref() {
+        if !user.trim().is_empty() {
+            format!("{}@{}", user.trim(), server.host.trim())
+        } else {
+            server.host.trim().to_string()
+        }
+    } else {
+        server.host.trim().to_string()
+    }
+}
+
+fn run_openssh_command(
+    server: &ServerConfig,
+    remote_cmd: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let target = openssh_target(server);
+    if target.is_empty() {
+        return Err("SSH target is empty".to_string());
+    }
+
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg(format!("ConnectTimeout={}", timeout.as_secs().min(30).max(1)))
+        .arg("-T");
+
+    if !server.use_ssh_config.unwrap_or(false) {
+        if let Some(port) = server.port {
+            cmd.arg("-p").arg(port.to_string());
+        }
+        if let Some(key_file) = server.key_file.as_deref() {
+            if !key_file.trim().is_empty() {
+                cmd.arg("-i").arg(shellexpand::tilde(key_file).to_string());
+            }
+        }
+    }
+
+    cmd.arg(&target)
+        .arg(remote_cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start ssh for {}: {}", target, e))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("ssh {} timed out after {}s", target, timeout.as_secs()));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("Failed waiting for ssh {}: {}", target, e)),
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to collect ssh output for {}: {}", target, e))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            output.status.to_string()
+        };
+        Err(format!("ssh {} failed: {}", target, detail))
+    }
+}
 pub fn load_gpu_cache(app: &AppHandle) -> HashMap<String, ServerGpuData> {
     let items: Vec<ServerGpuData> = config_store::read_config(app, GPU_CACHE_FILE);
     items
@@ -107,6 +421,7 @@ fn gpu_server_fingerprint(server: &ServerConfig) -> String {
     server.user.as_deref().unwrap_or("").hash(&mut hasher);
     server.password.as_deref().unwrap_or("").hash(&mut hasher);
     server.key_file.as_deref().unwrap_or("").hash(&mut hasher);
+    server.use_ssh_config.hash(&mut hasher);
     server.use_slurm.hash(&mut hasher);
     format!("{}:{:016x}", server.host, hasher.finish())
 }
@@ -144,61 +459,53 @@ pub fn parse_nvidia_smi_output(output: &str) -> Vec<GpuInfo> {
 
 pub fn ssh_authenticate(sess: &mut Session, s: &ServerConfig) -> Result<(), String> {
     let user = s.user.as_deref().unwrap_or("root");
+    let mut errors: Vec<String> = Vec::new();
 
-    // 1. Try custom key file if provided and not empty
     if let Some(key_path) = &s.key_file {
         if !key_path.trim().is_empty() {
             let expanded = shellexpand::tilde(key_path).to_string();
-            return sess
-                .userauth_pubkey_file(user, None, std::path::Path::new(&expanded), None)
-                .map_err(|e| format!("Key auth failed for custom key '{}': {}", key_path, e));
+            let path = std::path::Path::new(&expanded);
+            match sess.userauth_pubkey_file(user, None, path, None) {
+                Ok(_) => return Ok(()),
+                Err(e) => errors.push(format!("key '{}': {}", key_path, e)),
+            }
         }
     }
 
-    // 2. Try password auth if password is provided and not empty
     if let Some(pass) = &s.password {
         if !pass.is_empty() {
-            return sess
-                .userauth_password(user, pass)
-                .map_err(|e| format!("Password auth failed: {}", e));
+            match sess.userauth_password(user, pass) {
+                Ok(_) => return Ok(()),
+                Err(e) => errors.push(format!("password: {}", e)),
+            }
         }
     }
 
-    // 3. Fallback to default keys and SSH agent
     let default_keys = [
         "~/.ssh/id_ed25519",
         "~/.ssh/id_rsa",
         "~/.ssh/id_ecdsa",
         "~/.ssh/id_dsa",
     ];
-    let mut authenticated = false;
-    let mut last_err = None;
     for key_path in &default_keys {
         let expanded = shellexpand::tilde(key_path).to_string();
         let path = std::path::Path::new(&expanded);
-        if path.exists() {
+        if path.exists() && s.key_file.as_deref() != Some(*key_path) {
             match sess.userauth_pubkey_file(user, None, path, None) {
-                Ok(_) => {
-                    authenticated = true;
-                    break;
-                }
-                Err(e) => {
-                    last_err = Some(e.to_string());
-                }
+                Ok(_) => return Ok(()),
+                Err(e) => errors.push(format!("default key '{}': {}", key_path, e)),
             }
         }
     }
-    if !authenticated {
-        if let Err(agent_err) = sess.userauth_agent(user) {
-            return Err(format!(
-                "Authentication failed. Tried default keys (last error: {:?}) and SSH agent (error: {})",
-                last_err, agent_err
-            ));
+
+    match sess.userauth_agent(user) {
+        Ok(_) => Ok(()),
+        Err(agent_err) => {
+            errors.push(format!("ssh-agent: {}", agent_err));
+            Err(format!("Authentication failed for user '{}'. Tried {}", user, errors.join("; ")))
         }
     }
-    Ok(())
 }
-
 fn connect_ssh_session(s: &ServerConfig) -> Result<Session, String> {
     connect_ssh_session_with_read_timeout(s, Duration::from_secs(30))
 }
@@ -209,7 +516,8 @@ fn connect_ssh_session_with_read_timeout(
 ) -> Result<Session, String> {
     use std::net::ToSocketAddrs;
 
-    let host_id = format!("{}:{}", s.host, s.port.unwrap_or(22));
+    let resolved = resolve_server_connection_config(s);
+    let host_id = format!("{}:{}", resolved.host, resolved.port.unwrap_or(22));
     let addr = host_id
         .to_socket_addrs()
         .map_err(|e| format!("Invalid SSH address {}: {}", host_id, e))?
@@ -226,7 +534,7 @@ fn connect_ssh_session_with_read_timeout(
     sess.set_tcp_stream(tcp);
     sess.handshake()
         .map_err(|e| format!("SSH handshake failed: {}", e))?;
-    ssh_authenticate(&mut sess, s)?;
+    ssh_authenticate(&mut sess, &resolved)?;
     Ok(sess)
 }
 
@@ -298,7 +606,86 @@ pub fn start_ssh_monitor_task(
                     None => format!("{}:node:0", s_m.host),
                 };
                 let timeout_secs = (interval * 3).max(15) + 10;
-                let sess = connect_ssh_session_with_read_timeout(
+                if s_m.use_ssh_config.unwrap_or(false) {
+                    let watch_cmd = match &j_m {
+                        Some(id) => {
+                            let node_arg = match &node_m {
+                                Some(node) => format!("-N 1 -n 1 -w {}", node),
+                                None => "-n 1".to_string(),
+                            };
+                            format!(
+                                "srun --jobid {} --overlap {} --job-name=widgitron-gpu sh -c 'node=$(hostname -s 2>/dev/null || hostname); {} | sed \"s/^/${{node}}: /\" || exit; echo \"${{node}}: END_BATCH\"'",
+                                id,
+                                node_arg,
+                                smi_cmd
+                            )
+                        }
+                        None => format!("sh -c '{} || exit; echo \"END_BATCH\"'", smi_cmd),
+                    };
+                    let output = run_openssh_command(
+                        &s_m,
+                        &watch_cmd,
+                        Duration::from_secs(timeout_secs),
+                    )?;
+                    let mut task_batches: HashMap<String, String> = HashMap::new();
+                    for l in output.lines() {
+                        let task_id = if let Some((prefix, _)) = l.split_once(": ") {
+                            let prefix = prefix.trim();
+                            if !prefix.is_empty() {
+                                prefix.to_string()
+                            } else {
+                                "default".to_string()
+                            }
+                        } else {
+                            "default".to_string()
+                        };
+
+                        if l.contains("END_BATCH") {
+                            let app_config = config_store::read_config::<AppConfig>(&app_inner, "app_config.json");
+                            if !app_config.gpu_enabled.unwrap_or(true) {
+                                return Err("GPU monitoring disabled".to_string());
+                            }
+                            let batch = task_batches.entry(task_id.clone()).or_default();
+                            let mut parsed = parse_nvidia_smi_output(batch);
+                            if !parsed.is_empty() {
+                                for p in &mut parsed {
+                                    p.job_id = j_m.clone();
+                                    if p.node.is_none() {
+                                        p.node = node_m.clone();
+                                    }
+                                }
+                                let node_to_replace = parsed[0].node.clone();
+                                if let Ok(mut state_gpu) = state_inner.gpu_data.lock() {
+                                    let data = state_gpu.entry(s_m.host.clone()).or_insert(ServerGpuData {
+                                        host: s_m.host.clone(),
+                                        is_online: true,
+                                        gpu_list: vec![],
+                                        error: None,
+                                        last_update: None,
+                                        slurm_steps: None,
+                                        slurm_nodelists: None,
+                                        slurm_times: None,
+                                    });
+                                    data.is_online = true;
+                                    data.error = None;
+                                    if let Some(node) = node_to_replace {
+                                        data.gpu_list.retain(|g| !(g.job_id == j_m && g.node == Some(node.clone())));
+                                    } else {
+                                        data.gpu_list.retain(|g| g.job_id != j_m);
+                                    }
+                                    data.gpu_list.extend(parsed);
+                                    data.last_update = Some(Utc::now().format("%H:%M:%S").to_string());
+                                }
+                            }
+                            batch.clear();
+                        } else {
+                            let batch = task_batches.entry(task_id).or_default();
+                            batch.push_str(l);
+                            batch.push('\n');
+                        }
+                    }
+                    return Ok(());
+                }                let sess = connect_ssh_session_with_read_timeout(
                     &s_m,
                     Duration::from_secs(timeout_secs),
                 )?;
@@ -467,7 +854,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
 
     {
         let snapshot = hydrate_gpu_from_cache(&app, state.as_ref());
-        let config = config_store::read_config::<GpuConfig>(&app, "gpu_monitor.json");
+        let config = read_gpu_config(&app);
         let configured_hosts: std::collections::HashSet<String> =
             config.servers.iter().map(|s| s.host.clone()).collect();
         let mut emitted = 0usize;
@@ -491,7 +878,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
         let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
         let gpu_enabled = app_config.gpu_enabled.unwrap_or(true);
 
-        let config = config_store::read_config::<GpuConfig>(&app, "gpu_monitor.json");
+        let config = read_gpu_config(&app);
 
         let mut current_server_ids = Vec::new();
         if gpu_enabled {
@@ -645,7 +1032,25 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                         let _ = app_task.emit("gpu_update", gpu_data);
 
                                         Ok((None, vec![], HashMap::new(), HashMap::new(), HashMap::new()))
-                                    } else {
+                                    } else if s.use_ssh_config.unwrap_or(false) && !s.use_slurm.unwrap_or(false) {
+                                        let s_out = run_openssh_command(&s, &smi, Duration::from_secs(30))?;
+                                        let parsed = parse_nvidia_smi_output(&s_out);
+                                        if parsed.is_empty() {
+                                            return Err("nvidia-smi returned no GPU data over OpenSSH".to_string());
+                                        }
+                                        gpu_data.gpu_list = parsed;
+                                        gpu_data.is_online = true;
+                                        gpu_data.error = None;
+                                        gpu_data.last_update = Some(Utc::now().format("%H:%M:%S").to_string());
+
+                                        if let Ok(mut data) = state_task.gpu_data.lock() {
+                                            data.insert(s.host.clone(), gpu_data.clone());
+                                        } else {
+                                            log::error!("gpu_data lock poisoned in OpenSSH worker for {}", s.host);
+                                        }
+                                        emit_gpu_update_if_changed(&app_task, state_task.as_ref(), &gpu_data);
+
+                                        Ok((None, vec![], HashMap::new(), HashMap::new(), HashMap::new()))                                    } else {
                                         // SSH Logic
                                         let sess = reuse_or_connect_ssh_session(sess_opt, &s)?;
 

@@ -16,7 +16,7 @@ pub async fn save_gpu_config(
         .servers
         .retain(|server| !server.host.trim().is_empty());
 
-    let previous = config_store::read_config::<GpuConfig>(&app, "gpu_monitor.json");
+    let previous = crate::gpu::read_gpu_config(&app);
     let previous_hosts: std::collections::HashSet<String> = previous
         .servers
         .iter()
@@ -28,7 +28,7 @@ pub async fn save_gpu_config(
         .map(|server| server.host.clone())
         .collect();
 
-    config_store::write_config(&app, "gpu_monitor.json", &config)?;
+    crate::gpu::write_gpu_config(&app, &config)?;
     let _ = app.emit("gpu_config_update", &config);
 
     for host in previous_hosts.difference(&next_hosts) {
@@ -95,7 +95,7 @@ pub async fn save_paper_config(
 
 #[tauri::command]
 pub async fn get_gpu_config(app: AppHandle) -> Result<GpuConfig, String> {
-    let mut config = config_store::read_config::<GpuConfig>(&app, "gpu_monitor.json");
+    let mut config = crate::gpu::read_gpu_config(&app);
     if config.compact_mode.is_none() {
         config.compact_mode = Some(true);
     }
@@ -153,7 +153,7 @@ pub async fn get_gpu_data(
     app: AppHandle,
     state: tauri::State<'_, GlobalState>,
 ) -> Result<Vec<ServerGpuData>, String> {
-    let config = config_store::read_config::<GpuConfig>(&app, "gpu_monitor.json");
+    let config = crate::gpu::read_gpu_config(&app);
     let gpu_data = state.gpu_data.lock().map_err(|e| e.to_string())?;
     let disk_cache = crate::gpu::load_gpu_cache(&app);
 
@@ -573,7 +573,7 @@ pub async fn save_quota_config(
     }
 
     // Write config to disk
-    config_store::write_config(&app, "quota_config.json", &config)?;
+    crate::quota::write_quota_config(&app, &config)?;
     let _ = app.emit("quota_config_update", &config);
 
     // Kick quota refresh to the background so settings interactions stay responsive.
@@ -639,7 +639,7 @@ pub async fn update_manual_quota(
         item.last_update = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
     }
 
-    config_store::write_config(&app, "quota_config.json", &config)?;
+    crate::quota::write_quota_config(&app, &config)?;
 
     let emit_items = {
         if let Ok(mut state_quota) = state.quota_data.lock() {

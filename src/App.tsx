@@ -19,7 +19,8 @@ import {
   RefreshCw,
   Gauge,
   Globe,
-  User
+  User,
+  ChevronDown
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -44,6 +45,7 @@ import { listenServiceUpdateEvents } from "./utils/serviceUpdateEvents";
 import { listenGpuDataSync } from "./utils/gpuDataSync";
 import { isLiveDataSection, LIVE_DATA_SECTION, refetchSectionLiveDataForSection, appTabLabel, LIVE_DATA_SECTION_LABELS, type AppTab } from "./utils/sectionLiveData";
 import { fetchArxivSavedPapers, fetchArxivDiscardedPapers, loadArxivArchiveLists } from "./utils/arxivArchive";
+import { formatArxivKeywordLabel, groupArxivPapersByKeyword } from "./utils/arxivKeywords";
 import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaBarDisplay, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
 import type { UpdateInfo } from "./types/tauri";
 import { resolveWidgetTheme } from "./utils/widgetTheme";
@@ -165,6 +167,7 @@ function App() {
   const [arxivSavedPapers, setArxivSavedPapers] = useState<ArxivPaper[]>([]);
   const [arxivDiscardedPapers, setArxivDiscardedPapers] = useState<ArxivPaper[]>([]);
   const [arxivView, setArxivView] = useState<"new" | "saved" | "discarded">("new");
+  const [collapsedArxivKeywords, setCollapsedArxivKeywords] = useState<Set<string>>(new Set());
   const [isRefreshingArxiv, setIsRefreshingArxiv] = useState(false);
   const [arxivRefreshError, setArxivRefreshError] = useState<string | null>(null);
   const [arxivError, setArxivError] = useState<string | null>(null);
@@ -798,6 +801,83 @@ function App() {
     }
   };
 
+
+  const activeArxivPapers = arxivView === "new" ? arxivPapers : arxivView === "saved" ? arxivSavedPapers : arxivDiscardedPapers;
+  const arxivKeywordGroups = groupArxivPapersByKeyword(arxivPapers, arxivConfig.keywords);
+  const toggleArxivKeywordGroup = (keyword: string) => {
+    setCollapsedArxivKeywords((prev) => {
+      const next = new Set(prev);
+      if (next.has(keyword)) {
+        next.delete(keyword);
+      } else {
+        next.add(keyword);
+      }
+      return next;
+    });
+  };
+
+  const renderArxivPaperCard = (paper: ArxivPaper, idx: number) => (
+    <div
+      key={`${paper.id || paper.title}-${idx}`}
+      className={`border border-[var(--dashboard-border)] rounded-2xl p-6 flex flex-col gap-4 hover:bg-black/5 transition-all group ${
+        appConfig.theme === "light" ? "bg-white" : "bg-white/5"
+      }`}
+    >
+      <div className="flex-1">
+        <h3
+          className={`text-sm font-bold line-clamp-2 mb-2 ${
+            appConfig.theme === "light" ? "text-slate-900" : "text-white"
+          }`}
+        >
+          {paper.title}
+        </h3>
+        <p className="text-[10px] text-slate-500 line-clamp-6 leading-relaxed">
+          {paper.summary}
+        </p>
+      </div>
+      <div className="flex items-center justify-between mt-2 pt-4 border-t border-white/5">
+        <div className="flex flex-wrap gap-1">
+          <span className="text-[9px] font-medium text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full">
+            {paper.authors.length > 0 ? (
+              <>
+                {paper.authors[0]}
+                {paper.authors.length > 1 ? " et al." : ""}
+              </>
+            ) : (
+              "Unknown Author"
+            )}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {arxivView === "saved" && (
+            <button
+              onClick={() => tauriInvoke("remove_arxiv_saved_paper", { id: paper.id })}
+              className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-50 hover:text-white transition-all"
+              title="Remove from saved"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+          {arxivView === "discarded" && (
+            <button
+              onClick={() => tauriInvoke("remove_arxiv_discarded_paper", { id: paper.id })}
+              className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-50 hover:text-white transition-all"
+              title="Delete permanently"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+          <button
+            onClick={() => tauriInvoke("open_link", { url: paper.link })}
+            className="p-2 rounded-xl bg-white/5 text-slate-400 hover:text-white transition-colors"
+            title="Open paper"
+          >
+            <ExternalLink size={14} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
   const saveQuotaConfig = async (newConfig: QuotaConfig) => {
     setQuotaConfig(newConfig);
 
@@ -1668,82 +1748,63 @@ function App() {
                     CACHED_LABELS.arxiv.refresh
                   )}
                 />
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {(arxivView === "new" ? arxivPapers : arxivView === "saved" ? arxivSavedPapers : arxivDiscardedPapers)
-                    .length === 0 ? (
-                    <div className="col-span-full p-12 text-center bg-black/5 rounded-3xl border border-dashed border-white/10 text-slate-500 font-bold uppercase tracking-widest text-xs">
-                      {arxivView === "new"
-                        ? "No new papers. Adjust keywords in Settings or wait for update."
-                        : arxivView === "saved"
-                        ? "No saved papers yet. Swipe right on the widget to save!"
-                        : "No discarded papers. Swipe left on the widget to discard."}
-                    </div>
-                  ) : (
-                    (arxivView === "new" ? arxivPapers : arxivView === "saved" ? arxivSavedPapers : arxivDiscardedPapers).map(
-                      (paper, idx) => (
-                        <div
-                          key={idx}
-                          className={`border border-[var(--dashboard-border)] rounded-2xl p-6 flex flex-col gap-4 hover:bg-black/5 transition-all group ${
+                {activeArxivPapers.length === 0 ? (
+                  <div className="p-12 text-center bg-black/5 rounded-3xl border border-dashed border-white/10 text-slate-500 font-bold uppercase tracking-widest text-xs">
+                    {arxivView === "new"
+                      ? "No new papers. Adjust keywords in Settings or wait for update."
+                      : arxivView === "saved"
+                      ? "No saved papers yet. Swipe right on the widget to save!"
+                      : "No discarded papers. Swipe left on the widget to discard."}
+                  </div>
+                ) : arxivView === "new" ? (
+                  <div className="space-y-5">
+                    {arxivKeywordGroups.map((group) => {
+                      const collapsed = collapsedArxivKeywords.has(group.keyword);
+                      return (
+                        <section
+                          key={group.keyword}
+                          className={`border border-[var(--dashboard-border)] rounded-2xl overflow-hidden ${
                             appConfig.theme === "light" ? "bg-white" : "bg-white/5"
                           }`}
                         >
-                          <div className="flex-1">
-                            <h3
-                              className={`text-sm font-bold line-clamp-2 mb-2 ${
-                                appConfig.theme === "light" ? "text-slate-900" : "text-white"
-                              }`}
-                            >
-                              {paper.title}
-                            </h3>
-                            <p className="text-[10px] text-slate-500 line-clamp-6 leading-relaxed">
-                              {paper.summary}
-                            </p>
-                          </div>
-                          <div className="flex items-center justify-between mt-2 pt-4 border-t border-white/5">
-                            <div className="flex flex-wrap gap-1">
-                              <span className="text-[9px] font-medium text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full">
-                                {paper.authors.length > 0 ? (
-                                  <>
-                                    {paper.authors[0]}
-                                    {paper.authors.length > 1 ? " et al." : ""}
-                                  </>
-                                ) : (
-                                  "Unknown Author"
-                                )}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {arxivView === "saved" && (
-                                <button
-                                  onClick={() => tauriInvoke("remove_arxiv_saved_paper", { id: paper.id })}
-                                  className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-50 hover:text-white transition-all"
-                                  title="Remove from saved"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              )}
-                              {arxivView === "discarded" && (
-                                <button
-                                  onClick={() => tauriInvoke("remove_arxiv_discarded_paper", { id: paper.id })}
-                                  className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-50 hover:text-white transition-all"
-                                  title="Delete permanently"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              )}
-                              <button
-                                onClick={() => tauriInvoke("open_link", { url: paper.link })}
-                                className="p-2 rounded-xl bg-white/5 text-slate-400 hover:text-white transition-colors"
+                          <button
+                            type="button"
+                            onClick={() => toggleArxivKeywordGroup(group.keyword)}
+                            className={`w-full px-5 py-4 flex items-center justify-between text-left transition-colors ${
+                              appConfig.theme === "light" ? "hover:bg-slate-50" : "hover:bg-white/5"
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <h3
+                                className={`text-sm font-black truncate ${
+                                  appConfig.theme === "light" ? "text-slate-900" : "text-white"
+                                }`}
                               >
-                                <ExternalLink size={14} />
-                              </button>
+                                {formatArxivKeywordLabel(group.keyword)}
+                              </h3>
+                              <div className="mt-1 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                {group.papers.length} papers
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      )
-                    )
-                  )}
-                </div>
+                            <ChevronDown
+                              size={16}
+                              className={`shrink-0 text-slate-500 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+                            />
+                          </button>
+                          {!collapsed && (
+                            <div className="p-5 pt-0 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                              {group.papers.map((paper, idx) => renderArxivPaperCard(paper, idx))}
+                            </div>
+                          )}
+                        </section>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {activeArxivPapers.map((paper, idx) => renderArxivPaperCard(paper, idx))}
+                  </div>
+                )}
               </motion.div>
             )}
 

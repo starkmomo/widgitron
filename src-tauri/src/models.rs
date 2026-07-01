@@ -12,6 +12,7 @@ pub struct ServerConfig {
     pub user: Option<String>,
     pub password: Option<String>,
     pub key_file: Option<String>,
+    pub use_ssh_config: Option<bool>,
     pub use_slurm: Option<bool>,
 }
 
@@ -81,6 +82,8 @@ pub struct ArxivPaper {
     pub id: String,
     pub title: String,
     pub summary: String,
+    #[serde(default)]
+    pub matched_keywords: Vec<String>,
     pub authors: Vec<String>,
     pub link: String,
     pub published: String,
@@ -96,6 +99,7 @@ pub struct AppConfig {
     pub arxiv_enabled: Option<bool>,
     pub quota_enabled: Option<bool>,
     pub hide_on_startup: Option<bool>,
+    pub arxiv_proxy: Option<String>,
     pub active_widgets: Option<HashMap<String, bool>>,
 }
 
@@ -121,6 +125,7 @@ impl Default for AppConfig {
             arxiv_enabled: Some(true),
             quota_enabled: Some(true),
             hide_on_startup: Some(false),
+            arxiv_proxy: None,
             active_widgets: Some(HashMap::new()),
         }
     }
@@ -142,7 +147,10 @@ pub struct QuotaItem {
     /// `"local"` (IDE / local login) or `"api_key"`. When unset, provider default applies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_mode: Option<String>,
+    #[serde(default)]
     pub api_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_api_key: Option<String>,
     pub api_url: Option<String>,
     pub json_path: Option<String>,
     pub max_quota: Option<f64>,
