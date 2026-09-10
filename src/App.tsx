@@ -758,14 +758,22 @@ function App() {
             setThemeConfig(config);
             setCurrentTheme(resolveWidgetTheme(config, label));
           });
-          unlisteners.push(() => uTheme());
+          if (!active) {
+            uTheme();
+          } else {
+            unlisteners.push(() => uTheme());
+          }
           const uAppConfig = await tauriListen("app_config_update", (event) => {
             if (!active) return;
             const nextConfig = event.payload;
             setAppConfig(nextConfig);
             setIsPinned(nextConfig.always_on_top?.[label] ?? false);
           });
-          unlisteners.push(() => uAppConfig());
+          if (!active) {
+            uAppConfig();
+          } else {
+            unlisteners.push(() => uAppConfig());
+          }
           return;
         }
 
@@ -826,7 +834,11 @@ function App() {
               setActiveWidgets((prev) => applyWidgetVisibilityChange(prev, id, visible));
             }
           );
-          unlisteners.push(() => uWidgetVis());
+          if (!active) {
+            uWidgetVis();
+          } else {
+            unlisteners.push(() => uWidgetVis());
+          }
         }
 
         const u1 = await win.onResized(async () => {

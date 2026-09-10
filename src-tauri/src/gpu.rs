@@ -221,10 +221,21 @@ pub fn write_gpu_config(app: &AppHandle, config: &GpuConfig) -> Result<(), Strin
 
 fn encrypt_gpu_config_secrets(config: &mut GpuConfig) -> Result<(), String> {
     for server in &mut config.servers {
-        if let Some(password) = server.password.as_mut() {
-            if !password.trim().is_empty() {
-                *password = secrets::encrypt_secret(password)?;
-            }
+        let Some(password) = server.password.as_deref() else {
+            continue;
+        };
+        if !password.trim().is_empty() {
+            server.password = Some(secrets::encrypt_secret(password)?);
+            server.password_decryption_failed = false;
+            server.preserved_encrypted_password = None;
+        } else if server.password_decryption_failed {
+            server.password =
+                Some(server.preserved_encrypted_password.clone().ok_or_else(|| {
+                    format!(
+                        "Missing preserved encrypted SSH password for {}",
+                        server.host
+                    )
+                })?);
         }
     }
     Ok(())
@@ -232,24 +243,31 @@ fn encrypt_gpu_config_secrets(config: &mut GpuConfig) -> Result<(), String> {
 
 fn decrypt_gpu_config_secrets(config: &mut GpuConfig) {
     for server in &mut config.servers {
-        if let Some(password) = server.password.as_mut() {
-            if secrets::is_encrypted_secret(password) {
-                match secrets::decrypt_secret(password) {
-                    Ok(decrypted) => *password = decrypted,
-                    Err(err) => {
-                        log::warn!(
-                            "Failed to decrypt SSH password for {}: {}",
-                            server.host,
-                            err
-                        );
-                        password.clear();
-                    }
-                }
+        let Some(password) = server.password.clone() else {
+            continue;
+        };
+        if !secrets::is_encrypted_secret(&password) {
+            continue;
+        }
+        match secrets::decrypt_secret(&password) {
+            Ok(decrypted) => {
+                server.password = Some(decrypted);
+                server.password_decryption_failed = false;
+                server.preserved_encrypted_password = None;
+            }
+            Err(err) => {
+                log::warn!(
+                    "Failed to decrypt SSH password for {}: {}",
+                    server.host,
+                    err
+                );
+                server.preserved_encrypted_password = Some(password);
+                server.password = Some(String::new());
+                server.password_decryption_failed = true;
             }
         }
     }
 }
-
 #[derive(Default)]
 struct SshConfigHost {
     host_name: Option<String>,

@@ -444,11 +444,14 @@ pub async fn save_arxiv_config(
     state: tauri::State<'_, GlobalState>,
     config: ArxivConfig,
 ) -> Result<(), String> {
+    let previous_config = config_store::read_config::<ArxivConfig>(&app, "arxiv_config.json");
+    let should_fetch = previous_config.keywords != config.keywords
+        || previous_config.categories != config.categories;
     config_store::write_config(&app, "arxiv_config.json", &config)?;
     let _ = app.emit("arxiv_config_update", &config);
 
     let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-    if app_config.arxiv_enabled.unwrap_or(true) {
+    if should_fetch && app_config.arxiv_enabled.unwrap_or(true) {
         if let Err(e) = crate::arxiv::perform_arxiv_fetch(&app, state.inner()).await {
             log::warn!("Arxiv immediate fetch after config save failed: {}", e);
             let _ = app.emit("arxiv_error", e);
@@ -684,6 +687,7 @@ pub async fn save_quota_config(
         active_monitors: state.active_monitors.clone(),
         active_workers: state.active_workers.clone(),
         arxiv_papers: state.arxiv_papers.clone(),
+        arxiv_fetch_lock: state.arxiv_fetch_lock.clone(),
         quota_data: state.quota_data.clone(),
         quota_fetch_lock: state.quota_fetch_lock.clone(),
         widget_toggle_lock: state.widget_toggle_lock.clone(),
@@ -770,7 +774,7 @@ pub async fn restore_widget_position(
     let _lock = state.widget_toggle_lock.lock().await;
     // Ensure widget is created/shown first
     if app.get_webview_window(&id).is_none() {
-        let _ = create_widget_impl(app.clone(), id.clone(), title).await;
+        create_widget_impl(app.clone(), id.clone(), title).await?;
     }
 
     if let Some(win) = app.get_webview_window(&id) {
@@ -782,20 +786,23 @@ pub async fn restore_widget_position(
             .unwrap_or(false);
 
         // Disable desktop mode to make it a normal top-level window first
-        let _ = crate::desktop::set_desktop_mode(app.clone(), id.clone(), false).await;
+        crate::desktop::set_desktop_mode(app.clone(), id.clone(), false).await?;
 
         // Restore to the normalized layout tracked for the current or fallback monitor
-        let _ = crate::widget_layout::ensure_widget_layout_for_window(&app, &win, &id);
-        let _ = win.show();
-        let _ = win.set_focus();
+        crate::widget_layout::ensure_widget_layout_for_window(&app, &win, &id)
+            .map_err(|e| e.to_string())?;
+        win.show().map_err(|e| e.to_string())?;
+        win.set_focus().map_err(|e| e.to_string())?;
 
         // Re-apply desktop mode if not pinned/always_on_top
         if always_on_top {
-            let _ = win.set_always_on_top(true);
+            win.set_always_on_top(true).map_err(|e| e.to_string())?;
         } else {
-            let _ = win.set_always_on_top(false);
-            let _ = crate::desktop::set_desktop_mode(app.clone(), id.clone(), true).await;
+            win.set_always_on_top(false).map_err(|e| e.to_string())?;
+            crate::desktop::set_desktop_mode(app.clone(), id.clone(), true).await?;
         }
+    } else {
+        return Err(format!("Widget window '{}' was not created", id));
     }
     Ok(())
 }

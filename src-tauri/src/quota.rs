@@ -70,11 +70,14 @@ fn encrypt_quota_config_secrets(config: &mut QuotaConfig) -> Result<(), String> 
     for item in &mut config.items {
         let key = item.api_key.trim();
         if key.is_empty() {
-            item.encrypted_api_key = None;
+            if !item.api_key_decryption_failed {
+                item.encrypted_api_key = None;
+            }
             continue;
         }
         item.encrypted_api_key = Some(secrets::encrypt_secret(key)?);
         item.api_key.clear();
+        item.api_key_decryption_failed = false;
     }
     Ok(())
 }
@@ -83,7 +86,10 @@ fn decrypt_quota_config_secrets(config: &mut QuotaConfig) {
     for item in &mut config.items {
         if let Some(encrypted) = item.encrypted_api_key.as_deref() {
             match secrets::decrypt_secret(encrypted) {
-                Ok(decrypted) => item.api_key = decrypted,
+                Ok(decrypted) => {
+                    item.api_key = decrypted;
+                    item.api_key_decryption_failed = false;
+                }
                 Err(err) => {
                     log::warn!(
                         "Failed to decrypt API key for quota item '{}': {}",
@@ -91,6 +97,7 @@ fn decrypt_quota_config_secrets(config: &mut QuotaConfig) {
                         err
                     );
                     item.api_key.clear();
+                    item.api_key_decryption_failed = true;
                 }
             }
         }
@@ -203,6 +210,7 @@ fn build_quota_fetch_error_item(item: &QuotaItem, error: &str) -> QuotaItem {
         provider: item.provider.clone(),
         api_key: String::new(),
         encrypted_api_key: None,
+        api_key_decryption_failed: false,
         api_url: item.api_url.clone(),
         json_path: item.json_path.clone(),
         max_quota: item.max_quota,
@@ -1003,6 +1011,7 @@ fn build_antigravity_quota_item(
         provider: "antigravity".to_string(),
         api_key: "".to_string(),
         encrypted_api_key: None,
+        api_key_decryption_failed: false,
         api_url: None,
         json_path: None,
         max_quota: Some(100.0),
@@ -1369,6 +1378,7 @@ async fn fetch_codex_quota(_show_account_name: bool) -> Result<QuotaItem, String
         provider: "codex".to_string(),
         api_key: "".to_string(),
         encrypted_api_key: None,
+        api_key_decryption_failed: false,
         api_url: None,
         json_path: None,
         max_quota: Some(100.0),
@@ -1543,6 +1553,7 @@ async fn fetch_copilot_quota(
             provider: "copilot".to_string(),
             api_key: String::new(),
             encrypted_api_key: None,
+            api_key_decryption_failed: false,
             api_url: None,
             json_path: None,
             max_quota: Some(100.0),
@@ -1653,6 +1664,7 @@ async fn fetch_cursor_quota(_show_account_name: bool) -> Result<QuotaItem, Strin
         provider: "cursor".to_string(),
         api_key: "".to_string(),
         encrypted_api_key: None,
+        api_key_decryption_failed: false,
         api_url: None,
         json_path: None,
         max_quota: Some(100.0),
@@ -1884,6 +1896,7 @@ fn build_qoder_cn_quota_item(
         provider: "qoder-cn".to_string(),
         api_key: String::new(),
         encrypted_api_key: None,
+        api_key_decryption_failed: false,
         api_url: None,
         json_path: None,
         max_quota: max_val,
@@ -2267,6 +2280,7 @@ async fn fetch_pioneer_quota(item: &QuotaItem) -> Result<QuotaItem, String> {
         provider: "pioneer".to_string(),
         api_key: String::new(),
         encrypted_api_key: None,
+        api_key_decryption_failed: false,
         api_url: None,
         json_path: None,
         max_quota: max_val,
@@ -2360,6 +2374,7 @@ async fn fetch_claude_code_quota(item: &QuotaItem) -> Result<QuotaItem, String> 
             provider: "claude-code".to_string(),
             api_key: String::new(),
             encrypted_api_key: None,
+        api_key_decryption_failed: false,
             api_url: None,
             json_path: None,
             max_quota: None,
@@ -2442,6 +2457,7 @@ async fn fetch_claude_code_quota(item: &QuotaItem) -> Result<QuotaItem, String> 
         provider: "claude-code".to_string(),
         api_key: String::new(),
         encrypted_api_key: None,
+        api_key_decryption_failed: false,
         api_url: None,
         json_path: None,
         max_quota: max_val,

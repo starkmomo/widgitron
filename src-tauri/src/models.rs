@@ -11,6 +11,10 @@ pub struct ServerConfig {
     pub port: Option<u16>,
     pub user: Option<String>,
     pub password: Option<String>,
+    #[serde(skip)]
+    pub password_decryption_failed: bool,
+    #[serde(skip)]
+    pub preserved_encrypted_password: Option<String>,
     pub key_file: Option<String>,
     pub use_ssh_config: Option<bool>,
     pub use_slurm: Option<bool>,
@@ -311,6 +315,8 @@ pub struct QuotaItem {
     pub api_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encrypted_api_key: Option<String>,
+    #[serde(skip)]
+    pub api_key_decryption_failed: bool,
     pub api_url: Option<String>,
     pub json_path: Option<String>,
     pub max_quota: Option<f64>,
@@ -800,6 +806,7 @@ pub struct GlobalState {
     pub active_monitors: Arc<std::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     pub active_workers: Arc<std::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     pub arxiv_papers: Arc<std::sync::Mutex<Vec<ArxivPaper>>>,
+    pub arxiv_fetch_lock: Arc<tokio::sync::Mutex<()>>,
     pub quota_data: Arc<std::sync::Mutex<Vec<QuotaItem>>>,
     pub quota_fetch_lock: Arc<tokio::sync::Mutex<()>>,
     pub widget_toggle_lock: Arc<tokio::sync::Mutex<()>>,

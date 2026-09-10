@@ -362,6 +362,7 @@ pub async fn perform_arxiv_fetch(
     app: &AppHandle,
     state: &GlobalState,
 ) -> Result<Vec<ArxivPaper>, String> {
+    let _fetch_guard = state.arxiv_fetch_lock.lock().await;
     let app_config = config_store::read_config::<AppConfig>(app, "app_config.json");
     let mut client_builder = reqwest::Client::builder()
         .user_agent("Widgitron/1.0 (contact: researcher@widgitron.app)")

@@ -5,10 +5,104 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 static CONFIG_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static CONFIG_AUXILIARY_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_auxiliary_path(path: &Path, suffix: &str) -> PathBuf {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.json");
+    let counter = CONFIG_AUXILIARY_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(
+            "{}.{}.{}.{}",
+            filename,
+            std::process::id(),
+            counter,
+            suffix
+        ))
+}
+
+fn backup_corrupt_config(path: &Path) {
+    let backup_path = unique_auxiliary_path(path, "corrupt.json");
+    if let Err(error) = fs::rename(path, &backup_path) {
+        log::warn!(
+            "Failed to back up corrupt config '{}' to '{}': {}",
+            path.display(),
+            backup_path.display(),
+            error
+        );
+    }
+}
+
+#[cfg(windows)]
+fn replace_config_file(temp_path: &Path, path: &Path) -> Result<(), String> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::{ReplaceFileW, REPLACE_FILE_FLAGS};
+
+    if !path.exists() {
+        return fs::rename(temp_path, path).map_err(|e| e.to_string());
+    }
+
+    let target = HSTRING::from(path.as_os_str().to_string_lossy().as_ref());
+    let replacement = HSTRING::from(temp_path.as_os_str().to_string_lossy().as_ref());
+    unsafe {
+        ReplaceFileW(
+            &target,
+            &replacement,
+            None,
+            REPLACE_FILE_FLAGS(0),
+            None,
+            None,
+        )
+    }
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn replace_config_file(temp_path: &Path, path: &Path) -> Result<(), String> {
+    fs::rename(temp_path, path).map_err(|e| e.to_string())
+}
+
+fn write_json_atomically(path: &Path, content: &str) -> Result<(), String> {
+    if path.parent().is_none() {
+        return Err("No parent directory for config path".to_string());
+    }
+    let temp_path = unique_auxiliary_path(path, "tmp");
+    let mut temp_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|e| format!("Failed to create temporary config file: {}", e))?;
+
+    if let Err(error) = temp_file.write_all(content.as_bytes()) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("Failed to write temporary config file: {}", error));
+    }
+    if let Err(error) = temp_file.sync_all() {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("Failed to sync temporary config file: {}", error));
+    }
+    drop(temp_file);
+
+    if let Err(error) = replace_config_file(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!(
+            "Failed to replace config file '{}': {}",
+            path.display(),
+            error
+        ));
+    }
+    Ok(())
+}
 
 fn config_lock() -> std::sync::MutexGuard<'static, ()> {
     match CONFIG_LOCK.lock() {
@@ -50,7 +144,10 @@ fn recover_config_via_soft_merge<T: DeserializeOwned + Default + Serialize>(
 /// Read configuration of type T. If the file doesn't exist, returns default value.
 /// On parse failure, soft-merges known fields onto defaults so upgrades do not wipe
 /// user settings; only falls back to a full default (+ corrupt backup) if recovery fails.
-pub fn read_config<T: DeserializeOwned + Default + Serialize>(app: &AppHandle, filename: &str) -> T {
+pub fn read_config<T: DeserializeOwned + Default + Serialize>(
+    app: &AppHandle,
+    filename: &str,
+) -> T {
     let _guard = config_lock();
     let path = get_config_path(app, filename);
     if !path.exists() {
@@ -68,7 +165,13 @@ pub fn read_config<T: DeserializeOwned + Default + Serialize>(app: &AppHandle, f
                         e
                     );
                     if let Ok(pretty) = serde_json::to_string_pretty(&recovered) {
-                        let _ = fs::write(&path, pretty);
+                        if let Err(error) = write_json_atomically(&path, &pretty) {
+                            log::warn!(
+                                "Failed to persist recovered config '{}': {}",
+                                filename,
+                                error
+                            );
+                        }
                     }
                     return recovered;
                 }
@@ -77,8 +180,7 @@ pub fn read_config<T: DeserializeOwned + Default + Serialize>(app: &AppHandle, f
                     filename,
                     e
                 );
-                let backup_path = path.with_extension("corrupt.json");
-                let _ = fs::rename(&path, &backup_path);
+                backup_corrupt_config(&path);
                 T::default()
             }
         },
@@ -104,24 +206,7 @@ pub fn write_config<T: Serialize>(
 
     let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
 
-    let parent = path
-        .parent()
-        .ok_or_else(|| "No parent directory for config path".to_string())?;
-    let temp_filename = format!("{}.tmp", filename);
-    let temp_path = parent.join(temp_filename);
-
-    // Write to temp file
-    fs::write(&temp_path, &content).map_err(|e| format!("Failed to write to temp file: {}", e))?;
-
-    // On Windows, rename fails if destination exists.
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| format!("Failed to remove old config file: {}", e))?;
-    }
-
-    // Move temp file to actual file path
-    fs::rename(&temp_path, &path).map_err(|e| format!("Failed to rename config file: {}", e))?;
-
-    Ok(())
+    write_json_atomically(&path, &content)
 }
 
 /// Specialized theme configuration loader that handles legacy format migration.
@@ -214,30 +299,27 @@ pub fn read_theme_config(app: &AppHandle) -> WidgetThemeConfig {
                                 }
                             }
 
-                            // Save migrated config atomically
-                            if let Some(parent) = path.parent() {
-                                let temp_path = parent.join("widget_themes.json.tmp");
-                                if let Ok(content) = serde_json::to_string_pretty(&migrated) {
-                                    if fs::write(&temp_path, &content).is_ok() {
-                                        let _ = fs::remove_file(&path);
-                                        let _ = fs::rename(&temp_path, &path);
-                                    }
+                            // Persist the migrated config without removing the current file first.
+                            if let Ok(content) = serde_json::to_string_pretty(&migrated) {
+                                if let Err(error) = write_json_atomically(&path, &content) {
+                                    log::warn!(
+                                        "Failed to persist migrated widget themes: {}",
+                                        error
+                                    );
                                 }
                             }
                             migrated
                         }
                         Err(e) => {
                             log::error!("Failed to migrate widget_themes.json: {}. Backing up and returning defaults.", e);
-                            let backup_path = path.with_extension("corrupt.json");
-                            let _ = fs::rename(&path, &backup_path);
+                            backup_corrupt_config(&path);
                             WidgetThemeConfig::default()
                         }
                     }
                 }
                 Err(e) => {
                     log::error!("Failed to parse widget_themes.json as JSON: {}. Backing up and returning defaults.", e);
-                    let backup_path = path.with_extension("corrupt.json");
-                    let _ = fs::rename(&path, &backup_path);
+                    backup_corrupt_config(&path);
                     WidgetThemeConfig::default()
                 }
             }
