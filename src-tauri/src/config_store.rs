@@ -125,6 +125,21 @@ pub fn write_config<T: Serialize>(
 }
 
 /// Specialized theme configuration loader that handles legacy format migration.
+fn refresh_builtin_macos_widget_opacity(config: &mut WidgetThemeConfig) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    for theme in &mut config.themes {
+        if theme.is_default
+            && theme.id.ends_with("-light")
+            && theme.bg_color == "#ffffff"
+            && (theme.bg_opacity - 0.94).abs() < 0.001
+        {
+            theme.bg_opacity = 0.84;
+        }
+    }
+}
+
 pub fn read_theme_config(app: &AppHandle) -> WidgetThemeConfig {
     let _guard = config_lock();
     let path = get_config_path(app, "widget_themes.json");
@@ -167,6 +182,7 @@ pub fn read_theme_config(app: &AppHandle) -> WidgetThemeConfig {
                     config.assignments.insert(widget_id, default_theme_id);
                 }
             }
+            refresh_builtin_macos_widget_opacity(&mut config);
             config
         }
         Err(_) => {
@@ -213,6 +229,8 @@ pub fn read_theme_config(app: &AppHandle) -> WidgetThemeConfig {
                                     migrated.assignments.insert(widget_id, default_theme_id);
                                 }
                             }
+
+                            refresh_builtin_macos_widget_opacity(&mut migrated);
 
                             // Save migrated config atomically
                             if let Some(parent) = path.parent() {
@@ -299,5 +317,6 @@ pub async fn update_widget_visibility_config(
             visible,
         },
     );
+    let _ = app.emit("app_config_update", &config);
     Ok(())
 }

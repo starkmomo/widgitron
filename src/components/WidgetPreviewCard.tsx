@@ -1,105 +1,64 @@
-import { ChevronRight, Loader2 } from "lucide-react";
+import { Loader2, Monitor, Settings2 } from "lucide-react";
 
 interface WidgetPreviewCardProps {
   title: string;
-  status: string; // kept in props for compatibility but not rendered as a badge
   detail: string;
-  trend: string;
-  color: string; // kept for compatibility
   theme?: string;
+  enabled: boolean;
+  sidebarVisible: boolean;
+  floatingVisible: boolean;
   loading?: boolean;
-  disabled?: boolean;
-  onLaunch: () => void;
+  onToggleSidebar: () => void;
+  onToggleFloating: () => void;
+  onConfigure: () => void;
+  desktopFixed?: boolean;
+  onToggleDesktop?: () => void;
 }
 
 export function WidgetPreviewCard({
-  title,
-  status,
-  detail,
-  trend,
-  color: _color,
-  theme = "dark",
-  loading = false,
-  disabled = false,
-  onLaunch
+  title, detail, theme = "dark", enabled, sidebarVisible, floatingVisible,
+  loading = false, onToggleSidebar,
+  onToggleFloating, onConfigure, desktopFixed, onToggleDesktop,
 }: WidgetPreviewCardProps) {
   const isLight = theme === "light";
-  const isActive = status === "Active";
-  const isDisabled = disabled || loading;
-
-  const handleLaunch = () => {
-    if (isDisabled) return;
-    onLaunch();
-  };
+  const buttonClass = `min-w-0 rounded-lg px-2 py-2 text-xs font-semibold whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 ${
+    isLight ? "bg-slate-100 text-slate-700 hover:bg-slate-200" : "bg-white/10 text-slate-200 hover:bg-white/20"
+  }`;
+  const stateClass = (active: boolean) =>
+    `${buttonClass} ${active ? (isLight ? "!bg-blue-100 !text-blue-800" : "!bg-blue-500/25 !text-blue-100") : ""} disabled:opacity-50 disabled:cursor-not-allowed`;
 
   return (
-    <div
-      className={`p-6 rounded-2xl border transition-all duration-300 group shadow-sm flex flex-col justify-between ${
-        isDisabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
-      } ${
-        isLight
-          ? isActive
-            ? "bg-blue-50/50 border-blue-200 hover:border-blue-300"
-            : "bg-slate-50 border-slate-200 hover:bg-slate-100 hover:border-slate-300"
-          : isActive
-            ? "bg-blue-600/5 border-blue-500/30 hover:border-blue-400/40 shadow-[0_0_20px_rgba(59,130,246,0.05)]"
-            : "bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/15"
-      }`}
-      onClick={handleLaunch}
-    >
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className={`font-bold text-base tracking-tight transition-colors ${
-            isLight 
-              ? isActive ? "text-blue-600" : "text-slate-800"
-              : isActive ? "text-blue-400" : "text-white"
-          }`}>
-            {title}
-          </h3>
-        </div>
-        <div className={`text-xs mb-6 font-medium leading-relaxed h-10 ${isLight ? "text-slate-500" : "text-slate-400"}`}>
-          {detail}
-        </div>
-      </div>
-      
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          disabled={isDisabled}
-          onClick={(e) => { e.stopPropagation(); handleLaunch(); }}
-          className={`text-[10px] font-black tracking-wider uppercase px-4 py-2 rounded-xl transition-all flex items-center gap-2 ${
-            isDisabled ? "cursor-not-allowed" : "cursor-pointer"
-          } ${
-            isLight
-              ? isActive
-                ? "bg-blue-600 text-white hover:bg-blue-700 shadow-md shadow-blue-600/10"
-                : "bg-slate-200/50 text-slate-700 hover:bg-slate-200"
-              : isActive
-                ? "bg-blue-600 text-white hover:bg-blue-500 shadow-lg shadow-blue-600/20"
-                : "bg-white/10 text-slate-300 hover:bg-white/20 hover:text-white"
-          }`}
-        >
-          {loading && <Loader2 size={12} className="animate-spin" />}
-          {trend}
+    <section className={`min-w-0 rounded-2xl border p-4 ${isLight ? "bg-white border-slate-200" : "bg-white/5 border-white/10"}`}>
+      <div className="flex items-center justify-between gap-3">
+        <h3 title={detail} className={`min-w-0 truncate text-base font-bold ${isLight ? "text-slate-900" : "text-white"}`}>{title}</h3>
+        <button type="button" onClick={onConfigure} className={buttonClass} title="Configure" aria-label="Configure">
+          <Settings2 size={16} />
         </button>
-        <div
-          className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
-            isLight
-              ? isActive
-                ? "bg-blue-100 text-blue-600"
-                : "bg-slate-200/30 text-slate-400 group-hover:bg-slate-200/60 group-hover:text-slate-600"
-              : isActive
-                ? "bg-blue-500/10 text-blue-400"
-                : "bg-white/5 text-slate-500 group-hover:bg-white/10 group-hover:text-slate-300"
-          }`}
-        >
-          {loading ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <ChevronRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
-          )}
-        </div>
       </div>
-    </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button type="button" onClick={onToggleSidebar} aria-pressed={sidebarVisible}
+          aria-label={sidebarVisible ? "Sidebar: Shown" : "Sidebar: Hidden"}
+          title={sidebarVisible ? "Sidebar: Shown" : "Sidebar: Hidden"}
+          className={stateClass(sidebarVisible)}>
+          {sidebarVisible ? "Sidebar On" : "Sidebar Off"}
+        </button>
+        <button type="button" onClick={onToggleFloating} disabled={!enabled || loading}
+          aria-pressed={floatingVisible}
+          aria-label={floatingVisible ? "Floating window: Shown" : "Floating window: Hidden"}
+          title={floatingVisible ? "Floating window: Shown" : "Floating window: Hidden"}
+          className={stateClass(floatingVisible)}>
+          {loading ? <Loader2 size={14} className="mx-auto animate-spin" /> : floatingVisible ? "Window On" : "Window Off"}
+        </button>
+      </div>
+      {onToggleDesktop && floatingVisible && (
+        <button type="button" onClick={onToggleDesktop} disabled={!enabled || loading}
+          aria-pressed={Boolean(desktopFixed)}
+          title={desktopFixed ? "Return to floating window" : "Fix on Desktop"}
+          className={`mt-2 inline-flex w-full items-center justify-center gap-2 ${stateClass(Boolean(desktopFixed))}`}>
+          <Monitor size={13} /> {desktopFixed ? "On Desktop" : "Move to Desktop"}
+        </button>
+      )}
+    </section>
   );
 }

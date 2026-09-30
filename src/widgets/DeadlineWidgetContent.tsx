@@ -10,7 +10,7 @@ import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveD
 import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import type { PaperConfig, PaperDeadlineInfo } from "../types/config";
-import { deadlineInstanceKey, deadlineTitleEquals } from "../utils/deadlineKeys";
+import { deadlineInstanceKey, selectWidgetDeadlines } from "../utils/deadlineKeys";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 
@@ -137,12 +137,10 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
   const mainText = getT("Main Text", "#ffffff");
   const subText = getT("Sub Text", "#64748b");
 
-  const pinnedDeadlineIds = paperConfig.pinned_deadline_ids || [];
-  const pinnedList = deadlines.filter((d) => pinnedDeadlineIds.includes(deadlineInstanceKey(d)));
-  const subscribedList = deadlines.filter((d) =>
-    (paperConfig.subscribed_titles || []).some((title) => deadlineTitleEquals(title, d.title))
+  const displayList = selectWidgetDeadlines(deadlines, paperConfig);
+  const hasSelections = Boolean(
+    paperConfig.pinned_deadline_ids?.length || paperConfig.subscribed_titles?.length
   );
-  const displayList = pinnedList.length > 0 ? pinnedList : subscribedList.length > 0 ? subscribedList : deadlines.length > 0 ? [deadlines[0]] : [];
 
   const handleRefresh = async () => {
     if (isRefreshing || !serviceEnabled) return;
@@ -206,12 +204,12 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
             style={{ borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
-            <span className="text-[9px] opacity-70 mt-1">Enable Paper Deadlines in the dashboard.</span>
+            <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
           </div>
         ) : displayList.length > 0 ? (
-          displayList.map((dl, idx) => (
+          displayList.map((dl) => (
             <div
-              key={idx}
+              key={deadlineInstanceKey(dl)}
               className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10"
             >
               <div className="flex items-center justify-between relative z-10">
@@ -255,10 +253,12 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
           >
             <Trophy size={18} style={{ color: highlight, opacity: 0.5 }} className="mb-2" />
             <span className="text-[10px] font-black uppercase tracking-widest mb-1">
-              No Conferences Tracked
+              {hasSelections ? "No Upcoming Deadlines" : "No Conferences Tracked"}
             </span>
             <span className="text-[9px] opacity-70 leading-relaxed">
-              Adjust filters in Settings → Paper Deadlines.
+              {hasSelections
+                ? "No upcoming deadlines for the selected conferences."
+                : "Select Remind me or pin a deadline on the main page."}
             </span>
           </div>
         )}

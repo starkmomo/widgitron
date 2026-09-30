@@ -10,6 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+macos/.build
+macos/.build-signed
+macos/build
 *.local
 
 # Editor directories and files

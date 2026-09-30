@@ -1,2 +1,4 @@
-export const APP_VERSION = "v0.2.6";
+import tauriConfig from "../src-tauri/tauri.conf.json";
+
+export const APP_VERSION = `v${tauriConfig.version}`;
 export const APP_NAME = "Widgitron";

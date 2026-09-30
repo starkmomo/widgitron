@@ -209,6 +209,13 @@ pub fn apply_deadline_fetch_success(
         *state_deadlines = deadlines.clone();
     }
     persist_deadlines_cache(app, &deadlines);
+    #[cfg(target_os = "macos")]
+    {
+        let config = config_store::read_config::<PaperConfig>(app, "paper_deadline.json");
+        if let Err(error) = crate::macos_widget_snapshot::publish_deadline_snapshot(app, &config, &deadlines) {
+            log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
+        }
+    }
     let _ = app.emit("paper_update", &deadlines);
     let _ = app.emit("paper_error", "");
 }

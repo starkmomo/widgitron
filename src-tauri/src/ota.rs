@@ -21,6 +21,52 @@ struct GithubRelease {
     assets: Vec<GithubAsset>,
 }
 
+fn update_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
+    #[cfg(target_os = "windows")]
+    {
+        assets
+            .iter()
+            .find(|asset| asset.name.ends_with("_x64-setup.exe"))
+            .or_else(|| {
+                assets
+                    .iter()
+                    .find(|asset| asset.name.ends_with("-setup.exe"))
+            })
+            .or_else(|| assets.iter().find(|asset| asset.name.ends_with(".exe")))
+            .or_else(|| assets.iter().find(|asset| asset.name.ends_with(".msi")))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let arch_names: &[&str] = if std::env::consts::ARCH == "aarch64" {
+            &["aarch64", "arm64"]
+        } else {
+            &["x86_64", "x64", "amd64"]
+        };
+        assets
+            .iter()
+            .find(|asset| {
+                let name = asset.name.to_ascii_lowercase();
+                name.ends_with(".dmg") && arch_names.iter().any(|arch| name.contains(arch))
+            })
+            .or_else(|| {
+                assets.iter().find(|asset| {
+                    let name = asset.name.to_ascii_lowercase();
+                    name.ends_with(".dmg")
+                        && !["aarch64", "arm64", "x86_64", "x64", "amd64"]
+                            .iter()
+                            .any(|arch| name.contains(arch))
+                })
+            })
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = assets;
+        None
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct UpdateInfo {
     pub has_update: bool,
@@ -103,30 +149,16 @@ pub async fn check_for_updates(app: AppHandle) -> Result<UpdateInfo, String> {
     let mut asset_name = None;
 
     if has_update {
-        // Find Windows asset: prioritize _x64-setup.exe, then -setup.exe, then .exe, then .msi
-        let windows_asset = release
-            .assets
-            .iter()
-            .find(|a| a.name.ends_with("_x64-setup.exe"))
-            .or_else(|| {
-                release
-                    .assets
-                    .iter()
-                    .find(|a| a.name.ends_with("-setup.exe"))
-            })
-            .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".exe")))
-            .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".msi")));
-
-        if let Some(asset) = windows_asset {
+        if let Some(asset) = update_asset(&release.assets) {
             download_url = Some(asset.browser_download_url.clone());
             asset_name = Some(asset.name.clone());
             log::info!(
-                "Found Windows update asset: {} ({})",
+                "Found update asset: {} ({})",
                 asset.name,
                 asset.browser_download_url
             );
         } else {
-            log::warn!("No suitable Windows installation asset found in release");
+            log::warn!("No suitable update asset found for this platform");
         }
     }
 
@@ -250,7 +282,7 @@ async fn perform_download_and_install(
 
     // Flush and close the file
     drop(file);
-    log::info!("Download completed successfully. Launching installer...");
+    log::info!("Download completed successfully. Opening update package...");
 
     // Emit completion event
     let _ = app.emit(
@@ -269,6 +301,7 @@ async fn perform_download_and_install(
 }
 
 fn run_installer(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
     let path_str = path.to_string_lossy();
 
     #[cfg(target_os = "windows")]
@@ -282,7 +315,7 @@ fn run_installer(path: &std::path::Path) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         std::process::Command::new("open")
-            .arg(&path_str)
+            .arg(path)
             .spawn()
             .map_err(|e| format!("Failed to start installer process: {}", e))?;
     }

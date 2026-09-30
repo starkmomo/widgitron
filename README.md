@@ -5,6 +5,10 @@
 <h1 align="center">Widgitron</h1>
 
 <p align="center">
+  <strong>English</strong> ｜ <a href="README.zh-CN.md">中文版</a>
+</p>
+
+<p align="center">
   <strong>A high-performance, modular desktop widget framework for researchers and developers.</strong>
 </p>
 
@@ -74,6 +78,28 @@ pnpm tauri dev
 # Build production executable
 pnpm tauri build
 ```
+
+### macOS build
+
+Requires Xcode, Node.js, and pnpm.
+
+```bash
+pnpm macos:build
+```
+
+The app and native quota, GPU, and deadline widgets are built in
+`src-tauri/target/release/bundle/macos/`. Add the widgets from Notification
+Center → **Edit Widgets**. The build uses an Apple Development certificate when
+available, otherwise ad-hoc signing.
+
+### Continuous builds
+
+GitHub Actions builds a Windows installer and a macOS app with WidgetKit on
+pushes and pull requests. Download artifacts from a completed run within seven
+days; CI needs no Apple credentials. The macOS artifact is not notarized. After
+trying to open it, you may need **System Settings → Privacy & Security → Open
+Anyway** ([Apple's instructions](https://support.apple.com/en-us/102445)).
+Developer ID signing and notarization avoid this extra step for distribution.
 
 ## 🤝 Contributing
 

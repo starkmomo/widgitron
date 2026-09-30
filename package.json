@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "macos:build": "bash macos/build-widget-app.sh",
     "preview": "vite preview",
     "tauri": "tauri"
   },

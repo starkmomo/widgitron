@@ -26,6 +26,7 @@ const MIN_WIDGET_HEIGHT: u32 = 180;
 const DEFAULT_TARGET_WIDTH_LOGICAL: f64 = 400.0;
 const DEFAULT_TARGET_HEIGHT_TALL_LOGICAL: f64 = 460.0;
 const DEFAULT_TARGET_HEIGHT_SHORT_LOGICAL: f64 = 340.0;
+const MACOS_TARGET_HEIGHT_SHORT_LOGICAL: f64 = 260.0;
 const DEFAULT_MARGIN_X_FRAC: f64 = 0.018;
 const DEFAULT_MARGIN_Y_FRAC: f64 = 0.028;
 const DEFAULT_COLUMN_GAP_FRAC: f64 = 0.014;
@@ -345,8 +346,7 @@ fn ensure_widget_layout_for_window_at_scale(
 
     // Persist the post-clamp geometry so stored fractions match what is on screen
     // (UI scale / min-size clamps can otherwise drift from the ideal default).
-    let (applied_position, applied_size) =
-        normalized_to_physical(layout, &target_monitor, scale);
+    let (applied_position, applied_size) = normalized_to_physical(layout, &target_monitor, scale);
     let applied_layout =
         physical_to_normalized(applied_position, applied_size, &target_monitor, scale);
 
@@ -475,7 +475,12 @@ fn default_layout_for_widget_on_monitor(
     monitor: &Monitor,
     scale: f64,
 ) -> Option<NormalizedWidgetLayout> {
-    default_layout_for_widget(label, monitor_work_area(monitor), monitor.scale_factor(), scale)
+    default_layout_for_widget(
+        label,
+        monitor_work_area(monitor),
+        monitor.scale_factor(),
+        scale,
+    )
 }
 
 /// First-run desktop layout: left-aligned 2×2 grid sized from logical pixel
@@ -508,9 +513,16 @@ fn default_layout_for_widget(
     let max_cell_w = ((area_w - left - right_margin - column_gap) / 2.0).max(min_w);
     let available_h = (area_h - top - bottom_margin - row_gap).max(min_h * 2.0);
 
-    let want_w = (DEFAULT_TARGET_WIDTH_LOGICAL * dpi * scale).min(max_cell_w).max(min_w);
+    let want_w = (DEFAULT_TARGET_WIDTH_LOGICAL * dpi * scale)
+        .min(max_cell_w)
+        .max(min_w);
     let mut tall_h = DEFAULT_TARGET_HEIGHT_TALL_LOGICAL * dpi * scale;
-    let mut short_h = DEFAULT_TARGET_HEIGHT_SHORT_LOGICAL * dpi * scale;
+    let mut short_h = if cfg!(target_os = "macos") {
+        MACOS_TARGET_HEIGHT_SHORT_LOGICAL
+    } else {
+        DEFAULT_TARGET_HEIGHT_SHORT_LOGICAL
+    } * dpi
+        * scale;
     let row_total = tall_h + short_h;
     if row_total > available_h && row_total > 0.0 {
         let fit = available_h / row_total;

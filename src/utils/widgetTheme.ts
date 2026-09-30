@@ -1,12 +1,13 @@
 import { WidgetTheme, WidgetThemeConfig } from "../types/theme";
+import { isMacOS } from "./platform";
 
 export type WidgetThemeKind = "gpu" | "deadline" | "arxiv" | "quota";
 
 export const DEFAULT_THEME_IDS: Record<WidgetThemeKind, string> = {
-  gpu: "theme-gpu-transparent",
-  deadline: "theme-deadline-transparent",
-  arxiv: "theme-arxiv-transparent",
-  quota: "theme-quota-transparent",
+  gpu: isMacOS ? "theme-gpu-light" : "theme-gpu-transparent",
+  deadline: isMacOS ? "theme-deadline-light" : "theme-deadline-transparent",
+  arxiv: isMacOS ? "theme-arxiv-light" : "theme-arxiv-transparent",
+  quota: isMacOS ? "theme-quota-light" : "theme-quota-transparent",
 };
 
 const SIDEBAR_THEME_IDS: Record<WidgetThemeKind, string> = {
@@ -16,11 +17,11 @@ const SIDEBAR_THEME_IDS: Record<WidgetThemeKind, string> = {
   quota: "theme-quota-default",
 };
 
-export const PRESET_THEME_IDS: Record<WidgetThemeKind, readonly [string, string]> = {
-  gpu: ["theme-gpu-default", "theme-gpu-transparent"],
-  deadline: ["theme-deadline-default", "theme-deadline-transparent"],
-  arxiv: ["theme-arxiv-default", "theme-arxiv-transparent"],
-  quota: ["theme-quota-default", "theme-quota-transparent"],
+export const PRESET_THEME_IDS: Record<WidgetThemeKind, readonly string[]> = {
+  gpu: ["theme-gpu-default", "theme-gpu-light", "theme-gpu-transparent"],
+  deadline: ["theme-deadline-default", "theme-deadline-light", "theme-deadline-transparent"],
+  arxiv: ["theme-arxiv-default", "theme-arxiv-light", "theme-arxiv-transparent"],
+  quota: ["theme-quota-default", "theme-quota-light", "theme-quota-transparent"],
 };
 
 export function widgetThemeKindFromLabel(label: string): WidgetThemeKind {
@@ -45,14 +46,23 @@ export function resolveWidgetTheme(
   kind?: WidgetThemeKind,
   options?: { sidebarLight?: boolean }
 ): WidgetTheme | null {
+  if (windowLabel === "sidebar" && kind) {
+    const base = config.themes.find((theme) => theme.id === SIDEBAR_THEME_IDS[kind]);
+    if (!base) return null;
+    if (!options?.sidebarLight) return base;
+    return {
+      ...base,
+      text_colors: base.text_colors.map((color) =>
+        color.name === "Main Text"
+          ? { ...color, value: "#0f172a", opacity: 1 }
+          : color.name === "Sub Text"
+            ? { ...color, value: "#475569", opacity: 1 }
+            : color
+      ),
+    };
+  }
   const defaultId =
-    kind && windowLabel === "sidebar"
-      ? options?.sidebarLight
-        ? DEFAULT_THEME_IDS[kind]
-        : SIDEBAR_THEME_IDS[kind]
-      : kind
-      ? DEFAULT_THEME_IDS[kind]
-      : defaultThemeIdForWidgetLabel(windowLabel);
+    kind ? DEFAULT_THEME_IDS[kind] : defaultThemeIdForWidgetLabel(windowLabel);
   const themeId = config.assignments?.[windowLabel];
   const theme =
     config.themes.find((t) => t.id === themeId) || config.themes.find((t) => t.id === defaultId);

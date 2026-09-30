@@ -37,6 +37,8 @@ import {
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { hexToRgba } from "../utils/color";
+import { isMacOS } from "../utils/platform";
+import { resolveLanguage } from "../utils/localization";
 import {
   clearLiveDataSectionErrors,
   createSectionRefreshHandler,
@@ -338,6 +340,7 @@ function QuotaVisualizationSettings({
             <div className="text-[9px] text-slate-500">{desc}</div>
           </div>
           <MasterSwitch
+            label={title}
             enabled={enabled(key)}
             onToggle={(val) => onChange({ ...viz, [key]: val })}
           />
@@ -569,6 +572,7 @@ function QuotaItemCard({
 
   return (
     <Reorder.Item
+      id={`quota-card-${q.id}`}
       value={q}
       dragListener={false}
       dragControls={controls}
@@ -641,7 +645,7 @@ function QuotaItemCard({
             </div>
           )}
         </div>
-        <button
+        {(PROVIDER_AUTH[q.provider]?.apiKey || providerSupportsQuotaVisualizations(q.provider) || !PROVIDER_AUTH[q.provider]) && <button
           type="button"
           onClick={() => onOpenSettings(q.id)}
           title="Quota monitor settings"
@@ -652,7 +656,7 @@ function QuotaItemCard({
           }`}
         >
           <Settings size={14} />
-        </button>
+        </button>}
       </div>
     </Reorder.Item>
   );
@@ -678,8 +682,22 @@ function GpuServerCard({
   onSaveGpu: (config: GpuConfig) => void;
 }) {
   const controls = useDragControls();
+  const saveHost = async (host: string) => {
+    if (host.trim() && s.use_ssh_config === undefined) {
+      try {
+        if (await tauriInvoke("ssh_config_has_host", { host: host.trim() })) {
+          updateServer(idx, "use_ssh_config", true, true);
+          return;
+        }
+      } catch (error) {
+        console.warn("Could not check SSH config host", error);
+      }
+    }
+    onSaveGpu(localGpu);
+  };
   return (
     <Reorder.Item
+      id={`server-card-${s.id}`}
       value={s}
       dragListener={false}
       dragControls={controls}
@@ -716,7 +734,7 @@ function GpuServerCard({
             type="text"
             value={s.host || ""}
             onChange={(e) => updateServer(idx, "host", e.target.value)}
-            onBlur={() => onSaveGpu(localGpu)}
+            onBlur={(e) => void saveHost(e.currentTarget.value)}
             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
             className={`w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
               appConfig.theme === "light"
@@ -861,6 +879,8 @@ interface SettingsPanelProps {
   onSaveQuota: (config: QuotaConfig) => void;
   onSaveApp: (config: AppConfig) => void;
   onToggleSidebarWidget: (key: "quota" | "gpu" | "deadlines" | "arxiv", enabled: boolean) => void;
+  sidebarExpanded: boolean;
+  onToggleSidebar: () => void;
   onSaveThemes: (config: WidgetThemeConfig) => void;
   isAutostart: boolean;
   onToggleAutostart: () => void;
@@ -869,6 +889,9 @@ interface SettingsPanelProps {
   setUpdateInfo: (info: UpdateInfo | null) => void;
   updateCheckError?: string | null;
   setUpdateCheckError?: (err: string | null) => void;
+  initialSection?: SettingsSection;
+  embeddedSection?: SettingsSection;
+  addItemRequest?: number;
 }
 
 const formatArxivKeywordsInput = (keywords?: string[]) => (keywords || []).join(", ");
@@ -907,6 +930,8 @@ export function SettingsPanel({
   onSaveQuota,
   onSaveApp,
   onToggleSidebarWidget,
+  sidebarExpanded,
+  onToggleSidebar,
   onSaveThemes,
   isAutostart,
   onToggleAutostart,
@@ -915,6 +940,9 @@ export function SettingsPanel({
   setUpdateInfo,
   updateCheckError,
   setUpdateCheckError,
+  initialSection = "general",
+  embeddedSection,
+  addItemRequest = 0,
 }: SettingsPanelProps) {
   const [localGpu, setLocalGpu] = useState<GpuConfig>(() => sanitizeGpuConfig(gpuConfig));
   const [localPaper, setLocalPaper] = useState<PaperConfig>(paperConfig);
@@ -936,9 +964,10 @@ export function SettingsPanel({
     stripUnsupportedQuotaProviders(quotaConfig)
   );
   const pendingQuotaReorderRef = useRef<QuotaConfig | null>(null);
-  const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [openProviderId, setOpenProviderId] = useState<string | null>(null);
   const [quotaItemSettingsId, setQuotaItemSettingsId] = useState<string | null>(null);
+  const handledAddItemRequest = useRef(0);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "completed" | "error">("idle");
@@ -1198,23 +1227,25 @@ export function SettingsPanel({
     }
   }, [quotaItemSettingsId, localQuota]);
 
+  // New hosts can opt into SSH config automatically after an alias is entered.
   const addServer = () => {
     const servers = localGpu?.servers || [];
+    const id = `server-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     const next = {
       ...localGpu,
       servers: [
         ...servers,
         {
-          id: `server-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id,
           host: "",
           user: "",
           password: "",
-          use_ssh_config: false
         }
       ]
     };
     setLocalGpu(next);
     onSaveGpu(next);
+    requestAnimationFrame(() => document.getElementById(`server-card-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
   };
 
   const removeServer = (idx: number) => {
@@ -1259,8 +1290,17 @@ export function SettingsPanel({
     };
     const next = { ...localQuota, items: [...items, newItem] };
     setLocalQuota(next);
+    setOpenProviderId(newItem.id);
     onSaveQuota(next);
+    requestAnimationFrame(() => document.getElementById(`quota-card-${newItem.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
   };
+
+  useEffect(() => {
+    if (!embeddedSection || !addItemRequest || handledAddItemRequest.current === addItemRequest) return;
+    handledAddItemRequest.current = addItemRequest;
+    if (embeddedSection === LIVE_DATA_SECTION.GPU) addServer();
+    if (embeddedSection === LIVE_DATA_SECTION.QUOTA) addQuotaItem();
+  }, [addItemRequest, embeddedSection]);
 
   const removeQuotaItem = (id: string) => {
     const items = localQuota?.items || [];
@@ -1384,6 +1424,22 @@ export function SettingsPanel({
           appConfig.theme === "light" ? "bg-slate-50" : "bg-white/5"
         }`}
       >
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>Interface Language</div>
+            <p className="text-[10px] text-slate-400">Change the language in the dashboard, sidebar, and widgets.</p>
+          </div>
+          <div className="flex shrink-0 gap-1 rounded-xl border border-[var(--dashboard-border)] p-1">
+            {(["zh-CN", "en"] as const).map((language) => (
+              <button
+                key={language}
+                type="button"
+                onClick={() => onSaveApp({ ...appConfig, language })}
+                className={`min-w-[72px] whitespace-nowrap rounded-lg px-3 py-1.5 text-center text-[10px] font-bold leading-tight ${resolveLanguage(appConfig.language) === language ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
+              >{language === "zh-CN" ? "简体中文" : "English"}</button>
+            ))}
+          </div>
+        </div>
         <div className="flex items-center justify-between">
           <div className="space-y-1">
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
@@ -1480,7 +1536,7 @@ export function SettingsPanel({
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
               Launch at Startup
             </div>
-            <p className="text-[10px] text-slate-400">Automatically start Widgitron when you log in to Windows.</p>
+            <p className="text-[10px] text-slate-400">Automatically start Widgitron when you log in.</p>
           </div>
           <button
             onClick={onToggleAutostart}
@@ -1602,10 +1658,10 @@ export function SettingsPanel({
           </div>
           <button
             type="button"
-            onClick={() => tauriInvoke("show_sidebar")}
+            onClick={onToggleSidebar}
             className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-lg shadow-blue-600/20"
           >
-            Open Sidebar
+            {sidebarExpanded ? "Close Sidebar" : "Open Sidebar"}
           </button>
         </div>
 
@@ -1615,7 +1671,7 @@ export function SettingsPanel({
               Dock Edge
             </div>
             <p className="text-[10px] text-slate-400">
-              Choose an edge here, or drag the sidebar header near any screen edge to snap it there.
+              {isMacOS ? "Choose the screen edge where the sidebar opens." : "Choose an edge here, or drag the sidebar header near any screen edge to snap it there."}
             </p>
           </div>
           <div className={`grid grid-cols-4 gap-1 p-1 rounded-xl border ${
@@ -1657,6 +1713,7 @@ export function SettingsPanel({
                 </p>
               </div>
               <MasterSwitch
+                label="Pin Display"
                 enabled={appConfig.sidebar_pinned === true}
                 onToggle={(enabled) => onSaveApp({ ...appConfig, sidebar_pinned: enabled })}
               />
@@ -1731,7 +1788,7 @@ export function SettingsPanel({
                 />
               </div>
             </div>
-            <div className="space-y-3 border-t border-[var(--dashboard-border)] px-3 py-3">
+            {!isMacOS && <div className="space-y-3 border-t border-[var(--dashboard-border)] px-3 py-3">
               <div className="space-y-1">
                 <div className={`text-[10px] font-black uppercase tracking-wider ${
                   appConfig.theme === "light" ? "text-slate-700" : "text-slate-300"
@@ -1816,7 +1873,7 @@ export function SettingsPanel({
                   {sidebarHotkeyCaptureError}
                 </p>
               )}
-            </div>
+            </div>}
           </div>
         </div>
 
@@ -1829,7 +1886,7 @@ export function SettingsPanel({
               Choose which modules appear inside the summonable sidebar.
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))" }}>
             {sidebarWidgetControls.map((item) => (
               <div
                 key={item.key}
@@ -1848,6 +1905,7 @@ export function SettingsPanel({
                   </span>
                 </div>
                 <MasterSwitch
+                  label={`Show ${item.label} in sidebar`}
                   enabled={sidebarWidgets[item.key] !== false}
                   onToggle={(enabled) => saveSidebarWidget(item.key, enabled)}
                 />
@@ -1868,6 +1926,7 @@ export function SettingsPanel({
               </p>
             </div>
             <MasterSwitch
+              label="Hide Widget Headers"
               enabled={appConfig.sidebar_hide_widget_headers === true}
               onToggle={(enabled) =>
                 onSaveApp({ ...appConfig, sidebar_hide_widget_headers: enabled })
@@ -2544,8 +2603,9 @@ export function SettingsPanel({
                     ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
                     : "bg-black/40 border-white/10 text-white focus:bg-black/60"
                 }`}
-                placeholder="e.g. gaussian, vla, llm"
+                placeholder="Optional keywords"
               />
+              <p className="text-[10px] text-slate-500">Leave keywords empty to show recent papers from the selected arXiv category.</p>
             </div>
           </div>
           <div className="space-y-6">
@@ -2581,6 +2641,7 @@ export function SettingsPanel({
                 <div className="text-[10px] text-slate-500">Display swipe instructions at the bottom of cards</div>
               </div>
               <MasterSwitch
+                label="Show Interaction Hints"
                 enabled={localArxiv.show_card_hints !== false}
                 onToggle={(val) => {
                   const next = { ...localArxiv, show_card_hints: val };
@@ -2677,6 +2738,7 @@ export function SettingsPanel({
             </div>
           </div>
           <MasterSwitch
+            label="Show Account Name"
             enabled={localQuota?.show_account_name || false}
             onToggle={(val) => {
               const next = { ...localQuota, show_account_name: val };
@@ -2698,6 +2760,7 @@ export function SettingsPanel({
             </div>
           </div>
           <MasterSwitch
+            label="Show Plan Type"
             enabled={localQuota?.show_plan_type !== false}
             onToggle={(val) => {
               const next = { ...localQuota, show_plan_type: val };
@@ -2888,7 +2951,7 @@ export function SettingsPanel({
 
           {!updateError && !updateCheckError && updateInfo && !updateInfo.has_update && !isCheckingUpdate && (
             <div className="text-[10px] text-slate-500 font-medium">
-              You are on the latest version ({updateInfo.current_version}).
+              {`You are on the latest version (${updateInfo.current_version}).`}
             </div>
           )}
 
@@ -2982,10 +3045,21 @@ export function SettingsPanel({
     </section>
   );
 
+  if (embeddedSection) {
+    return (
+      <div className="space-y-8">
+        {embeddedSection === LIVE_DATA_SECTION.QUOTA && renderQuotaSection()}
+        {embeddedSection === LIVE_DATA_SECTION.GPU && renderGpuSection()}
+        {embeddedSection === LIVE_DATA_SECTION.DEADLINES && renderDeadlinesSection()}
+        {embeddedSection === LIVE_DATA_SECTION.ARXIV && renderArxivSection()}
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col md:flex-row gap-8 items-start">
+    <div className="flex flex-col md:flex-row gap-6 items-start">
       {/* Settings Sidebar */}
-      <div className="w-full md:w-56 flex-shrink-0 flex flex-row md:flex-col gap-1 overflow-x-auto md:overflow-y-auto md:overflow-x-hidden pb-3 md:pb-4 border-b md:border-b-0 md:border-r border-[var(--dashboard-border)] pr-0 md:pr-6 custom-scrollbar md:sticky md:top-0 md:self-start md:max-h-[calc(100vh-3.5rem)] pt-1">
+      <div className="w-full md:w-44 flex-shrink-0 flex flex-row md:flex-col gap-1 overflow-x-auto md:overflow-y-auto md:overflow-x-hidden pb-3 md:pb-4 border-b md:border-b-0 md:border-r border-[var(--dashboard-border)] pr-0 md:pr-4 custom-scrollbar md:sticky md:top-0 md:self-start md:max-h-[calc(100vh-3.5rem)] pt-1">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeSection === tab.id;
@@ -2996,7 +3070,7 @@ export function SettingsPanel({
                 setQuotaItemSettingsId(null);
                 setActiveSection(tab.id);
               }}
-              className={`flex items-center gap-3 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all relative whitespace-nowrap text-left w-full ${
+              className={`flex items-center gap-2 px-3 py-3.5 rounded-2xl text-xs font-bold tracking-normal transition-all relative whitespace-nowrap text-left w-full ${
                 isActive
                   ? appConfig.theme === "light"
                     ? "text-blue-600"

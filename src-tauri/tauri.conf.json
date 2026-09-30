@@ -4,9 +4,9 @@
   "version": "0.2.6",
   "identifier": "com.evan.widgitron",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -15,7 +15,9 @@
         "label": "main",
         "title": "Widgitron",
         "width": 1000,
-        "height": 700,
+        "height": 740,
+        "minWidth": 900,
+        "minHeight": 680,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,

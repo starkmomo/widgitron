@@ -7,6 +7,7 @@ use crate::models::{AppConfig, ArxivConfig, ArxivPaper, GlobalState};
 
 const ARXIV_PAGE_SIZE: usize = 100;
 const ARXIV_MIN_PAPERS_PER_KEYWORD: usize = 10;
+const ARXIV_MIN_PAPERS_WITHOUT_KEYWORDS: usize = 20;
 
 fn normalize_keyword(keyword: &str) -> String {
     keyword.trim().trim_matches('"').to_lowercase()
@@ -390,9 +391,15 @@ pub async fn perform_arxiv_fetch(
     let mut papers = Vec::new();
 
     if kws.is_empty() {
-        papers =
-            fetch_papers_for_query(&client, &cat_query, kws, today_start, tomorrow_start, None)
-                .await?;
+        papers = fetch_papers_for_query(
+            &client,
+            &cat_query,
+            kws,
+            today_start,
+            tomorrow_start,
+            Some(ARXIV_MIN_PAPERS_WITHOUT_KEYWORDS),
+        )
+        .await?;
     } else {
         for keyword in get_unique_keywords(kws) {
             if let Some(keyword_query) = arxiv_keyword_query(&keyword) {
@@ -483,7 +490,12 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
             if let Ok(metadata) = std::fs::metadata(&cache_path) {
                 if let Ok(modified) = metadata.modified() {
                     if let Ok(elapsed) = modified.elapsed() {
-                        if elapsed < Duration::from_secs(1800) {
+                        let has_cached_papers = !config_store::read_config::<Vec<ArxivPaper>>(
+                            &app,
+                            "arxiv_cache.json",
+                        )
+                        .is_empty();
+                        if elapsed < Duration::from_secs(1800) && has_cached_papers {
                             // 30 minutes
                             skip_fetch = true;
                             log::info!(

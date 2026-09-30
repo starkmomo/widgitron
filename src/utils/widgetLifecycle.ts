@@ -519,7 +519,7 @@ export async function toggleMasterService(
   onActiveWidgetsChanged?: (labels: string[]) => void | Promise<void>,
   toggleCallbacks?: ServiceToggleCallbacksByField[ServiceField]
 ): Promise<void> {
-  const { id, title } = serviceWidgetMeta(field);
+  const { id } = serviceWidgetMeta(field);
   const next = { ...appConfig, [field]: enabled };
   await onSaveApp(next);
   let effectiveConfig = next;
@@ -533,17 +533,6 @@ export async function toggleMasterService(
       toggleCallbacks?.onDisableEnd?.();
     }
   } else {
-    try {
-      await tauriInvoke("create_widget", { id, title });
-    } catch (e) {
-      const message = String(e);
-      console.error(`Create widget for ${field} failed`, e);
-      effectiveConfig = { ...appConfig, [field]: false };
-      await onSaveApp(effectiveConfig);
-      toggleCallbacks?.onToggleError?.(message);
-      return;
-    }
-
     toggleCallbacks?.onRefreshStart?.();
     try {
       switch (field) {
@@ -596,7 +585,8 @@ export async function toggleMasterService(
 
   if (onActiveWidgetsChanged) {
     try {
-      await onActiveWidgetsChanged(await resolveActiveWidgetLabels(effectiveConfig));
+      const persistedConfig = await tauriInvoke("get_app_config");
+      await onActiveWidgetsChanged(await resolveActiveWidgetLabels(persistedConfig));
     } catch (e) {
       console.error("Failed to refresh active widget list", e);
     }

@@ -397,7 +397,7 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
               Service Disabled
             </span>
             <span className="text-[9px] opacity-70 leading-relaxed">
-              Enable Quota Monitor in the dashboard.
+              Enable monitoring on the module page.
             </span>
           </div>
         ) : displayedQuotas.length > 0 ? (

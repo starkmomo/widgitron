@@ -74,6 +74,18 @@ function recordOfStepsEqual(
   });
 }
 
+function systemMetricsEqual(
+  a: ServerGpuData["system"],
+  b: ServerGpuData["system"]
+): boolean {
+  if (!a || !b) return !a && !b;
+  return (
+    a.cpu_percent === b.cpu_percent &&
+    a.memory_used_bytes === b.memory_used_bytes &&
+    a.memory_total_bytes === b.memory_total_bytes
+  );
+}
+
 export function gpuServerDataEqual(
   a: ServerGpuData,
   b: ServerGpuData
@@ -81,7 +93,8 @@ export function gpuServerDataEqual(
   if (
     a.host !== b.host ||
     a.is_online !== b.is_online ||
-    a.error !== b.error
+    a.error !== b.error ||
+    !systemMetricsEqual(a.system, b.system)
   ) {
     return false;
   }

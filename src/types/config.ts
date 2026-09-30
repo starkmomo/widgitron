@@ -30,6 +30,8 @@ export interface AppConfig {
   /** 1–10. Higher = hides sooner after the pointer leaves (default 8). */
   sidebar_hide_sensitivity?: number;
   active_widgets?: Record<string, boolean>;
+  language?: "zh-CN" | "en";
+  macos_setup_version?: number;
 }
 
 export interface SidebarTileLayoutConfig {
@@ -252,6 +254,11 @@ export interface ServerGpuData {
   gpu_list: GpuInfo[];
   error?: string | null;
   last_update?: string | null;
+  system?: {
+    cpu_percent?: number | null;
+    memory_used_bytes: number;
+    memory_total_bytes: number;
+  } | null;
   slurm_steps?: Record<string, SlurmStep[]> | null;
   slurm_nodelists?: Record<string, string> | null;
   slurm_times?: Record<string, string> | null;

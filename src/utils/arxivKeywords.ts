@@ -50,6 +50,9 @@ export function getPaperArxivKeywords(paper: ArxivPaper, keywords?: string[]): s
 
 export function groupArxivPapersByKeyword(papers: ArxivPaper[], keywords?: string[]): ArxivKeywordGroup[] {
   const configuredKeywords = getArxivKeywords(keywords);
+  if (configuredKeywords.length === 0) {
+    return papers.length > 0 ? [{ keyword: ALL_ARXIV_KEYWORDS, papers }] : [];
+  }
   const groups = configuredKeywords.map((keyword) => ({
     keyword,
     papers: papers.filter((paper) => paperMatchesArxivKeyword(paper, keyword)),
@@ -92,5 +95,6 @@ export function filterArxivPapersByKeywords(
   );
 }
 export function formatArxivKeywordLabel(keyword: string): string {
+  if (keyword === ALL_ARXIV_KEYWORDS) return "All papers";
   return keyword === UNCATEGORIZED_ARXIV_KEYWORD ? "Other matches" : keyword;
 }

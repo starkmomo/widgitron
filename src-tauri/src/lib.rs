@@ -31,12 +31,26 @@ mod deadlines;
 mod desktop;
 mod gpu;
 mod logger;
+#[cfg(target_os = "macos")]
+mod macos_setup;
+#[cfg(target_os = "macos")]
+mod macos_tray;
+#[cfg(target_os = "macos")]
+mod macos_widget_snapshot;
 mod models;
 mod ota;
 mod quota;
 mod quota_analytics;
 mod secrets;
+#[cfg(windows)]
 mod sidebar_dock;
+#[cfg(not(windows))]
+#[path = "sidebar_dock_portable.rs"]
+mod sidebar_dock;
+#[cfg(windows)]
+mod sidebar_hotkey;
+#[cfg(not(windows))]
+#[path = "sidebar_hotkey_portable.rs"]
 mod sidebar_hotkey;
 mod sqlite_state;
 mod ui_scale;
@@ -65,15 +79,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::create_widget,
             commands::close_widget,
+            commands::hide_all_widgets,
             commands::toggle_widget,
             desktop::set_desktop_mode,
             commands::save_gpu_config,
             commands::save_paper_config,
             commands::get_gpu_config,
+            commands::ssh_config_has_host,
             commands::get_paper_config,
             commands::get_app_config,
             commands::save_app_config,
+            commands::save_sidebar_tile_layout,
             commands::set_widget_always_on_top,
+            commands::set_widget_desktop_fixed,
             commands::get_deadlines,
             commands::refresh_paper_deadlines,
             commands::get_gpu_data,
@@ -81,6 +99,8 @@ pub fn run() {
             commands::show_main,
             commands::show_sidebar,
             commands::hide_sidebar,
+            commands::toggle_sidebar_visibility,
+            commands::get_native_quota_widget_status,
             commands::toggle_sidebar,
             commands::get_sidebar_state,
             commands::set_sidebar_pinned,
@@ -121,12 +141,24 @@ pub fn run() {
             let config_dir = crate::utils::get_config_dir(&handle);
             crate::utils::ensure_default_configs(&handle);
             config_store::seed_default_theme_config_if_missing(&handle);
+            #[cfg(target_os = "macos")]
+            if let Err(err) = macos_setup::apply_first_run_defaults(&handle) {
+                log::warn!("Failed to apply macOS display defaults: {err}");
+            }
             log::info!("Using config directory: {}", config_dir.display());
+            #[cfg(target_os = "macos")]
+            if let Err(error) = macos_widget_snapshot::start_snapshot_server(&handle) {
+                log::warn!("Failed to start local macOS widget feed: {error}");
+            }
 
             // Global State
             // Pre-load cached quota data from disk for instant widget display
             let cached_quota_items: Vec<models::QuotaItem> = {
                 let mut cfg = quota::read_quota_config(&handle);
+                #[cfg(target_os = "macos")]
+                if let Err(error) = macos_widget_snapshot::publish_quota_snapshot(&handle, &cfg) {
+                    log::warn!("Failed to publish macOS quota widget snapshot: {error}");
+                }
                 for item in &mut cfg.items {
                     if item.provider == "antigravity" {
                         quota::group_antigravity_bars(item);
@@ -139,6 +171,17 @@ pub fn run() {
             let cached_arxiv: Vec<models::ArxivPaper> =
                 config_store::read_config(&handle, "arxiv_cache.json");
             let cached_gpu = gpu::load_gpu_cache(&handle);
+            #[cfg(target_os = "macos")]
+            {
+                let gpu_config = gpu::read_gpu_config(&handle);
+                if let Err(error) = macos_widget_snapshot::publish_gpu_snapshot(&handle, &gpu_config, &cached_gpu) {
+                    log::warn!("Failed to publish macOS GPU widget snapshot: {error}");
+                }
+                let paper_config = config_store::read_config::<models::PaperConfig>(&handle, "paper_deadline.json");
+                if let Err(error) = macos_widget_snapshot::publish_deadline_snapshot(&handle, &paper_config, &cached_deadlines) {
+                    log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
+                }
+            }
             let state = Arc::new(models::GlobalState {
                 deadlines: Arc::new(std::sync::Mutex::new(cached_deadlines)),
                 gpu_data: Arc::new(std::sync::Mutex::new(cached_gpu)),
@@ -170,125 +213,172 @@ pub fn run() {
             // (removed: each monitor emits its own cache; avoids startup event storm)
 
             // Tray
-            let mut tray_builder = TrayIconBuilder::new()
-                .show_menu_on_left_click(false)
-                .on_tray_icon_event(|tray, event| {
-                    use tauri::tray::{MouseButton, TrayIconEvent};
-                    match event {
-                        TrayIconEvent::Click {
-                            button: MouseButton::Right,
-                            ..
-                        } => {
-                            if let Some(window) = tray.app_handle().get_webview_window("tray-menu")
-                            {
-                                // Get cursor position to place the menu
-                                use windows::Win32::Foundation::POINT;
-                                use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-                                let mut pt = POINT::default();
-                                unsafe {
-                                    let _ = GetCursorPos(&mut pt);
-                                }
-
-                                // Find the scale factor of the monitor containing the cursor position
-                                let mut scale_factor = 1.0;
-                                let mut monitor_pos = tauri::PhysicalPosition::<i32>::new(0, 0);
-                                let mut monitor_size = tauri::PhysicalSize::<u32>::new(1920, 1080);
-                                let mut found_monitor = false;
-
-                                if let Ok(monitors) = tray.app_handle().available_monitors() {
-                                    for m in &monitors {
-                                        let pos = m.position();
-                                        let size = m.size();
-                                        let x = pt.x;
-                                        let y = pt.y;
-                                        if x >= pos.x
-                                            && x < pos.x + size.width as i32
-                                            && y >= pos.y
-                                            && y < pos.y + size.height as i32
-                                        {
-                                            scale_factor = m.scale_factor();
-                                            monitor_pos = *pos;
-                                            monitor_size = *size;
-                                            found_monitor = true;
-                                            break;
-                                        }
-                                    }
-
-                                    // Fallback to primary monitor if cursor is outside all monitors
-                                    if !found_monitor {
-                                        if let Ok(Some(m)) = tray.app_handle().primary_monitor() {
-                                            scale_factor = m.scale_factor();
-                                            monitor_pos = *m.position();
-                                            monitor_size = *m.size();
-                                        }
+            #[cfg(target_os = "macos")]
+            {
+                let menu = macos_tray::create_menu(&handle)?;
+                let context_menu = menu.clone();
+                let mut tray_builder = TrayIconBuilder::new()
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(macos_tray::handle_menu_event)
+                    .on_tray_icon_event(move |tray, event| {
+                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                        match event {
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } => {
+                                let app = tray.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = commands::show_main(app).await;
+                                });
+                            }
+                            TrayIconEvent::Click {
+                                button: MouseButton::Right,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } => {
+                                macos_tray::refresh(tray.app_handle());
+                                if let Some(window) = tray.app_handle().get_webview_window("main") {
+                                    if let Err(error) = window.popup_menu(&context_menu) {
+                                        log::warn!("Failed to open macOS menu bar menu: {error}");
                                     }
                                 }
-
-                                let physical_width = (150.0 * scale_factor) as i32;
-                                let physical_height = (104.0 * scale_factor) as i32;
-
-                                // Adjust X so the window doesn't overflow the right edge of the monitor
-                                let mut x = pt.x;
-                                if x + physical_width > monitor_pos.x + monitor_size.width as i32 {
-                                    x = monitor_pos.x + monitor_size.width as i32 - physical_width;
-                                }
-                                if x < monitor_pos.x {
-                                    x = monitor_pos.x;
-                                }
-
-                                // Adjust Y so the window doesn't overflow the bottom or top of the monitor
-                                let mut y = pt.y - physical_height;
-                                if y + physical_height > monitor_pos.y + monitor_size.height as i32
-                                {
-                                    y = monitor_pos.y + monitor_size.height as i32
-                                        - physical_height;
-                                }
-                                if y < monitor_pos.y {
-                                    y = monitor_pos.y;
-                                }
-
-                                // Apply size first so Windows/Tauri knows the dimensions before placing it
-                                let _ = window.set_size(tauri::Size::Physical(
-                                    tauri::PhysicalSize::new(
-                                        physical_width as u32,
-                                        physical_height as u32,
-                                    ),
-                                ));
-
-                                // Set position
-                                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-
-                                let _ = window.show();
-                                let _ = window.set_focus();
                             }
+                            _ => {}
                         }
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            ..
-                        } => {
-                            let app_handle = tray.app_handle().clone();
-                            tauri::async_runtime::spawn(async move {
-                                let _ = commands::show_sidebar(app_handle).await;
-                            });
-                        }
-                        TrayIconEvent::DoubleClick {
-                            button: MouseButton::Left,
-                            ..
-                        } => {
-                            if let Some(window) = tray.app_handle().get_webview_window("main") {
-                                let _ = window.unminimize();
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        }
-                        _ => {}
-                    }
-                });
-
-            if let Some(icon) = app.default_window_icon() {
-                tray_builder = tray_builder.icon(icon.clone());
+                    });
+                // Derived from icon.png with its opaque background removed for macOS tinting.
+                let tray_icon =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+                tray_builder = tray_builder.icon(tray_icon).icon_as_template(true);
+                let tray = tray_builder.build(&handle)?;
+                tray.set_show_menu_on_left_click(false)?;
             }
-            let _tray = tray_builder.build(&handle)?;
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let mut tray_builder = TrayIconBuilder::new()
+                    .show_menu_on_left_click(false)
+                    .on_tray_icon_event(|tray, event| {
+                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                        match event {
+                            TrayIconEvent::Click {
+                                button: MouseButton::Right,
+                                button_state: MouseButtonState::Down,
+                                position,
+                                ..
+                            } => {
+                                if let Some(window) =
+                                    tray.app_handle().get_webview_window("tray-menu")
+                                {
+                                    // Find the scale factor of the monitor containing the cursor position
+                                    let mut scale_factor = 1.0;
+                                    let mut monitor_pos = tauri::PhysicalPosition::<i32>::new(0, 0);
+                                    let mut monitor_size =
+                                        tauri::PhysicalSize::<u32>::new(1920, 1080);
+                                    let mut found_monitor = false;
+
+                                    if let Ok(monitors) = tray.app_handle().available_monitors() {
+                                        for m in &monitors {
+                                            let pos = m.position();
+                                            let size = m.size();
+                                            let x = position.x as i32;
+                                            let y = position.y as i32;
+                                            if x >= pos.x
+                                                && x < pos.x + size.width as i32
+                                                && y >= pos.y
+                                                && y < pos.y + size.height as i32
+                                            {
+                                                scale_factor = m.scale_factor();
+                                                monitor_pos = *pos;
+                                                monitor_size = *size;
+                                                found_monitor = true;
+                                                break;
+                                            }
+                                        }
+
+                                        // Fallback to primary monitor if cursor is outside all monitors
+                                        if !found_monitor {
+                                            if let Ok(Some(m)) = tray.app_handle().primary_monitor()
+                                            {
+                                                scale_factor = m.scale_factor();
+                                                monitor_pos = *m.position();
+                                                monitor_size = *m.size();
+                                            }
+                                        }
+                                    }
+
+                                    let physical_width = (150.0 * scale_factor) as i32;
+                                    let physical_height = (104.0 * scale_factor) as i32;
+
+                                    // Adjust X so the window doesn't overflow the right edge of the monitor
+                                    let mut x = position.x as i32;
+                                    if x + physical_width
+                                        > monitor_pos.x + monitor_size.width as i32
+                                    {
+                                        x = monitor_pos.x + monitor_size.width as i32
+                                            - physical_width;
+                                    }
+                                    if x < monitor_pos.x {
+                                        x = monitor_pos.x;
+                                    }
+
+                                    // Adjust Y so the window doesn't overflow the bottom or top of the monitor
+                                    let mut y = position.y as i32 - physical_height;
+                                    if y + physical_height
+                                        > monitor_pos.y + monitor_size.height as i32
+                                    {
+                                        y = monitor_pos.y + monitor_size.height as i32
+                                            - physical_height;
+                                    }
+                                    if y < monitor_pos.y {
+                                        y = monitor_pos.y;
+                                    }
+
+                                    // Apply size first so Windows/Tauri knows the dimensions before placing it
+                                    let _ = window.set_size(tauri::Size::Physical(
+                                        tauri::PhysicalSize::new(
+                                            physical_width as u32,
+                                            physical_height as u32,
+                                        ),
+                                    ));
+
+                                    // Set position
+                                    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } => {
+                                let app_handle = tray.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = commands::show_main(app_handle).await;
+                                });
+                            }
+                            TrayIconEvent::DoubleClick {
+                                button: MouseButton::Left,
+                                ..
+                            } => {
+                                let app_handle = tray.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = commands::show_main(app_handle).await;
+                                });
+                            }
+                            _ => {}
+                        }
+                    });
+
+                if let Some(icon) = app.default_window_icon() {
+                    tray_builder = tray_builder.icon(icon.clone());
+                }
+                let _tray = tray_builder.build(&handle)?;
+            }
 
             // Bug fix: Explicitly hide tray-menu window on startup
             if let Some(tray_menu) = app.get_webview_window("tray-menu") {
@@ -338,14 +428,35 @@ pub fn run() {
             let hide_on_startup = app_config.hide_on_startup.unwrap_or(false);
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                log::warn!("[DIAG] Attempting to show main window (hide_on_startup={})", hide_on_startup);
+                log::warn!(
+                    "[DIAG] Attempting to show main window (hide_on_startup={})",
+                    hide_on_startup
+                );
                 match handle_main.get_webview_window("main") {
                     None => log::warn!("[DIAG] get_webview_window('main') returned None!"),
                     Some(main_win) => {
+                        // Saved window state can restore a size from before the minimum
+                        // changed. Reapply it after the plugin finishes restoring.
+                        let min_size = tauri::LogicalSize::new(900.0, 680.0);
+                        let _ = main_win.set_min_size(Some(tauri::Size::Logical(min_size)));
+                        if let (Ok(size), Ok(scale)) = (main_win.inner_size(), main_win.scale_factor()) {
+                            let size = size.to_logical::<f64>(scale);
+                            if size.width < min_size.width || size.height < min_size.height {
+                                let _ = main_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                                    size.width.max(min_size.width),
+                                    size.height.max(min_size.height),
+                                )));
+                            }
+                        }
                         // Log current position before showing
                         let pos_before = main_win.outer_position();
                         let size_before = main_win.outer_size();
-                        log::warn!("[DIAG] main window found, is_visible={:?} pos={:?} size={:?}", main_win.is_visible(), pos_before, size_before);
+                        log::warn!(
+                            "[DIAG] main window found, is_visible={:?} pos={:?} size={:?}",
+                            main_win.is_visible(),
+                            pos_before,
+                            size_before
+                        );
 
                         if !hide_on_startup {
                             let _ = main_win.unminimize();
@@ -356,16 +467,33 @@ pub fn run() {
                                 let mon_pos = monitor.position();
                                 let mon_size = monitor.size();
                                 let scale = monitor.scale_factor();
-                                let win_w = (1000.0 * scale) as i32;
-                                let win_h = (700.0 * scale) as i32;
+                                let current_size = main_win.outer_size().unwrap_or_else(|_| {
+                                    tauri::PhysicalSize::new(
+                                        (1000.0 * scale) as u32,
+                                        (740.0 * scale) as u32,
+                                    )
+                                });
+                                let win_w = current_size.width as i32;
+                                let win_h = current_size.height as i32;
                                 let center_x = mon_pos.x + (mon_size.width as i32 - win_w) / 2;
                                 let center_y = mon_pos.y + (mon_size.height as i32 - win_h) / 2;
-                                log::warn!("[DIAG] Moving main window to center: ({},{}) {}x{}", center_x, center_y, win_w, win_h);
-                                let _ = main_win.set_position(tauri::PhysicalPosition::new(center_x, center_y));
+                                log::warn!(
+                                    "[DIAG] Moving main window to center: ({},{}) {}x{}",
+                                    center_x,
+                                    center_y,
+                                    win_w,
+                                    win_h
+                                );
+                                let _ = main_win
+                                    .set_position(tauri::PhysicalPosition::new(center_x, center_y));
                             }
 
                             let _ = main_win.set_focus();
-                            log::warn!("[DIAG] is_visible_after={:?} pos_after={:?}", main_win.is_visible(), main_win.outer_position());
+                            log::warn!(
+                                "[DIAG] is_visible_after={:?} pos_after={:?}",
+                                main_win.is_visible(),
+                                main_win.outer_position()
+                            );
                         } else {
                             let _ = main_win.hide();
                         }
@@ -375,10 +503,13 @@ pub fn run() {
 
             tauri::async_runtime::spawn(async move {
                 let active_map = app_config.active_widgets.unwrap_or_default();
+                let default_visible = cfg!(windows);
                 tokio::time::sleep(std::time::Duration::from_millis(900)).await;
 
                 if app_config.gpu_enabled.unwrap_or(true)
-                    && *active_map.get("widget-gpu-default").unwrap_or(&true)
+                    && *active_map
+                        .get("widget-gpu-default")
+                        .unwrap_or(&default_visible)
                 {
                     let _ = commands::create_widget_impl_background(
                         handle_gpu,
@@ -389,7 +520,9 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
                 if app_config.deadline_enabled.unwrap_or(true)
-                    && *active_map.get("widget-deadlines-default").unwrap_or(&true)
+                    && *active_map
+                        .get("widget-deadlines-default")
+                        .unwrap_or(&default_visible)
                 {
                     let _ = commands::create_widget_impl_background(
                         handle_deadline,
@@ -400,7 +533,9 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
                 if app_config.arxiv_enabled.unwrap_or(true)
-                    && *active_map.get("widget-arxiv-default").unwrap_or(&true)
+                    && *active_map
+                        .get("widget-arxiv-default")
+                        .unwrap_or(&default_visible)
                 {
                     let _ = commands::create_widget_impl_background(
                         handle_arxiv,
@@ -411,7 +546,9 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
                 if app_config.quota_enabled.unwrap_or(true)
-                    && *active_map.get("widget-quota-default").unwrap_or(&true)
+                    && *active_map
+                        .get("widget-quota-default")
+                        .unwrap_or(&default_visible)
                 {
                     let _ = commands::create_widget_impl_background(
                         handle_quota,
@@ -432,6 +569,14 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             let label = window.label().to_string();
+            #[cfg(target_os = "macos")]
+            if label == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+            }
             if label == "main"
                 && matches!(
                     event,
@@ -458,6 +603,26 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            let open_main = match event {
+                tauri::RunEvent::Reopen { has_visible_windows: false, .. } => true,
+                tauri::RunEvent::Opened { urls } => urls.iter().any(|url| {
+                    url.scheme() == "widgitron" && url.host_str() == Some("open")
+                }),
+                _ => false,
+            };
+            #[cfg(target_os = "macos")]
+            if open_main {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

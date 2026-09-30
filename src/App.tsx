@@ -13,6 +13,7 @@ import {
   Bell,
   Pin,
   PinOff,
+  Monitor,
   Trophy,
   Copy,
   ExternalLink,
@@ -23,7 +24,9 @@ import {
   Maximize2,
   Globe,
   User,
-  ChevronDown
+  Plus,
+  ChevronDown,
+  EyeOff
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -46,12 +49,15 @@ import { listenBackendServiceError } from "./utils/backendServiceError";
 import { listenQuotaMonitorStatus, type QuotaMonitorStatus } from "./utils/quotaMonitorStatus";
 import { listenServiceUpdateEvents } from "./utils/serviceUpdateEvents";
 import { listenGpuDataSync } from "./utils/gpuDataSync";
-import { isLiveDataSection, LIVE_DATA_SECTION, refetchSectionLiveDataForSection, appTabLabel, LIVE_DATA_SECTION_LABELS, type AppTab } from "./utils/sectionLiveData";
+import { isLiveDataSection, LIVE_DATA_SECTION, refetchSectionLiveDataForSection, appTabLabel, LIVE_DATA_SECTION_LABELS, type AppTab, type SettingsSection } from "./utils/sectionLiveData";
 import { fetchArxivSavedPapers, fetchArxivDiscardedPapers, loadArxivArchiveLists } from "./utils/arxivArchive";
+import { formatCpuPercent, formatSystemMemory } from "./utils/systemMetrics";
 import { formatArxivKeywordLabel, groupArxivPapersByKeyword } from "./utils/arxivKeywords";
 import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaBarDisplay, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
 import type { SidebarDockState, UpdateInfo } from "./types/tauri";
 import { resolveWidgetTheme } from "./utils/widgetTheme";
+import { isMacOS } from "./utils/platform";
+import { resolveLanguage, useUiLocalization } from "./utils/localization";
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel, messageShowsCached } from "./utils/cachedLabels";
 import { SidebarLink } from "./components/SidebarLink";
 import { WindowButton } from "./components/WindowButton";
@@ -60,6 +66,7 @@ import { DashboardServiceToggleError, ToggleErrorBanner } from "./components/Set
 import { ServiceErrorBanners } from "./components/ServiceErrorBanners";
 import { QuotaVisualizations } from "./components/QuotaVisualizations";
 import { StatCard } from "./components/StatCard";
+import { SectionEmptyState } from "./components/SectionEmptyState";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
 import { DeadlineCountdown } from "./components/DeadlineCountdown";
@@ -121,28 +128,23 @@ const appWindow = getCurrentWindow();
 
 const QUICK_LAUNCH_WIDGETS: {
   field: ServiceField;
-  color: "cyan" | "blue" | "purple" | "pink";
   detail: string;
 }[] = [
   {
-    field: "quota_enabled",
-    color: "cyan",
-    detail: "Track AI agent & API limits on your desktop",
-  },
-  {
     field: "gpu_enabled",
-    color: "blue",
-    detail: "Floating desktop monitoring for GPU clusters",
+    detail: "Monitor GPUs and cluster jobs",
   },
   {
     field: "deadline_enabled",
-    color: "purple",
-    detail: "Track conference deadlines on your desktop",
+    detail: "Track conference submission deadlines",
   },
   {
     field: "arxiv_enabled",
-    color: "pink",
-    detail: "Swipe to discover latest research papers",
+    detail: "Discover recent research papers",
+  },
+  {
+    field: "quota_enabled",
+    detail: "Track AI agent and API limits",
   },
 ];
 
@@ -427,10 +429,15 @@ const renderProviderIcon = (provider: string, isManual = false) => {
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
+  const [inlineAddItemRequest, setInlineAddItemRequest] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
   const [windowLabel, setWindowLabel] = useState("");
-  const [isLocked, setIsLocked] = useState(true);
+  const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
+  const [isLocked, setIsLocked] = useState(!isMacOS);
   const [isPinned, setIsPinned] = useState(false);
+  const [isDesktopFixed, setIsDesktopFixed] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
   const [gpuConfig, setGpuConfig] = useState<GpuConfig>({ servers: [] });
@@ -569,6 +576,7 @@ function App() {
       return { theme: "dark" };
     }
   });
+  useUiLocalization(resolveLanguage(appConfig.language));
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
@@ -712,6 +720,17 @@ function App() {
   const checkServiceToggleBusy = (field: ServiceField) =>
     isServiceToggleBusy(field, serviceToggleBusy);
 
+  const openSettingsSection = (section: SettingsSection) => {
+    setSettingsSection(section);
+    setActiveTab("settings");
+  };
+
+  const openInlineSettings = (section: SettingsSection, addItem = false) => {
+    const opening = inlineSettingsSection !== section;
+    setInlineSettingsSection(opening ? section : null);
+    if (opening && addItem) setInlineAddItemRequest((request) => request + 1);
+  };
+
   useEffect(() => {
     const win = appWindow;
     setWindowLabel(win.label);
@@ -724,6 +743,13 @@ function App() {
         const label = win.label;
 
         if (label === "tray-menu") {
+          const config = await tauriInvoke("get_app_config");
+          if (!active) return;
+          setAppConfig(config);
+          const unlisten = await tauriListen("app_config_update", (event) => {
+            if (active) setAppConfig(event.payload);
+          });
+          unlisteners.push(unlisten);
           return;
         }
 
@@ -740,18 +766,21 @@ function App() {
 
           const pinned = ac.always_on_top?.[label] ?? false;
           setIsPinned(pinned);
+          setIsDesktopFixed(ac.embedded?.[label] ?? false);
 
-          const stagger = WIDGET_DESKTOP_STAGGER_MS[label] ?? 500;
-          setTimeout(async () => {
-            if (!active) return;
-            if (pinned) {
-              await win.setAlwaysOnTop(true);
-              await tauriInvoke("set_desktop_mode", { label, enabled: false });
-            } else {
-              await win.setAlwaysOnTop(false);
-              await tauriInvoke("set_desktop_mode", { label, enabled: true });
-            }
-          }, stagger);
+          if (!isMacOS) {
+            const stagger = WIDGET_DESKTOP_STAGGER_MS[label] ?? 500;
+            setTimeout(async () => {
+              if (!active) return;
+              if (pinned) {
+                await win.setAlwaysOnTop(true);
+                await tauriInvoke("set_desktop_mode", { label, enabled: false });
+              } else {
+                await win.setAlwaysOnTop(false);
+                await tauriInvoke("set_desktop_mode", { label, enabled: true });
+              }
+            }, stagger);
+          }
 
           const uTheme = await tauriListen("theme_update", (event) => {
             if (!active) return;
@@ -765,6 +794,7 @@ function App() {
             const nextConfig = event.payload;
             setAppConfig(nextConfig);
             setIsPinned(nextConfig.always_on_top?.[label] ?? false);
+            setIsDesktopFixed(nextConfig.embedded?.[label] ?? false);
           });
           unlisteners.push(() => uAppConfig());
           return;
@@ -811,7 +841,7 @@ function App() {
           if (labelsFromConfig !== null) {
             setActiveWidgets(labelsFromConfig);
           } else {
-            setActiveWidgets([
+            setActiveWidgets(isMacOS ? [] : [
               ...(ac.gpu_enabled !== false ? [serviceWidgetMeta("gpu_enabled").id] : []),
               ...(ac.deadline_enabled !== false ? [serviceWidgetMeta("deadline_enabled").id] : []),
               ...(ac.arxiv_enabled !== false ? [serviceWidgetMeta("arxiv_enabled").id] : []),
@@ -1132,12 +1162,12 @@ function App() {
 
     sidebarOrderRef.current = nextOrder;
     setSidebarTileLayoutDraft(nextLayout);
-    await onSaveApp({
-      ...appConfig,
-      sidebar_order: nextOrder,
-      sidebar_tile_layout: nextLayout,
-      sidebar_widgets: nextWidgets,
+    const updated = await tauriInvoke("save_sidebar_tile_layout", {
+      order: nextOrder,
+      layout: nextLayout,
+      widgets: nextWidgets,
     });
+    setAppConfig(updated);
   };
 
   const handleMasterServiceToggle = createMasterServiceToggleHandler({
@@ -1285,7 +1315,7 @@ function App() {
 
     // When unlocking, we MUST exit desktop mode to allow movement
     // When locking, if we are NOT pinned, we re-enter desktop mode
-    if (windowLabel.startsWith("widget-")) {
+    if (windowLabel.startsWith("widget-") && !isMacOS) {
       if (!nextLocked) {
         // Unlocking: Exit desktop mode
         await tauriInvoke("set_desktop_mode", { label: windowLabel, enabled: false });
@@ -1304,16 +1334,15 @@ function App() {
       const currentVal = targetLabel === windowLabel ? isPinned : appConfig.always_on_top?.[targetLabel] || false;
       const next = !currentVal;
 
-      const targetWin = targetLabel === windowLabel ? appWindow : await WebviewWindow.getByLabel(targetLabel);
-
-      if (next) {
-        // Turning ON Always on Top: Disable Desktop Mode FIRST, then set top
-        await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: false });
-        await targetWin?.setAlwaysOnTop(true);
-      } else {
-        // Turning OFF Always on Top: Enable Desktop Mode (Embedded)
-        await targetWin?.setAlwaysOnTop(false);
-        await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: true });
+      if (!isMacOS) {
+        const targetWin = targetLabel === windowLabel ? appWindow : await WebviewWindow.getByLabel(targetLabel);
+        if (next) {
+          await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: false });
+          await targetWin?.setAlwaysOnTop(true);
+        } else {
+          await targetWin?.setAlwaysOnTop(false);
+          await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: true });
+        }
       }
 
       const nextConfig = await tauriInvoke("set_widget_always_on_top", {
@@ -1326,6 +1355,29 @@ function App() {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const toggleDesktopFixed = async (labelToToggle?: string, title?: string) => {
+    const targetLabel = labelToToggle || windowLabel;
+    const currentlyFixed = targetLabel === windowLabel
+      ? isDesktopFixed
+      : appConfig.embedded?.[targetLabel] ?? false;
+    const fixed = !currentlyFixed;
+    try {
+      const nextConfig = await tauriInvoke("set_widget_desktop_fixed", {
+        label: targetLabel,
+        fixed,
+      });
+      setAppConfig(nextConfig);
+      if (targetLabel === windowLabel) setIsDesktopFixed(fixed);
+      if (fixed && !activeWidgets.includes(targetLabel) && title) {
+        await tauriInvoke("create_widget", { id: targetLabel, title });
+        setActiveWidgets((previous) => [...new Set([...previous, targetLabel])]);
+      }
+    } catch (error) {
+      console.error("Failed to change desktop mode", error);
+      setToggleWidgetError(formatWidgetToggleError(String(error)));
     }
   };
 
@@ -1379,7 +1431,7 @@ function App() {
   }, [windowLabel]);
 
   useEffect(() => {
-    if (windowLabel !== "sidebar") return;
+    if (!["main", "sidebar", "tray-menu"].includes(windowLabel)) return;
 
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -1403,23 +1455,30 @@ function App() {
     };
   }, [windowLabel]);
 
+  useEffect(() => {
+    if (!isMacOS || windowLabel !== "main") return;
+    tauriInvoke("get_native_quota_widget_status")
+      .then(setNativeWidgetsAvailable)
+      .catch(console.error);
+  }, [windowLabel]);
+
   // --- CUSTOM TRAY MENU VIEW ---
   if (windowLabel === "tray-menu") {
     return (
       <div className="h-screen w-screen flex flex-col bg-white border border-slate-200 rounded-lg overflow-hidden shadow-xl p-1 select-none">
         <button
-          onClick={() => tauriInvoke("show_sidebar")}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
+          onClick={() => tauriInvoke("toggle_sidebar_visibility").catch(console.error)}
+          className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
         >
           <Activity
             size={14}
             className="text-slate-500 group-hover:text-cyan-600 transition-colors"
           />
-          <span className="text-[11px] font-bold">Sidebar</span>
+          <span className="text-[11px] font-bold">{sidebarDockState.expanded ? "Close Sidebar" : "Open Sidebar"}</span>
         </button>
         <button
           onClick={() => tauriInvoke("show_main")}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
+          className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
         >
           <LayoutDashboard
             size={14}
@@ -1427,12 +1486,20 @@ function App() {
           />
           <span className="text-[11px] font-bold">Dashboard</span>
         </button>
+        {isMacOS && <button
+          onClick={() => tauriInvoke("hide_all_widgets").then(() => appWindow.hide()).catch(console.error)}
+          className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
+        >
+          <EyeOff size={14} className="text-slate-500 group-hover:text-slate-700 transition-colors" />
+          <span className="text-[11px] font-bold">Hide All Widgets</span>
+        </button>}
+        <div role="separator" className="mx-2 my-1 border-t border-slate-200" />
         <button
           onClick={() => tauriInvoke("exit_app")}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-red-50 text-slate-700 hover:text-red-600 transition-colors group"
+          className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-red-50 text-slate-700 hover:text-red-600 transition-colors group"
         >
           <X size={14} className="text-slate-500 group-hover:text-red-500 transition-colors" />
-          <span className="text-[11px] font-bold">Exit</span>
+          <span className="text-[11px] font-bold">Quit</span>
         </button>
       </div>
     );
@@ -1448,46 +1515,11 @@ function App() {
     const sidebarWindowBorder = sidebarIsLight
       ? "rgba(203, 213, 225, 0.96)"
       : "rgba(255, 255, 255, 0.4)";
-    const sidebarHiddenTransform: Record<SidebarDockState["edge"], string> = {
-      left: "translate3d(-100%, 0, 0)",
-      top: "translate3d(0, -100%, 0)",
-      right: "translate3d(100%, 0, 0)",
-      bottom: "translate3d(0, 100%, 0)",
-    };
     const sidebarDockRounding: Record<SidebarDockState["edge"], string> = {
       left: "rounded-r-lg",
       top: "rounded-b-lg",
       right: "rounded-l-lg",
       bottom: "rounded-t-lg",
-    };
-    // The controls live in an invisible, generous hover target on the free
-    // edge. The compact buttons themselves only appear when the cursor is
-    // nearby, so the sidebar keeps its clean, frameless surface at rest.
-    const sidebarEdgeControlPlacement: Record<SidebarDockState["edge"], string> = {
-      left: "right-0 top-1/2 -translate-y-1/2 h-28 w-10",
-      top: "bottom-0 left-1/2 -translate-x-1/2 h-10 w-28",
-      right: "left-0 top-1/2 -translate-y-1/2 h-28 w-10",
-      bottom: "top-0 left-1/2 -translate-x-1/2 h-10 w-28",
-    };
-    const sidebarPinHandleShape: Record<SidebarDockState["edge"], string> = {
-      left: "h-12 w-7 rounded-l-full border-y border-l",
-      top: "h-7 w-12 rounded-t-full border-x border-t",
-      right: "h-12 w-7 rounded-r-full border-y border-r",
-      bottom: "h-7 w-12 rounded-b-full border-x border-b",
-    };
-    const sidebarPinHandlePosition: Record<SidebarDockState["edge"], string> = {
-      left: "absolute right-0 top-1/2 -translate-y-1/2",
-      top: "absolute bottom-0 left-1/2 -translate-x-1/2",
-      right: "absolute left-0 top-1/2 -translate-y-1/2",
-      bottom: "absolute top-0 left-1/2 -translate-x-1/2",
-    };
-    // Follow the free edge clockwise: right-docked puts Close above Pin,
-    // with the other edges rotating this relationship naturally.
-    const sidebarCloseButtonPosition: Record<SidebarDockState["edge"], string> = {
-      left: "absolute right-0 bottom-0",
-      top: "absolute bottom-0 left-0",
-      right: "absolute left-0 top-0",
-      bottom: "absolute right-0 top-0",
     };
     const sidebarEdgeLabels: Record<SidebarDockState["edge"], string> = {
       left: "left",
@@ -1611,11 +1643,13 @@ function App() {
       const compactedLayout = compactSidebarTileLayout(nextLayout, visibleSidebarKeys);
       sidebarOrderRef.current = nextOrder;
       setSidebarTileLayoutDraft(compactedLayout);
-      onSaveApp({
-        ...appConfig,
-        sidebar_order: nextOrder,
-        sidebar_tile_layout: compactedLayout,
-      }).catch(console.error);
+      tauriInvoke("save_sidebar_tile_layout", {
+        order: nextOrder,
+        layout: compactedLayout,
+        widgets: null,
+      })
+        .then(setAppConfig)
+        .catch(console.error);
     };
     const startSidebarTileMove = (
       event: ReactPointerEvent<HTMLDivElement>,
@@ -1833,7 +1867,7 @@ function App() {
 
     return (
       <div
-        className={`absolute inset-0 relative flex flex-col overflow-hidden select-none transition-[transform,box-shadow,outline-color] duration-150 ease-out will-change-transform ${sidebarDockRounding[sidebarDockState.edge]} ${
+        className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
         }`}
         style={{
@@ -1856,9 +1890,6 @@ function App() {
           boxShadow: `inset 0 0 0 1px ${sidebarWindowBorder}`,
           outline: sidebarDockState.dragging ? "2px solid rgba(56, 189, 248, 0.72)" : undefined,
           outlineOffset: sidebarDockState.dragging ? "-2px" : undefined,
-          transform: sidebarDockState.expanded
-            ? "translate3d(0, 0, 0)"
-            : sidebarHiddenTransform[sidebarDockState.edge],
         }}
       >
         {sidebarWindowResizeHandles.map((handle) => (
@@ -1879,73 +1910,37 @@ function App() {
             }}
           />
         ))}
-        <div
-          data-no-drag="true"
-          className={`group absolute z-40 ${sidebarEdgeControlPlacement[sidebarDockState.edge]}`}
-        >
-          <button
-            type="button"
-            data-no-drag="true"
-            aria-label={sidebarDockState.pinned ? "Unpin sidebar" : "Pin sidebar open"}
-            title={
-              sidebarDockState.pinned
-                ? "Unpin sidebar and enable auto-hide"
-                : "Pin sidebar open"
-            }
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              tauriInvoke("set_sidebar_pinned", { pinned: !sidebarDockState.pinned })
-                .then(setSidebarDockState)
-                .catch(console.error);
-            }}
-            className={`flex shrink-0 items-center justify-center shadow-lg opacity-0 scale-90 transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 hover:brightness-110 focus-visible:opacity-100 focus-visible:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/80 ${sidebarPinHandlePosition[sidebarDockState.edge]} ${sidebarPinHandleShape[sidebarDockState.edge]} ${
-              sidebarIsLight
-                ? "text-slate-600 hover:text-slate-950"
-                : "text-slate-300 hover:text-white"
-            }`}
-            style={{
-              backgroundColor: hexToRgba(
-                sidebarTheme.background,
-                Math.min(1, sidebarTheme.background_opacity + 0.06)
-              ),
-              borderColor: sidebarIsLight
-                ? hexToRgba(sidebarTheme.header, 0.34)
-                : hexToRgba("#ffffff", 0.14),
-              backdropFilter:
-                sidebarTheme.blur > 0
-                  ? `blur(${sidebarTheme.blur}px) saturate(145%)`
-                  : undefined,
-              WebkitBackdropFilter:
-                sidebarTheme.blur > 0
-                  ? `blur(${sidebarTheme.blur}px) saturate(145%)`
-                  : undefined,
-            }}
-          >
-            {sidebarDockState.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-          </button>
-          <button
-            type="button"
-            data-no-drag="true"
-            aria-label="Close sidebar"
-            title="Close sidebar"
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              tauriInvoke("hide_sidebar").catch(console.error);
-            }}
-            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-red-200/35 bg-red-500/85 text-white shadow-lg opacity-0 scale-90 transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 hover:bg-red-500 focus-visible:opacity-100 focus-visible:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/90 ${sidebarCloseButtonPosition[sidebarDockState.edge]}`}
-          >
-            <X size={13} strokeWidth={2.5} />
-          </button>
-        </div>
-        {/* Deliberately blank: the parent owns the translucent frosted surface,
-            so this drag strip has no separate tint, blur layer, or divider. */}
         <header
           aria-label="Drag sidebar"
-          className="h-4 shrink-0 cursor-grab active:cursor-grabbing"
-          onMouseDown={startDrag}
-        />
+          className={`h-11 shrink-0 flex items-center justify-between gap-2 px-3 border-b ${sidebarIsLight ? "border-slate-300/60" : "border-white/10"} ${isMacOS ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
+          onMouseDown={isMacOS ? undefined : startDrag}
+        >
+          <span className="text-xs font-bold tracking-wide">Sidebar</span>
+          <div className="flex items-center gap-2" data-no-drag="true" onMouseDown={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              aria-label={sidebarDockState.pinned ? "Unpin sidebar" : "Pin sidebar open"}
+              title={sidebarDockState.pinned ? "Unpin sidebar and enable auto-hide" : "Pin sidebar open"}
+              onClick={() => {
+                tauriInvoke("set_sidebar_pinned", { pinned: !sidebarDockState.pinned })
+                  .then(setSidebarDockState)
+                  .catch(console.error);
+              }}
+              className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${sidebarIsLight ? "bg-slate-100 text-slate-700 hover:bg-slate-200" : "bg-white/10 text-white hover:bg-white/20"}`}
+            >
+              {sidebarDockState.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            </button>
+            <button
+              type="button"
+              aria-label="Close sidebar"
+              title="Close sidebar"
+              onClick={() => tauriInvoke("hide_sidebar").catch(console.error)}
+              className="flex h-7 w-7 items-center justify-center rounded-md bg-red-500/15 text-red-500 hover:bg-red-500/25 transition-colors focus-visible:outline-2 focus-visible:outline-red-400"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </header>
         {sidebarDockState.dragging ? (
           <div className="absolute inset-2 z-50 pointer-events-none rounded-md border border-dashed border-sky-300/80 bg-sky-400/10">
             <span
@@ -2091,11 +2086,12 @@ function App() {
 
     return (
       <div className="absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0">
-        {/* Floating Controls (Now inside the window, but top-right) */}
-        <div className="absolute top-1 right-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-50">
+        {/* Reserve room for the visible macOS window controls in the card below. */}
+        <div className={`absolute top-1 right-1 flex items-center gap-1 transition-opacity duration-300 z-50 ${isMacOS ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
           <button
             data-no-drag="true"
             onClick={toggleLock}
+            title={isLocked ? "Unlock to move" : "Lock position"}
             className="w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 text-white/70 hover:text-white transition-all shadow-lg backdrop-blur-md"
           >
             {isLocked ? <Lock size={12} /> : <Unlock size={12} />}
@@ -2106,22 +2102,33 @@ function App() {
             className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
               isPinned ? "text-blue-400" : "text-white/70"
             } hover:text-white transition-all shadow-lg backdrop-blur-md`}
-            title={isPinned ? "Unpin (Embed in Desktop)" : "Pin to top"}
+            title={isPinned ? (isMacOS ? "Keep in normal window order" : "Unpin (Embed in Desktop)") : "Keep above other windows"}
           >
             {isPinned ? <Pin size={12} /> : <PinOff size={12} />}
           </button>
+          {isMacOS && <button
+            data-no-drag="true"
+            onClick={() => toggleDesktopFixed()}
+            className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
+              isDesktopFixed ? "text-blue-400" : "text-white/70"
+            } hover:text-white transition-all shadow-lg backdrop-blur-md`}
+            title={isDesktopFixed ? "Return to floating window" : "Fix on Desktop"}
+          >
+            <Monitor size={12} />
+          </button>}
           <button
             data-no-drag="true"
             onClick={handleClose}
+            title="Hide widget"
             className="w-7 h-7 flex items-center justify-center rounded-md bg-red-500/30 border border-red-500/20 text-red-400 hover:bg-red-50 hover:text-white transition-all shadow-lg backdrop-blur-md"
           >
             <X size={12} />
           </button>
         </div>
 
-        {/* The Glass Card (Fills the window, buttons overlap content) */}
+        {/* The glass card fills the window; macOS controls use reserved insets. */}
         <div
-          className={`flex-1 p-5 flex flex-col gap-4 relative overflow-hidden rounded-xl z-10 ${
+          className={`flex-1 p-5 ${isMacOS ? "pt-12 pb-10" : ""} flex flex-col gap-4 relative overflow-hidden rounded-xl z-10 ${
             isLocked ? "" : "shadow-2xl shadow-black/80"
           }`}
           style={
@@ -2149,9 +2156,71 @@ function App() {
           {windowLabel.includes("arxiv") && <ArxivWidgetContent />}
           {isQuota && <QuotaWidgetContent />}
         </div>
+        {isMacOS && <button
+          type="button"
+          data-no-drag="true"
+          aria-label="Resize widget"
+          title="Resize widget"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            appWindow.startResizeDragging("SouthEast").catch(console.error);
+          }}
+          className="absolute bottom-1 right-1 z-50 flex h-7 w-7 items-center justify-center rounded-md text-slate-400/70 hover:bg-white/10 hover:text-white cursor-se-resize"
+        >
+          <Maximize2 size={12} />
+        </button>}
       </div>
     );
   }
+
+  const renderSettingsPanel = (section: SettingsSection, embedded = false) => (
+    <SettingsPanel
+      key={`${embedded ? "inline" : "settings"}-${section}`}
+      initialSection={section}
+      embeddedSection={embedded ? section : undefined}
+      addItemRequest={embedded ? inlineAddItemRequest : undefined}
+      gpuConfig={gpuConfig}
+      paperConfig={paperConfig}
+      arxivConfig={arxivConfig}
+      appConfig={appConfig}
+      quotaConfig={quotaConfig}
+      themeConfig={themeConfig}
+      onSaveGpu={saveGpuConfig}
+      onSavePaper={savePaperConfig}
+      onSaveArxiv={saveArxivConfig}
+      onSaveQuota={saveQuotaConfig}
+      onSaveApp={onSaveApp}
+      onToggleSidebarWidget={saveSidebarWidgetVisibility}
+      sidebarExpanded={sidebarDockState.expanded}
+      onToggleSidebar={() => tauriInvoke("toggle_sidebar_visibility").catch(console.error)}
+      onSaveThemes={onSaveThemes}
+      isAutostart={isAutostart}
+      onToggleAutostart={async () => {
+        if (isAutostart) await disable();
+        else await enable();
+        setIsAutostart(await isEnabled());
+      }}
+      activeWidgets={activeWidgets}
+      updateInfo={updateInfo}
+      setUpdateInfo={setUpdateInfo}
+      updateCheckError={updateCheckError}
+      setUpdateCheckError={setUpdateCheckError}
+    />
+  );
+
+  const renderInlineSettings = (section: SettingsSection) =>
+    inlineSettingsSection === section && (
+      <div className="mb-8 rounded-2xl border border-[var(--dashboard-border)] bg-[var(--card-bg)] p-5">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-bold">{LIVE_DATA_SECTION_LABELS[section as keyof typeof LIVE_DATA_SECTION_LABELS]}</h3>
+          <button type="button" onClick={() => setInlineSettingsSection(null)} aria-label="Close settings" title="Close settings" className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--dashboard-border)] text-red-500 hover:bg-red-500/10 focus-visible:outline-2 focus-visible:outline-red-500"><X size={16} /></button>
+        </div>
+        {renderSettingsPanel(section, true)}
+      </div>
+    );
+
+  const sectionActionClass = `inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${appConfig.theme === "light" ? "border-slate-200 bg-white text-slate-700 hover:bg-blue-50" : "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"}`;
 
   // --- MAIN CONTROL PANEL VIEW ---
   return (
@@ -2165,7 +2234,7 @@ function App() {
         className={`w-64 border-r border-white/5 flex flex-col bg-[var(--sidebar-bg)] z-20 select-none`}
         onMouseDown={startDrag}
       >
-        <div className="p-6 flex items-center gap-2.5 cursor-default">
+        <div className={`${isMacOS ? "px-6 pt-11 pb-3" : "p-6"} flex items-center gap-2.5 cursor-default`}>
           <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/40 overflow-hidden pointer-events-none">
             <img src="/logo.png" alt="Widgitron" className="w-full h-full object-cover" />
           </div>
@@ -2238,7 +2307,7 @@ function App() {
           <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 pointer-events-none">
             {appTabLabel(activeTab)}
           </div>
-          <div className="flex items-center gap-0.5 z-[60] pointer-events-auto">
+          {!isMacOS && <div className="flex items-center gap-0.5 z-[60] pointer-events-auto">
             <WindowButton
               icon={<Minus size={16} />}
               onClick={() => appWindow.minimize()}
@@ -2255,7 +2324,7 @@ function App() {
               hoverColor="hover:bg-red-500"
               theme={appConfig.theme}
             />
-          </div>
+          </div>}
         </header>
 
         <div
@@ -2271,21 +2340,21 @@ function App() {
             dismissed={serviceToggleErrorDismissed}
             onDismiss={() => setServiceToggleErrorDismissed(true)}
           />
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {activeTab === "dashboard" && (
               <motion.div
                 key="dashboard"
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="space-y-8"
+                className="space-y-6"
               >
                 <ToggleErrorBanner
                   message={toggleWidgetError}
                   onDismiss={() => setToggleWidgetError(null)}
                   theme={appConfig.theme}
                 />
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+                <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
                   <StatCard
                     label="Total GPUs"
                     value={totalGpus.toString()}
@@ -2293,6 +2362,7 @@ function App() {
                     theme={appConfig.theme}
                     hint={gpuStatHint}
                     hintTone={gpuStatHintTone}
+                    onClick={() => setActiveTab(LIVE_DATA_SECTION.GPU)}
                   />
                   <StatCard
                     label="Active Deadlines"
@@ -2301,6 +2371,7 @@ function App() {
                     theme={appConfig.theme}
                     hint={paperStatHint}
                     hintTone={paperStatHintTone}
+                    onClick={() => setActiveTab(LIVE_DATA_SECTION.DEADLINES)}
                   />
                   <StatCard
                     label="Arxiv Radar"
@@ -2309,6 +2380,7 @@ function App() {
                     theme={appConfig.theme}
                     hint={arxivStatHint}
                     hintTone={arxivStatHintTone}
+                    onClick={() => setActiveTab(LIVE_DATA_SECTION.ARXIV)}
                   />
                   <StatCard
                     label="Monitored Agents"
@@ -2317,21 +2389,23 @@ function App() {
                     theme={appConfig.theme}
                     hint={quotaStatHint}
                     hintTone={quotaStatHintTone}
+                    onClick={() => setActiveTab(LIVE_DATA_SECTION.QUOTA)}
                   />
                 </div>
 
-                <div className="mt-4">
-                  <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <h2
                       className={`text-xl font-bold tracking-tight ${
                         appConfig.theme === "light" ? "text-slate-900" : "text-white"
                       }`}
                     >
-                      Quick Launch Widgets
+                      Modules & Display
                     </h2>
+                    <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => tauriInvoke("show_sidebar")}
+                      onClick={() => tauriInvoke("toggle_sidebar_visibility").catch(console.error)}
                       className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-black uppercase tracking-widest transition-colors ${
                         appConfig.theme === "light"
                           ? "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
@@ -2339,25 +2413,53 @@ function App() {
                       }`}
                     >
                       <Activity size={14} />
-                      Open Sidebar
+                      {sidebarDockState.expanded ? "Close Sidebar" : "Open Sidebar"}
                     </button>
+                    {activeWidgets.length > 0 && <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await tauriInvoke("hide_all_widgets");
+                          setActiveWidgets([]);
+                        } catch (error) {
+                          setToggleWidgetError(String(error));
+                        }
+                      }}
+                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-black uppercase tracking-widest transition-colors ${appConfig.theme === "light" ? "bg-white border-slate-200 text-slate-700 hover:bg-slate-50" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"}`}
+                    >
+                      <X size={14} /> Hide All Widgets
+                    </button>}
+                    </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {QUICK_LAUNCH_WIDGETS.map(({ field, color, detail }) => {
-                      if (appConfig[field] === false) return null;
+                  {isMacOS && (
+                    <p className={`mb-4 text-xs ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-300"}`}>
+                      {nativeWidgetsAvailable
+                        ? "macOS widgets: Quota · GPU · Deadlines"
+                        : "System widgets unavailable in this build."}
+                    </p>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    {QUICK_LAUNCH_WIDGETS.map(({ field, detail }) => {
                       const { id, title } = serviceWidgetMeta(field);
+                      const section = SERVICE_FIELD_TO_TAB[field];
                       return (
                         <WidgetPreviewCard
                           key={id}
-                          title={`${title} Widget`}
-                          status={activeWidgets.includes(id) ? "Active" : "Ready"}
+                          title={title}
                           detail={detail}
-                          trend={activeWidgets.includes(id) ? "Hide Widget" : "Show Widget"}
-                          color={color}
                           theme={appConfig.theme}
+                          enabled={appConfig[field] !== false}
+                          sidebarVisible={appConfig.sidebar_widgets?.[section] !== false}
+                          floatingVisible={activeWidgets.includes(id)}
                           loading={pendingToggles.has(id)}
-                          disabled={pendingToggles.has(id)}
-                          onLaunch={() => handleToggleWidget(id, title)}
+                          onToggleSidebar={() => {
+                            saveSidebarWidgetVisibility(section, appConfig.sidebar_widgets?.[section] === false)
+                              .catch((error) => setToggleWidgetError(String(error)));
+                          }}
+                          onToggleFloating={() => handleToggleWidget(id, title)}
+                          onConfigure={() => openSettingsSection(section)}
+                          desktopFixed={isMacOS ? appConfig.embedded?.[id] ?? false : undefined}
+                          onToggleDesktop={isMacOS ? () => toggleDesktopFixed(id, title) : undefined}
                         />
                       );
                     })}
@@ -2373,7 +2475,7 @@ function App() {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
               >
-                <div className="flex items-center justify-between mb-8">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
                   <h2
                     className={`text-2xl font-bold tracking-tight ${
                       appConfig.theme === "light" ? "text-slate-900" : "text-white"
@@ -2382,6 +2484,9 @@ function App() {
                     GPU Monitor Status
                   </h2>
                   <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU, true)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.GPU ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add server</>}
+                    </button>
                     {appConfig.gpu_enabled !== false && (
                       <button
                         onClick={handleRefreshGpu}
@@ -2400,6 +2505,7 @@ function App() {
                       {appConfig.gpu_enabled !== false ? "Service Enabled" : "Service Disabled"}
                     </span>
                     <MasterSwitch
+                      label="GPU monitoring"
                       enabled={appConfig.gpu_enabled !== false}
                       loading={checkServiceToggleBusy("gpu_enabled")}
                       disabled={checkServiceToggleBusy("gpu_enabled")}
@@ -2414,15 +2520,15 @@ function App() {
                   theme={appConfig.theme}
                   refreshCachedLabel={gpuRefreshCachedLabel(visibleGpuData.length > 0)}
                 />
+                {renderInlineSettings(LIVE_DATA_SECTION.GPU)}
                 <div className="space-y-6">
                   {visibleGpuData.length === 0 ? (
-                    <div className="p-12 text-center bg-black/5 rounded-3xl border border-dashed border-white/10 text-slate-500 font-bold uppercase tracking-widest text-xs">
-                      No active data. Configure servers in Settings.
-                    </div>
+                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Add server"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU, true)} />
                   ) : (
                     visibleGpuData.map((server, idx) => {
                       const hasCachedGpus =
                         Array.isArray(server.gpu_list) && server.gpu_list.length > 0;
+                      const noGpuDetected = server.error === "No GPU detected";
                       const showStaleOffline = !server.is_online && hasCachedGpus;
 
                       return (
@@ -2431,7 +2537,9 @@ function App() {
                           <div className="flex items-center gap-3">
                             <div
                               className={`w-3 h-3 rounded-full ${
-                                server.is_online
+                                noGpuDetected
+                                  ? "bg-slate-400"
+                                  : server.is_online
                                   ? "bg-emerald-500 shadow-[0_0_10px_#10b981]"
                                   : showStaleOffline
                                   ? "bg-amber-500 shadow-[0_0_10px_#f59e0b]"
@@ -2455,6 +2563,24 @@ function App() {
                             {server.gpu_list.length} GPUs Detected
                           </span>
                         </div>
+                        {server.is_online && server.system && (
+                          <div className="grid grid-cols-2 gap-3 mb-6">
+                            <div className={`rounded-xl px-4 py-3 ${appConfig.theme === "light" ? "bg-slate-50" : "bg-white/5"}`}>
+                              <div className="text-[10px] font-bold text-slate-500">CPU</div>
+                              <div className="text-lg font-bold">{formatCpuPercent(server.system.cpu_percent)}</div>
+                              <div className="h-1.5 mt-2 rounded-full bg-slate-200/40 overflow-hidden">
+                                <div className="h-full rounded-full bg-blue-500" style={{ width: `${server.system.cpu_percent ?? 0}%` }} />
+                              </div>
+                            </div>
+                            <div className={`rounded-xl px-4 py-3 ${appConfig.theme === "light" ? "bg-slate-50" : "bg-white/5"}`}>
+                              <div className="text-[10px] font-bold text-slate-500">RAM</div>
+                              <div className="text-sm font-bold mt-1">{formatSystemMemory(server.system.memory_used_bytes)} / {formatSystemMemory(server.system.memory_total_bytes)}</div>
+                              <div className="h-1.5 mt-2 rounded-full bg-slate-200/40 overflow-hidden">
+                                <div className="h-full rounded-full bg-cyan-500" style={{ width: `${Math.min(100, 100 * server.system.memory_used_bytes / Math.max(1, server.system.memory_total_bytes))}%` }} />
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         <div className="space-y-8">
                           {(() => {
                             const groups: Record<string, GpuInfo[]> = {};
@@ -2560,7 +2686,7 @@ function App() {
                         {server.error && (
                           <p
                             className={`mt-4 text-[10px] italic font-medium break-all ${
-                              showStaleOffline ? "text-amber-400/80" : "text-red-400/60"
+                              noGpuDetected ? "text-slate-500" : showStaleOffline ? "text-amber-400/80" : "text-red-400/60"
                             }`}
                           >
                             {server.error}
@@ -2581,7 +2707,7 @@ function App() {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
               >
-                <div className="flex items-center justify-between mb-8">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
                   <h2
                     className={`text-2xl font-bold tracking-tight ${
                       appConfig.theme === "light" ? "text-slate-900" : "text-white"
@@ -2590,6 +2716,9 @@ function App() {
                     Paper Deadlines
                   </h2>
                   <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Deadline settings</>}
+                    </button>
                     {appConfig.deadline_enabled !== false && (
                       <button
                         onClick={handleRefreshDeadlines}
@@ -2608,6 +2737,7 @@ function App() {
                       {appConfig.deadline_enabled !== false ? "Service Enabled" : "Service Disabled"}
                     </span>
                     <MasterSwitch
+                      label="Deadline monitoring"
                       enabled={appConfig.deadline_enabled !== false}
                       loading={checkServiceToggleBusy("deadline_enabled")}
                       disabled={checkServiceToggleBusy("deadline_enabled")}
@@ -2631,11 +2761,13 @@ function App() {
                     CACHED_LABELS.deadlines.refresh
                   )}
                 />
+                {renderInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
+                <p className="text-xs text-slate-500">
+                  Add the Paper Deadlines widget in Notification Center.
+                </p>
                 <div className="space-y-4">
                   {deadlines.length === 0 ? (
-                    <div className="p-12 text-center bg-black/5 rounded-3xl border border-dashed border-white/10 text-slate-500 font-bold uppercase tracking-widest text-xs">
-                      No deadlines match your current filters.
-                    </div>
+                    <SectionEmptyState message="No deadlines match your current filters." action={inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES ? "Hide settings" : "Adjust filters"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} />
                   ) : (
                     deadlines.map((dl, idx) => {
                       const deadlineKey = deadlineInstanceKey(dl);
@@ -2674,15 +2806,6 @@ function App() {
                               >
                                 <Pin size={10} className={isPinned ? "fill-current" : ""} />
                               </button>
-                              <button
-                                onClick={() => toggleSubscribeConference(dl.title)}
-                                className={`absolute -bottom-2 -right-2 p-1.5 rounded-full shadow-lg transition-all ${
-                                  isSubscribed ? "bg-emerald-500 text-white scale-110" : "bg-slate-800 text-slate-500 opacity-0 group-hover:opacity-100"
-                                }`}
-                                title={isSubscribed ? "Unsubscribe conference" : "Subscribe conference"}
-                              >
-                                <Bell size={10} className={isSubscribed ? "fill-current" : ""} />
-                              </button>
                             </div>
                             <div>
                               <h3
@@ -2715,7 +2838,22 @@ function App() {
                               </div>
                             </div>
                           </div>
-                          <div className="text-right">
+                          <div className="text-right flex flex-col items-end gap-2">
+                            <button
+                              onClick={() => toggleSubscribeConference(dl.title)}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                isSubscribed
+                                  ? "bg-emerald-500 text-white"
+                                  : appConfig.theme === "light"
+                                    ? "bg-slate-100 text-slate-700 hover:bg-emerald-100"
+                                    : "bg-white/10 text-slate-200 hover:bg-emerald-500/20"
+                              }`}
+                              title={isSubscribed ? "Stop reminding me" : "Remind me"}
+                              aria-pressed={isSubscribed}
+                            >
+                              <Bell size={13} className={isSubscribed ? "fill-current" : ""} />
+                              {isSubscribed ? "Reminding" : "Remind me"}
+                            </button>
                             <div
                               className={`text-xl font-black ${
                                 appConfig.theme === "light" ? "text-slate-900" : "text-white"
@@ -2742,8 +2880,8 @@ function App() {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
               >
-                <div className="flex items-center justify-between mb-8">
-                  <div className="flex items-center gap-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
+                  <div className="flex flex-wrap items-center gap-6">
                     <h2
                       className={`text-2xl font-bold tracking-tight ${
                         appConfig.theme === "light" ? "text-slate-900" : "text-white"
@@ -2766,7 +2904,7 @@ function App() {
                             : "text-slate-500 hover:text-slate-400"
                         }`}
                       >
-                        Latest ({arxivPapers.length})
+                        {`Latest (${arxivPapers.length})`}
                       </button>
                       <button
                         onClick={() => setArxivView("saved")}
@@ -2778,7 +2916,7 @@ function App() {
                             : "text-slate-500 hover:text-slate-400"
                         }`}
                       >
-                        Saved ({arxivSavedPapers.length})
+                        {`Saved (${arxivSavedPapers.length})`}
                       </button>
                       <button
                         onClick={() => setArxivView("discarded")}
@@ -2790,11 +2928,14 @@ function App() {
                             : "text-slate-500 hover:text-slate-400"
                         }`}
                       >
-                        Discarded ({arxivDiscardedPapers.length})
+                        {`Discarded (${arxivDiscardedPapers.length})`}
                       </button>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.ARXIV)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.ARXIV} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Edit keywords</>}
+                    </button>
                     {appConfig.arxiv_enabled !== false && (
                       <button
                         onClick={handleRefreshArxiv}
@@ -2813,6 +2954,7 @@ function App() {
                       {appConfig.arxiv_enabled !== false ? "Service Enabled" : "Service Disabled"}
                     </span>
                     <MasterSwitch
+                      label="Arxiv monitoring"
                       enabled={appConfig.arxiv_enabled !== false}
                       loading={checkServiceToggleBusy("arxiv_enabled")}
                       disabled={checkServiceToggleBusy("arxiv_enabled")}
@@ -2836,14 +2978,21 @@ function App() {
                     CACHED_LABELS.arxiv.refresh
                   )}
                 />
+                {renderInlineSettings(LIVE_DATA_SECTION.ARXIV)}
                 {activeArxivPapers.length === 0 ? (
-                  <div className="p-12 text-center bg-black/5 rounded-3xl border border-dashed border-white/10 text-slate-500 font-bold uppercase tracking-widest text-xs">
-                    {arxivView === "new"
-                      ? "No new papers. Adjust keywords in Settings or wait for update."
+                  <SectionEmptyState
+                    message={arxivView === "new"
+                      ? (arxivConfig.keywords?.length ?? 0) === 0
+                        ? "No recent papers in the selected category. Try another category or refresh later."
+                        : "No new papers. Adjust keywords or wait for the next update."
                       : arxivView === "saved"
-                      ? "No saved papers yet. Swipe right on the widget to save!"
-                      : "No discarded papers. Swipe left on the widget to discard."}
-                  </div>
+                      ? "No saved papers yet. Swipe right on a paper to save it."
+                      : "No discarded papers. Swipe left on a paper to discard it."}
+                    action={arxivView === "new" ? (arxivConfig.keywords?.length ? "Edit keywords" : "Choose category") : "Show latest"}
+                    onAction={arxivView === "new"
+                      ? () => openInlineSettings(LIVE_DATA_SECTION.ARXIV)
+                      : () => setArxivView("new")}
+                  />
                 ) : arxivView === "new" ? (
                   <div className="space-y-5">
                     {arxivKeywordGroups.map((group) => {
@@ -2903,7 +3052,7 @@ function App() {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
               >
-                <div className="flex items-center justify-between mb-8">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
                   <h2
                     className={`text-2xl font-bold tracking-tight ${
                       appConfig.theme === "light" ? "text-slate-900" : "text-white"
@@ -2912,6 +3061,9 @@ function App() {
                     Agent & API Quotas
                   </h2>
                   <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA, true)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add quota monitor</>}
+                    </button>
                     {appConfig.quota_enabled !== false && (
                       <button
                         onClick={handleRefreshQuota}
@@ -2930,6 +3082,7 @@ function App() {
                       {appConfig.quota_enabled !== false ? "Service Enabled" : "Service Disabled"}
                     </span>
                     <MasterSwitch
+                      label="Quota monitoring"
                       enabled={appConfig.quota_enabled !== false}
                       loading={checkServiceToggleBusy("quota_enabled")}
                       disabled={checkServiceToggleBusy("quota_enabled")}
@@ -2953,12 +3106,11 @@ function App() {
                     CACHED_LABELS.quota.refresh
                   )}
                 />
+                {renderInlineSettings(LIVE_DATA_SECTION.QUOTA)}
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {visibleQuotaData.length === 0 ? (
-                    <div className="col-span-full p-12 text-center bg-black/5 rounded-3xl border border-dashed border-white/10 text-slate-500 font-bold uppercase tracking-widest text-xs">
-                      No agents configured. Go to Settings to add one.
-                    </div>
+                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA, true)} /></div>
                   ) : (
                     visibleQuotaData.map((q) => {
                       const hasValue = q.current_value !== null && q.current_value !== undefined;
@@ -3163,34 +3315,7 @@ function App() {
               </motion.div>
             )}
 
-            {activeTab === "settings" && (
-              <SettingsPanel
-                gpuConfig={gpuConfig}
-                paperConfig={paperConfig}
-                arxivConfig={arxivConfig}
-                appConfig={appConfig}
-                quotaConfig={quotaConfig}
-                themeConfig={themeConfig}
-                onSaveGpu={saveGpuConfig}
-                onSavePaper={savePaperConfig}
-                onSaveArxiv={saveArxivConfig}
-                onSaveQuota={saveQuotaConfig}
-                onSaveApp={onSaveApp}
-                onToggleSidebarWidget={saveSidebarWidgetVisibility}
-                onSaveThemes={onSaveThemes}
-                isAutostart={isAutostart}
-                onToggleAutostart={async () => {
-                  if (isAutostart) await disable();
-                  else await enable();
-                  setIsAutostart(await isEnabled());
-                }}
-                activeWidgets={activeWidgets}
-                updateInfo={updateInfo}
-                setUpdateInfo={setUpdateInfo}
-                updateCheckError={updateCheckError}
-                setUpdateCheckError={setUpdateCheckError}
-              />
-            )}
+            {activeTab === "settings" && renderSettingsPanel(settingsSection)}
           </AnimatePresence>
         </div>
       </main>

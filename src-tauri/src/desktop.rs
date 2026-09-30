@@ -1,5 +1,46 @@
 use tauri::{AppHandle, Manager};
 
+/// Keep a macOS widget beside the desktop icons so Show Desktop can reveal it.
+/// This is a desktop-level AppKit window, not a WidgetKit extension.
+#[cfg(target_os = "macos")]
+pub async fn set_macos_desktop_fixed(
+    win: &tauri::WebviewWindow,
+    enabled: bool,
+) -> Result<(), String> {
+    use objc2_app_kit::{NSNormalWindowLevel, NSWindow, NSWindowCollectionBehavior};
+    use objc2_core_graphics::{CGWindowLevelForKey, CGWindowLevelKey};
+
+    let win = win.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    win.clone()
+        .run_on_main_thread(move || {
+            let result = (|| -> Result<(), String> {
+                let native = win.ns_window().map_err(|error| error.to_string())?;
+                if native.is_null() {
+                    return Err("macOS widget has no native window".to_string());
+                }
+                // Tauri documents borrowing this pointer only on the main thread.
+                let native: &NSWindow = unsafe { &*native.cast() };
+                let desktop_flags = NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::Stationary
+                    | NSWindowCollectionBehavior::IgnoresCycle;
+                if enabled {
+                    let icon_level =
+                        CGWindowLevelForKey(CGWindowLevelKey::DesktopIconWindowLevelKey);
+                    native.setLevel((icon_level - 1) as isize);
+                    native.setCollectionBehavior(native.collectionBehavior() | desktop_flags);
+                } else {
+                    native.setLevel(NSNormalWindowLevel);
+                    native.setCollectionBehavior(native.collectionBehavior() & !desktop_flags);
+                }
+                Ok(())
+            })();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+    receiver.await.map_err(|error| error.to_string())?
+}
+
 #[cfg(windows)]
 unsafe extern "system" fn enum_window(
     hwnd: windows::Win32::Foundation::HWND,

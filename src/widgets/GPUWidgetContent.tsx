@@ -14,6 +14,7 @@ import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import type { GpuConfig, GpuInfo, ServerConfig, ServerGpuData, SlurmQueueJob, SlurmStep } from "../types/config";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
+import { formatCpuPercent, formatSystemMemory } from "../utils/systemMetrics";
 
 const NON_COMPACT_GPU_CARD_MIN_WIDTH = 96;
 const NON_COMPACT_GPU_CARD_MAX_WIDTH = 112;
@@ -398,11 +399,12 @@ export function GPUWidgetContent({ hideHeader = false }: { hideHeader?: boolean 
             style={{ borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
-            <span className="text-[9px] opacity-70 mt-1">Enable GPU Monitor in the dashboard.</span>
+            <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
           </div>
         ) : orderedServerData.length > 0 ? (
           orderedServerData.map((server, idx) => {
             const hasCachedGpus = Array.isArray(server.gpu_list) && server.gpu_list.length > 0;
+            const noGpuDetected = server.error === "No GPU detected";
             const showStaleOffline = !server.is_online && hasCachedGpus;
             const serverConfig = (gpuConfig.servers || []).find((entry) => entry.host === server.host);
             const slurmEnabled = serverConfig?.use_slurm === true;
@@ -506,7 +508,11 @@ export function GPUWidgetContent({ hideHeader = false }: { hideHeader?: boolean 
                         )}
                       </>
                     )}
-                  {server.is_online ? (
+                  {noGpuDetected ? (
+                    <span className="text-[8px] font-black shrink-0" style={{ color: subText }}>
+                      No GPU detected
+                    </span>
+                  ) : server.is_online ? (
                     <span
                       className={`text-[8px] font-black uppercase shrink-0 ${
                         isCompact ? "" : "rounded border px-1.5 py-0.5"
@@ -549,12 +555,19 @@ export function GPUWidgetContent({ hideHeader = false }: { hideHeader?: boolean 
                   </div>
                 </div>
 
-                {server.error && (
+                {server.error && !noGpuDetected && (
                   <div
                     className="text-[9px] font-medium italic px-2"
                     style={{ color: showStaleOffline ? warning : danger }}
                   >
                     {server.error}
+                  </div>
+                )}
+
+                {server.is_online && server.system && (
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 pl-2 text-[9px] font-semibold" style={{ color: subText }}>
+                    <span>CPU {formatCpuPercent(server.system.cpu_percent)}</span>
+                    <span>RAM {formatSystemMemory(server.system.memory_used_bytes)} / {formatSystemMemory(server.system.memory_total_bytes)}</span>
                   </div>
                 )}
 

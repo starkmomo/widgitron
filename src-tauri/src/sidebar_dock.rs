@@ -11,8 +11,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowRect, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
-    SW_SHOWNOACTIVATE,
+    GetCursorPos, GetWindowRect, IsChild, IsWindowVisible, SetWindowPos, ShowWindow,
+    WindowFromPoint, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
 };
 
 use crate::config_store;
@@ -34,8 +34,6 @@ const DRAG_PREVIEW_MIN_HEIGHT_LOGICAL: f64 = 360.0;
 const DRAG_PREVIEW_MAX_HEIGHT_LOGICAL: f64 = 680.0;
 const DRAG_PREVIEW_MARGIN_LOGICAL: f64 = 18.0;
 const DRAG_ACTIVATION_DISTANCE_LOGICAL: f64 = 12.0;
-const REVEAL_DELAY: Duration = Duration::from_millis(32);
-const SLIDE_DURATION: Duration = Duration::from_millis(180);
 const SHOW_GRACE: Duration = Duration::from_millis(850);
 /// Default reveal feel: deliberately less sensitive than hide.
 pub const DEFAULT_REVEAL_SENSITIVITY: u8 = 4;
@@ -232,8 +230,6 @@ struct DockRuntime {
     reveal_cooldown: Duration,
     hide_leave_delay: Duration,
     work_area: WorkArea,
-    reveal_at: Option<Instant>,
-    hide_native_at: Option<Instant>,
     leave_at: Option<Instant>,
     grace_until: Instant,
     suppress_reveal_until_edge_leave: bool,
@@ -241,6 +237,8 @@ struct DockRuntime {
     reveal_cooldown_until: Instant,
     last_cursor: Option<POINT>,
     focus_requested: bool,
+    raise_requested: bool,
+    awaiting_pointer_entry: bool,
     layout_dirty: bool,
     dragging: bool,
     drag_start: Option<POINT>,
@@ -348,8 +346,6 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         reveal_cooldown,
         hide_leave_delay: hide_leave,
         work_area,
-        reveal_at: None,
-        hide_native_at: None,
         leave_at: None,
         grace_until: now + SHOW_GRACE,
         suppress_reveal_until_edge_leave: false,
@@ -357,6 +353,8 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         reveal_cooldown_until: now + reveal_cooldown,
         last_cursor: cursor,
         focus_requested: false,
+        raise_requested: pinned,
+        awaiting_pointer_entry: false,
         layout_dirty: true,
         dragging: false,
         drag_start: None,
@@ -404,6 +402,7 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         state.edge = next_edge;
         state.layout_dirty = true;
         state.requested_expanded = true;
+        state.raise_requested = true;
         state.grace_until = now + SHOW_GRACE;
         state.start_reveal_cooldown(now);
     }
@@ -433,6 +432,7 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         state.reset_edge_reveal();
         if next_pinned {
             state.requested_expanded = true;
+            state.raise_requested = true;
             state.grace_until = now + SHOW_GRACE;
         } else {
             state.grace_until = now + state.hide_leave_delay;
@@ -447,8 +447,25 @@ pub fn show(app: &AppHandle, focus: bool) -> Result<(), String> {
         .get()
         .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())?;
     let mut state = lock_runtime(runtime);
+    let anchor = POINT {
+        x: state.work_area.left + state.work_area.width() / 2,
+        y: state.work_area.top + state.work_area.height() / 2,
+    };
+    if let Some(area) = work_area_near_point(app, anchor) {
+        if area.left != state.work_area.left
+            || area.top != state.work_area.top
+            || area.right != state.work_area.right
+            || area.bottom != state.work_area.bottom
+            || (area.scale_factor - state.work_area.scale_factor).abs() >= 0.001
+        {
+            state.work_area = area;
+            state.layout_dirty = true;
+        }
+    }
     state.requested_expanded = true;
     state.focus_requested |= focus;
+    state.raise_requested = true;
+    state.awaiting_pointer_entry = !state.pinned;
     state.suppress_reveal_until_edge_leave = false;
     state.reset_edge_reveal();
     state.grace_until = Instant::now() + SHOW_GRACE;
@@ -465,6 +482,8 @@ pub fn collapse(app: &AppHandle) -> Result<(), String> {
         state.pinned = false;
         state.requested_expanded = false;
         state.focus_requested = false;
+        state.raise_requested = false;
+        state.awaiting_pointer_entry = false;
         state.leave_at = None;
         state.suppress_reveal_until_edge_leave = true;
         state.start_reveal_cooldown(Instant::now());
@@ -486,6 +505,8 @@ pub fn set_pinned(app: &AppHandle, pinned: bool, focus: bool) -> Result<SidebarD
         if pinned {
             state.requested_expanded = true;
             state.focus_requested |= focus;
+            state.raise_requested = true;
+            state.awaiting_pointer_entry = false;
             state.suppress_reveal_until_edge_leave = false;
             state.grace_until = now + SHOW_GRACE;
         } else {
@@ -533,6 +554,7 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
     state.drag_preview_area = None;
     state.resizing = false;
     state.requested_expanded = true;
+    state.awaiting_pointer_entry = false;
     state.reset_edge_reveal();
     state.grace_until = Instant::now() + SHOW_GRACE;
     Ok(state.payload())
@@ -575,6 +597,10 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
                 state.edge_length_logical,
                 state.ui_scale,
             );
+            if state.native_visible && !native_is_visible(&window) {
+                state.native_visible = false;
+                state.visual_expanded = false;
+            }
 
             if state.dragging {
                 if let Some(point) = cursor {
@@ -727,6 +753,7 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
                     reveal_dwell,
                 ) {
                     state.requested_expanded = true;
+                    state.awaiting_pointer_entry = false;
                     state.grace_until = now + SHOW_GRACE;
                     state.leave_at = None;
                 }
@@ -734,12 +761,16 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
 
             if state.pinned {
                 state.requested_expanded = true;
+                state.awaiting_pointer_entry = false;
                 state.leave_at = None;
             } else if state.requested_expanded && !state.dragging && !left_down {
                 let pointer_inside = cursor
-                    .map(|point| shown_rect.contains(point))
+                    .map(|point| pointer_inside_sidebar(&window, shown_rect, point))
                     .unwrap_or(false);
-                if pointer_inside || now < state.grace_until {
+                if pointer_inside {
+                    state.awaiting_pointer_entry = false;
+                }
+                if pointer_inside || state.awaiting_pointer_entry || now < state.grace_until {
                     state.leave_at = None;
                 } else if let Some(deadline) = state.leave_at {
                     if now >= deadline {
@@ -749,6 +780,16 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
                     }
                 } else {
                     state.leave_at = Some(now + state.hide_leave_delay);
+                }
+            }
+
+            if state.requested_expanded
+                && state.native_visible
+                && !state.dragging
+                && !state.resizing
+            {
+                if current_rect.is_none_or(|actual| !rects_close(actual, shown_rect)) {
+                    state.layout_dirty = true;
                 }
             }
 
@@ -767,8 +808,7 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
             }
 
             if state.requested_expanded {
-                state.hide_native_at = None;
-                if !state.native_visible {
+                if !state.native_visible || state.raise_requested {
                     let target = sidebar_rect(
                         state.work_area,
                         state.edge,
@@ -776,16 +816,14 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
                         state.edge_length_logical,
                         state.ui_scale,
                     );
-                    let _ = native_set_window_rect(&window, target);
-                    state.managed_rect = Some(target);
-                    native_show_no_activate(&window);
-                    state.native_visible = true;
-                    state.visual_expanded = false;
-                    state.reveal_at = Some(now + REVEAL_DELAY);
-                } else if let Some(reveal_at) = state.reveal_at {
-                    if now >= reveal_at {
-                        state.visual_expanded = true;
-                        state.reveal_at = None;
+                    match show_sidebar_window(&window, target, state.focus_requested) {
+                        Ok(()) => {
+                            state.managed_rect = Some(target);
+                            state.native_visible = true;
+                            state.visual_expanded = true;
+                            state.raise_requested = false;
+                        }
+                        Err(error) => log::warn!("Failed to show Windows sidebar: {error}"),
                     }
                 } else if !state.visual_expanded {
                     state.visual_expanded = true;
@@ -796,21 +834,12 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
                     state.focus_requested = false;
                 }
             } else {
-                state.reveal_at = None;
                 state.focus_requested = false;
-                if state.visual_expanded {
-                    state.visual_expanded = false;
-                    state.hide_native_at = Some(now + SLIDE_DURATION);
-                } else if state.native_visible {
-                    if let Some(hide_at) = state.hide_native_at {
-                        if now >= hide_at {
-                            native_hide(&window);
-                            state.native_visible = false;
-                            state.hide_native_at = None;
-                        }
-                    } else {
-                        state.hide_native_at = Some(now + SLIDE_DURATION);
-                    }
+                state.raise_requested = false;
+                state.visual_expanded = false;
+                if state.native_visible {
+                    native_hide(&window);
+                    state.native_visible = false;
                 }
             }
 
@@ -1160,6 +1189,29 @@ fn native_window_rect(window: &WebviewWindow) -> Option<RectPx> {
     })
 }
 
+fn rects_close(actual: RectPx, expected: RectPx) -> bool {
+    (actual.left - expected.left).abs() <= 2
+        && (actual.top - expected.top).abs() <= 2
+        && (actual.width - expected.width).abs() <= 2
+        && (actual.height - expected.height).abs() <= 2
+}
+
+fn native_is_visible(window: &WebviewWindow) -> bool {
+    native_hwnd(window)
+        .is_ok_and(|hwnd| unsafe { IsWindowVisible(hwnd).as_bool() })
+}
+
+fn pointer_inside_sidebar(window: &WebviewWindow, rect: RectPx, point: POINT) -> bool {
+    if !rect.contains(point) {
+        return false;
+    }
+    let Ok(hwnd) = native_hwnd(window) else {
+        return false;
+    };
+    let hovered = unsafe { WindowFromPoint(point) };
+    hovered == hwnd || unsafe { IsChild(hwnd, hovered).as_bool() }
+}
+
 fn native_set_window_rect(window: &WebviewWindow, rect: RectPx) -> Result<(), String> {
     let hwnd = native_hwnd(window)?;
     unsafe {
@@ -1176,23 +1228,46 @@ fn native_set_window_rect(window: &WebviewWindow, rect: RectPx) -> Result<(), St
     .map_err(|err| err.to_string())
 }
 
-fn native_show_no_activate(window: &WebviewWindow) {
-    if let Ok(hwnd) = native_hwnd(window) {
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        }
+fn show_sidebar_window(window: &WebviewWindow, rect: RectPx, focus: bool) -> Result<(), String> {
+    // Tauri tracks visibility separately from Win32. Calling ShowWindow alone
+    // leaves that state stale, so subsequent focus and show calls can fail.
+    if !focus {
+        window.set_focusable(false).map_err(|error| error.to_string())?;
+    }
+    let show_result = window.show().map_err(|error| error.to_string());
+    if !focus {
+        window.set_focusable(true).map_err(|error| error.to_string())?;
+    }
+    show_result?;
+
+    let hwnd = native_hwnd(window)?;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            rect.left,
+            rect.top,
+            rect.width,
+            rect.height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    }
+    .map_err(|error| error.to_string())?;
+    if native_is_visible(window) {
+        Ok(())
     } else {
-        let _ = window.show();
+        Err("Windows did not make the sidebar visible".into())
     }
 }
 
 fn native_hide(window: &WebviewWindow) {
+    if let Err(error) = window.hide() {
+        log::warn!("Failed to hide Windows sidebar: {error}");
+    }
     if let Ok(hwnd) = native_hwnd(window) {
         unsafe {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
-    } else {
-        let _ = window.hide();
     }
 }
 

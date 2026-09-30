@@ -9,7 +9,7 @@ import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveData";
 import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
-import { UNCATEGORIZED_ARXIV_KEYWORD, filterArxivPapersByKeywords, formatArxivKeywordLabel, getArxivKeywords, getPaperArxivKeywords } from "../utils/arxivKeywords";
+import { ALL_ARXIV_KEYWORDS, UNCATEGORIZED_ARXIV_KEYWORD, filterArxivPapersByKeywords, formatArxivKeywordLabel, getArxivKeywords, getPaperArxivKeywords } from "../utils/arxivKeywords";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
@@ -50,7 +50,9 @@ export function ArxivWidgetContent({
   const currentTheme = useWidgetTheme("arxiv");
   const arxivKeywords = getArxivKeywords(arxivConfig.keywords);
   const hasOtherArxivMatches = papers.some((paper) => getPaperArxivKeywords(paper, arxivConfig.keywords).length === 0);
-  const arxivKeywordOptions = hasOtherArxivMatches ? [...arxivKeywords, UNCATEGORIZED_ARXIV_KEYWORD] : arxivKeywords;
+  const arxivKeywordOptions = arxivKeywords.length === 0
+    ? [ALL_ARXIV_KEYWORDS]
+    : hasOtherArxivMatches ? [...arxivKeywords, UNCATEGORIZED_ARXIV_KEYWORD] : arxivKeywords;
   const visiblePapers = filterArxivPapersByKeywords(papers, selectedKeywords, arxivConfig.keywords);
   const currentPaper = visiblePapers[currentIndex];
 
@@ -363,7 +365,7 @@ export function ArxivWidgetContent({
             style={{ borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
-            <span className="text-[9px] opacity-70 mt-1">Enable Arxiv Radar in the dashboard.</span>
+            <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
           </div>
         ) : (
         <AnimatePresence>
@@ -430,8 +432,8 @@ export function ArxivWidgetContent({
                 <Check size={32} className="text-emerald-500" />
               </div>
               <div className="space-y-1">
-                <div className="text-[10px] font-bold">All caught up!</div>
-                <p className="text-[9px] text-slate-500">Check back later for new papers in CS.</p>
+                <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No recent papers" : "All caught up!"}</div>
+                <p className="text-[9px] text-slate-500">{arxivKeywords.length === 0 ? "Try another category or refresh later." : "Check back later for new papers in CS."}</p>
               </div>
             </div>
           )}

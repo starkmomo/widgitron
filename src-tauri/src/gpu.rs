@@ -1,19 +1,20 @@
 use chrono::Utc;
 use ssh2::Session;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use sysinfo::{MemoryRefreshKind, System};
 use tauri::{AppHandle, Emitter};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::models::{AppConfig, GlobalState, GpuConfig, GpuInfo, ServerConfig, ServerGpuData};
+use crate::models::{AppConfig, GlobalState, GpuConfig, GpuInfo, ServerConfig, ServerGpuData, SystemMetrics};
 use crate::{config_store, secrets};
 
 const GPU_CACHE_FILE: &str = "gpu_data_cache.json";
@@ -30,6 +31,127 @@ const SLURM_SQUEUE_STALE_MAX_FAILURES: u32 = 8;
 /// Each launch consumes a Slurm step ID; rapid retries can hit MaxJobSteps and
 /// kill the user's entire allocation (including interactive work).
 const SLURM_MONITOR_RESTART_COOLDOWN_SECS: u64 = 120;
+const SYSTEM_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
+const SYSTEM_GPU_SEPARATOR: &str = "__WIDGITRON_GPU_START__";
+const REMOTE_SYSTEM_COMMAND: &str = "if [ -r /proc/stat ] && [ -r /proc/meminfo ]; then IFS= read -r cpu_line < /proc/stat; printf '%s\\n' \"$cpu_line\"; while IFS= read -r mem_line; do case \"$mem_line\" in MemTotal:*|MemAvailable:*|MemFree:*) printf '%s\\n' \"$mem_line\";; esac; done < /proc/meminfo; fi";
+
+#[derive(Default)]
+struct SystemSampler {
+    last_attempt: Option<Instant>,
+    attempts: u8,
+    latest: Option<SystemMetrics>,
+    previous_cpu: Option<(u64, u64)>,
+    local: Option<System>,
+}
+
+impl SystemSampler {
+    fn due(&mut self) -> bool {
+        let interval = if self.attempts == 1 {
+            Duration::from_secs(1)
+        } else {
+            SYSTEM_SAMPLE_INTERVAL
+        };
+        if self.last_attempt.is_some_and(|last| last.elapsed() < interval) {
+            return false;
+        }
+        self.last_attempt = Some(Instant::now());
+        self.attempts = self.attempts.saturating_add(1);
+        true
+    }
+
+    fn local(&mut self) -> Option<SystemMetrics> {
+        if self.due() {
+            let had_previous_sample = self.local.is_some();
+            let system = self.local.get_or_insert_with(System::new);
+            system.refresh_cpu_usage();
+            system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
+            let total = system.total_memory();
+            self.latest = (total > 0).then(|| SystemMetrics {
+                cpu_percent: had_previous_sample.then(|| system.global_cpu_usage().clamp(0.0, 100.0)),
+                memory_used_bytes: system.used_memory().min(total),
+                memory_total_bytes: total,
+            });
+        }
+        self.latest.clone()
+    }
+
+    fn remote_session(&mut self, session: &Session) -> Option<SystemMetrics> {
+        if self.due() {
+            self.latest = ssh_exec_capture(session, REMOTE_SYSTEM_COMMAND)
+                .ok()
+                .filter(|(status, _)| *status == 0)
+                .and_then(|(_, output)| self.parse_remote(&output));
+        }
+        self.latest.clone()
+    }
+
+    fn parse_remote(&mut self, output: &str) -> Option<SystemMetrics> {
+        let (ticks, total, available) = parse_linux_system_counters(output)?;
+        let cpu_percent = self.previous_cpu.and_then(|(old_total, old_idle)| {
+            let elapsed = ticks.0.checked_sub(old_total)?;
+            let idle = ticks.1.checked_sub(old_idle)?;
+            (elapsed > 0).then(|| ((elapsed.saturating_sub(idle)) as f32 * 100.0 / elapsed as f32).clamp(0.0, 100.0))
+        });
+        self.previous_cpu = Some(ticks);
+        Some(SystemMetrics {
+            cpu_percent,
+            memory_used_bytes: total.saturating_sub(available),
+            memory_total_bytes: total,
+        })
+    }
+}
+
+fn parse_linux_system_counters(output: &str) -> Option<((u64, u64), u64, u64)> {
+    let mut cpu = None;
+    let mut total_kb = None;
+    let mut available_kb = None;
+    let mut free_kb = None;
+    for line in output.lines() {
+        let mut fields = line.split_whitespace();
+        match fields.next() {
+            Some("cpu") => {
+                let values: Vec<u64> = fields.take(8).map(str::parse).collect::<Result<_, _>>().ok()?;
+                if values.len() >= 4 {
+                    let total = values.iter().sum();
+                    let idle = values[3] + values.get(4).copied().unwrap_or(0);
+                    cpu = Some((total, idle));
+                }
+            }
+            Some("MemTotal:") => total_kb = fields.next().and_then(|value| value.parse::<u64>().ok()),
+            Some("MemAvailable:") => available_kb = fields.next().and_then(|value| value.parse::<u64>().ok()),
+            Some("MemFree:") => free_kb = fields.next().and_then(|value| value.parse::<u64>().ok()),
+            _ => {}
+        }
+    }
+    let total = total_kb?.checked_mul(1024)?;
+    let available = available_kb.or(free_kb)?.checked_mul(1024)?.min(total);
+    (total > 0).then_some((cpu?, total, available))
+}
+
+#[cfg(test)]
+mod system_sample_tests {
+    use super::*;
+
+    #[test]
+    fn parses_linux_memory_and_cpu_deltas() {
+        let mut sampler = SystemSampler::default();
+        let first = sampler.parse_remote("cpu 100 0 50 850 0 0 0 0\nMemTotal: 16384 kB\nMemAvailable: 4096 kB\n").unwrap();
+        assert_eq!(first.cpu_percent, None);
+        assert_eq!(first.memory_used_bytes, 12 * 1024 * 1024);
+        let second = sampler.parse_remote("cpu 150 0 75 925 0 0 0 0\nMemTotal: 16384 kB\nMemAvailable: 8192 kB\n").unwrap();
+        assert_eq!(second.cpu_percent, Some(50.0));
+        assert_eq!(second.memory_used_bytes, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn local_sample_has_memory_without_waiting_for_cpu_delta() {
+        let mut sampler = SystemSampler::default();
+        let sample = sampler.local().unwrap();
+        assert!(sample.memory_total_bytes > 0);
+        assert!(sample.memory_used_bytes <= sample.memory_total_bytes);
+        assert_eq!(sample.cpu_percent, None);
+    }
+}
 
 fn clear_job_gpus_from_list(
     gpu_list: &mut Vec<GpuInfo>,
@@ -198,6 +320,7 @@ fn apply_offline_gpu_state(
         gpu_data.error = Some(format!("{} (showing cached data)", err_msg));
     } else {
         gpu_data.gpu_list.clear();
+        gpu_data.system = None;
         gpu_data.slurm_steps = None;
         gpu_data.slurm_nodelists = None;
         gpu_data.slurm_times = None;
@@ -278,21 +401,55 @@ fn user_home_dir() -> Option<PathBuf> {
 }
 
 fn ssh_pattern_matches(pattern: &str, host: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return host.starts_with(prefix);
-    }
-    pattern.eq_ignore_ascii_case(host)
+    glob::Pattern::new(pattern).is_ok_and(|pattern| {
+        pattern.matches_with(
+            host,
+            glob::MatchOptions {
+                case_sensitive: false,
+                require_literal_separator: false,
+                require_literal_leading_dot: false,
+            },
+        )
+    })
 }
 
-fn read_ssh_config_file_for_host(host: &str) -> Option<SshConfigHost> {
-    let path = user_home_dir()?.join(".ssh").join("config");
-    let content = std::fs::read_to_string(path).ok()?;
-    let mut current_matches = false;
-    let mut found = false;
-    let mut cfg = SshConfigHost::default();
+struct SshConfigParseState {
+    current_matches: bool,
+    found_host: bool,
+    matched_alias: bool,
+    config: SshConfigHost,
+}
+
+impl Default for SshConfigParseState {
+    fn default() -> Self {
+        Self {
+            current_matches: true,
+            found_host: false,
+            matched_alias: false,
+            config: SshConfigHost::default(),
+        }
+    }
+}
+
+fn parse_ssh_config_file(
+    path: &Path,
+    ssh_dir: &Path,
+    host: &str,
+    state: &mut SshConfigParseState,
+    active_files: &mut HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth >= 16 {
+        return;
+    }
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !active_files.insert(canonical_path.clone()) {
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        active_files.remove(&canonical_path);
+        return;
+    };
 
     for raw_line in content.lines() {
         let line = raw_line.split('#').next().unwrap_or("").trim();
@@ -305,27 +462,157 @@ fn read_ssh_config_file_for_host(host: &str) -> Option<SshConfigHost> {
         };
         let value = parts.collect::<Vec<_>>().join(" ");
         if key.eq_ignore_ascii_case("Host") {
-            current_matches = value
-                .split_whitespace()
-                .any(|pattern| ssh_pattern_matches(pattern, host));
-            found |= current_matches;
+            let patterns: Vec<&str> = value.split_whitespace().collect();
+            let positive_match = patterns.iter().any(|pattern| {
+                !pattern.starts_with('!') && ssh_pattern_matches(pattern, host)
+            });
+            let negative_match = patterns.iter().any(|pattern| {
+                pattern
+                    .strip_prefix('!')
+                    .is_some_and(|pattern| ssh_pattern_matches(pattern, host))
+            });
+            state.current_matches = positive_match && !negative_match;
+            state.found_host |= state.current_matches;
+            state.matched_alias |= state.current_matches
+                && patterns
+                    .iter()
+                    .any(|pattern| !pattern.starts_with('!') && *pattern != "*");
             continue;
         }
-        if !current_matches {
+        if key.eq_ignore_ascii_case("Match") {
+            // OpenSSH handles Match expressions in the primary `ssh -G` path.
+            state.current_matches = false;
+            continue;
+        }
+        if !state.current_matches {
+            continue;
+        }
+        if key.eq_ignore_ascii_case("Include") {
+            for pattern in value.split_whitespace() {
+                let expanded = shellexpand::tilde(pattern).to_string();
+                let include_path = PathBuf::from(expanded);
+                let include_path = if include_path.is_absolute() {
+                    include_path
+                } else {
+                    ssh_dir.join(include_path)
+                };
+                if let Ok(paths) = glob::glob(&include_path.to_string_lossy()) {
+                    for path in paths.flatten() {
+                        parse_ssh_config_file(
+                            &path,
+                            ssh_dir,
+                            host,
+                            state,
+                            active_files,
+                            depth + 1,
+                        );
+                    }
+                }
+            }
             continue;
         }
         match key.to_ascii_lowercase().as_str() {
-            "hostname" if cfg.host_name.is_none() => cfg.host_name = Some(value),
-            "user" if cfg.user.is_none() => cfg.user = Some(value),
-            "port" if cfg.port.is_none() => cfg.port = value.parse().ok(),
-            "identityfile" => cfg.identity_files.push(value),
-            "proxyjump" if cfg.proxy_jump.is_none() => cfg.proxy_jump = Some(value),
-            "proxycommand" if cfg.proxy_command.is_none() => cfg.proxy_command = Some(value),
+            "hostname" if state.config.host_name.is_none() => state.config.host_name = Some(value),
+            "user" if state.config.user.is_none() => state.config.user = Some(value),
+            "port" if state.config.port.is_none() => state.config.port = value.parse().ok(),
+            "identityfile" => state.config.identity_files.push(value),
+            "proxyjump" if state.config.proxy_jump.is_none() => state.config.proxy_jump = Some(value),
+            "proxycommand" if state.config.proxy_command.is_none() => state.config.proxy_command = Some(value),
             _ => {}
         }
     }
 
-    found.then_some(cfg)
+    active_files.remove(&canonical_path);
+}
+
+fn read_ssh_config_file_for_host(host: &str) -> Option<SshConfigParseState> {
+    let ssh_dir = user_home_dir()?.join(".ssh");
+    let mut state = SshConfigParseState::default();
+    parse_ssh_config_file(
+        &ssh_dir.join("config"),
+        &ssh_dir,
+        host,
+        &mut state,
+        &mut HashSet::new(),
+        0,
+    );
+    state.found_host.then_some(state)
+}
+
+pub fn ssh_config_has_host(host: &str) -> bool {
+    read_ssh_config_file_for_host(host.trim()).is_some_and(|state| state.matched_alias)
+}
+
+#[cfg(test)]
+mod ssh_config_tests {
+    use super::*;
+
+    #[test]
+    fn follows_absolute_and_nested_includes_for_aliases() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let ssh_dir = std::env::temp_dir().join(format!("widgitron-ssh-config-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(ssh_dir.join("parts")).unwrap();
+        std::fs::write(
+            ssh_dir.join("config"),
+            format!("Include {}\n", ssh_dir.join("parts/*.conf").display()),
+        )
+        .unwrap();
+        std::fs::write(ssh_dir.join("parts/first.conf"), "Include nested.conf\n").unwrap();
+        std::fs::write(
+            ssh_dir.join("nested.conf"),
+            "Host 138332\n  HostName gpu.example.test\n  User gpu-user\n  Port 22222\nInclude config\n",
+        )
+        .unwrap();
+
+        let mut state = SshConfigParseState::default();
+        parse_ssh_config_file(
+            &ssh_dir.join("config"),
+            &ssh_dir,
+            "138332",
+            &mut state,
+            &mut HashSet::new(),
+            0,
+        );
+        assert!(state.matched_alias);
+        assert_eq!(state.config.host_name.as_deref(), Some("gpu.example.test"));
+        assert_eq!(state.config.user.as_deref(), Some("gpu-user"));
+        assert_eq!(state.config.port, Some(22222));
+
+        std::fs::remove_dir_all(ssh_dir).unwrap();
+    }
+
+    #[test]
+    fn host_pattern_exclusions_do_not_match() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let ssh_dir = std::env::temp_dir().join(format!("widgitron-ssh-pattern-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        std::fs::write(
+            ssh_dir.join("config"),
+            "Host gpu-* !gpu-denied\n  Port 22222\nHost *\n  User fallback\n",
+        )
+        .unwrap();
+
+        let mut state = SshConfigParseState::default();
+        parse_ssh_config_file(
+            &ssh_dir.join("config"),
+            &ssh_dir,
+            "gpu-denied",
+            &mut state,
+            &mut HashSet::new(),
+            0,
+        );
+        assert!(!state.matched_alias);
+        assert_eq!(state.config.port, None);
+        assert_eq!(state.config.user.as_deref(), Some("fallback"));
+
+        std::fs::remove_dir_all(ssh_dir).unwrap();
+    }
 }
 
 fn parse_ssh_resolved_config(content: &str) -> Option<SshConfigHost> {
@@ -390,7 +677,8 @@ fn read_openssh_config_for_host(host: &str) -> Option<SshConfigHost> {
 }
 
 fn read_ssh_config_for_host(host: &str) -> Option<SshConfigHost> {
-    read_openssh_config_for_host(host).or_else(|| read_ssh_config_file_for_host(host))
+    read_openssh_config_for_host(host)
+        .or_else(|| read_ssh_config_file_for_host(host).map(|state| state.config))
 }
 
 fn resolve_server_connection_config(server: &ServerConfig) -> ServerConfig {
@@ -641,6 +929,7 @@ fn gpu_update_payload_changed(previous: Option<&ServerGpuData>, next: &ServerGpu
             prev.host != next.host
                 || prev.is_online != next.is_online
                 || prev.gpu_list != next.gpu_list
+                || prev.system != next.system
                 || prev.error != next.error
                 || prev.slurm_steps != next.slurm_steps
                 || prev.slurm_nodelists != next.slurm_nodelists
@@ -669,6 +958,10 @@ pub fn emit_gpu_update_if_changed(app: &AppHandle, state: &GlobalState, next: &S
 
     if should_emit {
         let _ = app.emit("gpu_update", next.clone());
+        #[cfg(target_os = "macos")]
+        if let Err(error) = crate::macos_widget_snapshot::publish_gpu_snapshot_from_state(app, state) {
+            log::warn!("Failed to publish macOS GPU widget snapshot: {error}");
+        }
     }
 }
 
@@ -956,6 +1249,7 @@ pub fn start_ssh_monitor_task(
                                             gpu_list: vec![],
                                             error: None,
                                             last_update: None,
+                                            system: None,
                                             slurm_steps: None,
                                             slurm_nodelists: None,
                                             slurm_times: None,
@@ -1075,6 +1369,7 @@ pub fn start_ssh_monitor_task(
                                     gpu_list: vec![],
                                     error: None,
                                     last_update: None,
+                                    system: None,
                                     slurm_steps: None,
                                     slurm_nodelists: None,
                                     slurm_times: None,
@@ -1130,6 +1425,7 @@ pub fn start_ssh_monitor_task(
                                     gpu_list: vec![],
                                     error: None,
                                     last_update: None,
+                                    system: None,
                                     slurm_steps: None,
                                     slurm_nodelists: None,
                                     slurm_times: None,
@@ -1249,6 +1545,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                         let mut slurm_queue_jobs: Vec<crate::models::SlurmQueueJob> = Vec::new();
                         let mut consecutive_failures: u32 = 0;
                         let mut consecutive_squeue_failures: u32 = 0;
+                        let system_sampler = Arc::new(std::sync::Mutex::new(SystemSampler::default()));
                         // Per-monitor last srun launch time — prevents step-ID exhaustion.
                         let monitor_launch_at: Arc<std::sync::Mutex<HashMap<String, Instant>>> =
                             Arc::new(std::sync::Mutex::new(HashMap::new()));
@@ -1256,6 +1553,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                         loop {
                             let res = tokio::task::spawn_blocking({
                                 let s = server_inner.clone();
+                                let system_sampler = system_sampler.clone();
                                 let smi = smi_cmd_inner.clone();
                                 let state_task = state_inner.clone();
                                 let app_task = app_inner.clone();
@@ -1284,6 +1582,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                         gpu_list: vec![],
                                         error: None,
                                         last_update: None,
+                                        system: None,
                                         slurm_steps: None,
                                         slurm_nodelists: None,
                                         slurm_times: None,
@@ -1312,14 +1611,13 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                             .and_then(|data| data.get(&s.host).cloned());
 
                                         let mut local_smi_error: Option<String> = None;
+                                        let mut no_gpu_detected = false;
                                         match output {
                                             Ok(out) if out.status.success() => {
                                                 let s_out = String::from_utf8_lossy(&out.stdout);
                                                 let parsed = parse_nvidia_smi_output(&s_out);
                                                 if parsed.is_empty() {
-                                                    local_smi_error = Some(
-                                                        "nvidia-smi returned no GPU data".to_string(),
-                                                    );
+                                                    no_gpu_detected = true;
                                                 } else {
                                                     gpu_data.gpu_list = parsed;
                                                     gpu_data.is_online = true;
@@ -1332,22 +1630,37 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                 let stderr = String::from_utf8_lossy(&out.stderr)
                                                     .trim()
                                                     .to_string();
-                                                local_smi_error = Some(if stderr.is_empty() {
-                                                    format!(
-                                                        "nvidia-smi exited with status {}",
-                                                        out.status
-                                                    )
+                                                if stderr
+                                                    .to_ascii_lowercase()
+                                                    .contains("no devices were found")
+                                                {
+                                                    no_gpu_detected = true;
                                                 } else {
-                                                    format!("nvidia-smi failed: {}", stderr)
-                                                });
+                                                    local_smi_error = Some(if stderr.is_empty() {
+                                                        format!(
+                                                            "nvidia-smi exited with status {}",
+                                                            out.status
+                                                        )
+                                                    } else {
+                                                        format!("nvidia-smi failed: {}", stderr)
+                                                    });
+                                                }
+                                            }
+                                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                                no_gpu_detected = true;
                                             }
                                             Err(e) => {
                                                 local_smi_error =
-                                                    Some(format!("Local smi failed: {}", e));
+                                                    Some(format!("GPU detection failed: {}", e));
                                             }
                                         }
 
-                                        if let Some(err) = local_smi_error {
+                                        if no_gpu_detected {
+                                            gpu_data.is_online = true;
+                                            gpu_data.error = Some("No GPU detected".to_string());
+                                            gpu_data.last_update =
+                                                Some(Utc::now().format("%H:%M:%S").to_string());
+                                        } else if let Some(err) = local_smi_error {
                                             if let Some(cached) = cached_snapshot.filter(|c| !c.gpu_list.is_empty())
                                             {
                                                 gpu_data.gpu_list = cached.gpu_list;
@@ -1358,21 +1671,40 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                             }
                                         }
 
+                                        gpu_data.system = system_sampler.lock().ok().and_then(|mut sampler| sampler.local());
                                         if let Ok(mut data) = state_task.gpu_data.lock() {
                                             data.insert(s.host.clone(), gpu_data.clone());
                                         }
-                                        let _ = app_task.emit("gpu_update", gpu_data);
+                                        emit_gpu_update_if_changed(&app_task, state_task.as_ref(), &gpu_data);
 
                                         Ok((None, vec![], HashMap::new(), HashMap::new(), HashMap::new(), vec![], None))
                                     } else if s.use_ssh_config.unwrap_or(false) && !s.use_slurm.unwrap_or(false) {
-                                        let s_out = run_openssh_command(&s, &smi, Duration::from_secs(30))?;
-                                        let parsed = parse_nvidia_smi_output(&s_out);
-                                        if parsed.is_empty() {
-                                            return Err("nvidia-smi returned no GPU data over OpenSSH".to_string());
-                                        }
-                                        gpu_data.gpu_list = parsed;
+                                        let sample_system = system_sampler.lock().ok()
+                                            .is_some_and(|mut sampler| sampler.due());
+                                        let remote_command = if sample_system {
+                                            format!("{REMOTE_SYSTEM_COMMAND}; printf '\\n{SYSTEM_GPU_SEPARATOR}\\n'; {smi} 2>/dev/null || true")
+                                        } else {
+                                            format!("{smi} 2>/dev/null || true")
+                                        };
+                                        let output = run_openssh_command(&s, &remote_command, Duration::from_secs(30))?;
+                                        let gpu_output = if sample_system {
+                                            if let Some((system_output, gpu_output)) = output.split_once(SYSTEM_GPU_SEPARATOR) {
+                                                gpu_data.system = system_sampler.lock().ok().and_then(|mut sampler| {
+                                                    sampler.latest = sampler.parse_remote(system_output);
+                                                    sampler.latest.clone()
+                                                });
+                                                gpu_output
+                                            } else {
+                                                output.as_str()
+                                            }
+                                        } else {
+                                            gpu_data.system = system_sampler.lock().ok().and_then(|sampler| sampler.latest.clone());
+                                            output.as_str()
+                                        };
+                                        gpu_data.gpu_list = parse_nvidia_smi_output(gpu_output);
                                         gpu_data.is_online = true;
-                                        gpu_data.error = None;
+                                        gpu_data.error = gpu_data.gpu_list.is_empty()
+                                            .then(|| "No GPU detected".to_string());
                                         gpu_data.last_update = Some(Utc::now().format("%H:%M:%S").to_string());
 
                                         if let Ok(mut data) = state_task.gpu_data.lock() {
@@ -1388,6 +1720,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                         let sess = reuse_or_connect_ssh_session(sess_opt, &s)?;
 
                                         gpu_data.is_online = true;
+                                        gpu_data.system = system_sampler.lock().ok().and_then(|mut sampler| sampler.remote_session(&sess));
                                         let mut desired_monitor_keys = Vec::new();
 
                                         if s.use_slurm.unwrap_or(false) {
@@ -1926,7 +2259,8 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                          gpu_data.gpu_list = parse_nvidia_smi_output(&s_out);
                                                          query_success = true;
                                                          gpu_data.is_online = true;
-                                                         gpu_data.error = None;
+                                                         gpu_data.error = gpu_data.gpu_list.is_empty()
+                                                             .then(|| "No GPU detected".to_string());
                                                          gpu_data.last_update = Some(Utc::now().format("%H:%M:%S").to_string());
                                                      }
                                                  }
@@ -2136,6 +2470,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                             gpu_list: vec![],
                                             error: None,
                                             last_update: None,
+                                            system: None,
                                             slurm_steps: None,
                                             slurm_nodelists: None,
                                             slurm_times: None,

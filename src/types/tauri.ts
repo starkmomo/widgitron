@@ -5,6 +5,7 @@ import type {
   GpuConfig,
   PaperConfig,
   PaperDeadlineInfo,
+  SidebarTileLayoutConfig,
   QuotaConfig,
   QuotaItem,
   ServerGpuData,
@@ -73,6 +74,7 @@ export type LiveDataCommandResult = {
 export interface TauriCommandMap {
   get_app_config: AppConfig;
   get_gpu_config: GpuConfig;
+  ssh_config_has_host: boolean;
   get_paper_config: PaperConfig;
   get_arxiv_config: ArxivConfig;
   get_quota_config: QuotaConfig;
@@ -97,11 +99,14 @@ export interface TauriCommandMap {
   save_arxiv_config: void;
   save_quota_config: void;
   save_app_config: void;
+  save_sidebar_tile_layout: AppConfig;
   set_widget_always_on_top: AppConfig;
+  set_widget_desktop_fixed: AppConfig;
   save_theme_config: void;
   download_and_install_update: void;
   create_widget: void;
   close_widget: void;
+  hide_all_widgets: void;
   restore_widget_position: void;
   open_log_dir: void;
   open_config_dir: void;
@@ -113,6 +118,8 @@ export interface TauriCommandMap {
   show_main: void;
   show_sidebar: void;
   hide_sidebar: void;
+  toggle_sidebar_visibility: void;
+  get_native_quota_widget_status: boolean;
   toggle_sidebar: void;
   get_sidebar_state: SidebarDockState;
   set_sidebar_pinned: SidebarDockState;
@@ -128,6 +135,7 @@ export type TauriCommand = keyof TauriCommandMap;
 export const TAURI_COMMAND_NAMES = [
   "get_app_config",
   "get_gpu_config",
+  "ssh_config_has_host",
   "get_paper_config",
   "get_arxiv_config",
   "get_quota_config",
@@ -152,11 +160,14 @@ export const TAURI_COMMAND_NAMES = [
   "save_arxiv_config",
   "save_quota_config",
   "save_app_config",
+  "save_sidebar_tile_layout",
   "set_widget_always_on_top",
+  "set_widget_desktop_fixed",
   "save_theme_config",
   "download_and_install_update",
   "create_widget",
   "close_widget",
+  "hide_all_widgets",
   "restore_widget_position",
   "open_log_dir",
   "open_config_dir",
@@ -168,6 +179,8 @@ export const TAURI_COMMAND_NAMES = [
   "show_main",
   "show_sidebar",
   "hide_sidebar",
+  "toggle_sidebar_visibility",
+  "get_native_quota_widget_status",
   "toggle_sidebar",
   "get_sidebar_state",
   "set_sidebar_pinned",
@@ -188,6 +201,7 @@ export type TauriInvokeResult<C extends TauriCommand> = TauriCommandMap[C];
 export interface TauriCommandArgs {
   get_app_config: undefined;
   get_gpu_config: undefined;
+  ssh_config_has_host: { host: string };
   get_paper_config: undefined;
   get_arxiv_config: undefined;
   get_quota_config: undefined;
@@ -211,7 +225,13 @@ export interface TauriCommandArgs {
   save_arxiv_config: { config: ArxivConfig };
   save_quota_config: { config: QuotaConfig };
   save_app_config: { config: AppConfig };
+  save_sidebar_tile_layout: {
+    order: string[];
+    layout: Record<string, SidebarTileLayoutConfig>;
+    widgets: Record<string, boolean> | null;
+  };
   set_widget_always_on_top: { label: string; pinned: boolean };
+  set_widget_desktop_fixed: { label: string; fixed: boolean };
   save_theme_config: { config: WidgetThemeConfig };
   toggle_widget: { id: string; title: string };
   create_widget: { id: string; title: string };
@@ -232,8 +252,11 @@ export interface TauriCommandArgs {
     error?: string;
   };
   show_main: undefined;
+  hide_all_widgets: undefined;
   show_sidebar: undefined;
   hide_sidebar: undefined;
+  toggle_sidebar_visibility: undefined;
+  get_native_quota_widget_status: undefined;
   toggle_sidebar: undefined;
   get_sidebar_state: undefined;
   set_sidebar_pinned: { pinned: boolean };

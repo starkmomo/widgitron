@@ -3,7 +3,8 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::config_store;
 use crate::models::{
     AppConfig, ArxivConfig, ArxivPaper, GlobalState, GpuConfig, PaperConfig, PaperDeadlineInfo,
-    QuotaConfig, QuotaItem, ServerGpuData, ToggleWidgetResponse, WidgetThemeConfig,
+    QuotaConfig, QuotaItem, ServerGpuData, SidebarTileLayoutConfig, ToggleWidgetResponse,
+    WidgetThemeConfig,
 };
 
 #[tauri::command]
@@ -44,6 +45,10 @@ pub async fn save_gpu_config(
     }
 
     crate::gpu::persist_gpu_data_cache(&app, state.inner());
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::macos_widget_snapshot::publish_gpu_snapshot_from_state(&app, state.inner()) {
+        log::warn!("Failed to publish macOS GPU widget snapshot: {error}");
+    }
 
     Ok(())
 }
@@ -56,6 +61,12 @@ pub async fn save_paper_config(
 ) -> Result<(), String> {
     config_store::write_config(&app, "paper_deadline.json", &config)?;
     let _ = app.emit("paper_config_update", &config);
+    #[cfg(target_os = "macos")]
+    if let Ok(deadlines) = state.deadlines.lock() {
+        if let Err(error) = crate::macos_widget_snapshot::publish_deadline_snapshot(&app, &config, &deadlines) {
+            log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
+        }
+    }
 
     let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
     if !app_config.deadline_enabled.unwrap_or(true) {
@@ -94,6 +105,11 @@ pub async fn save_paper_config(
 }
 
 #[tauri::command]
+pub fn ssh_config_has_host(host: String) -> bool {
+    crate::gpu::ssh_config_has_host(&host)
+}
+
+#[tauri::command]
 pub async fn get_gpu_config(app: AppHandle) -> Result<GpuConfig, String> {
     let mut config = crate::gpu::read_gpu_config(&app);
     if config.compact_mode.is_none() {
@@ -113,6 +129,9 @@ pub async fn get_paper_config(app: AppHandle) -> Result<PaperConfig, String> {
 #[tauri::command]
 pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
     let previous = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    // Floating-window visibility is owned by the window commands. Frontend
+    // config snapshots can lag behind a recent hide/show event.
+    config.active_widgets = previous.active_widgets.clone();
     let previous_scale = crate::ui_scale::from_config(&previous);
     let next_scale = crate::ui_scale::from_config(&config);
     let scale_changed = (previous_scale - next_scale).abs() >= 0.001;
@@ -123,6 +142,24 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     }
 
     config_store::write_config(&app, "app_config.json", &config)?;
+    #[cfg(target_os = "macos")]
+    if previous.language != config.language {
+        crate::macos_tray::refresh(&app);
+        let quota_config = crate::quota::read_quota_config(&app);
+        if let Err(error) = crate::macos_widget_snapshot::publish_quota_snapshot(&app, &quota_config) {
+            log::warn!("Failed to update macOS quota widget language: {error}");
+        }
+        let gpu_config = crate::gpu::read_gpu_config(&app);
+        let gpu_data = crate::gpu::load_gpu_cache(&app);
+        if let Err(error) = crate::macos_widget_snapshot::publish_gpu_snapshot(&app, &gpu_config, &gpu_data) {
+            log::warn!("Failed to update macOS GPU widget language: {error}");
+        }
+        let paper_config = config_store::read_config::<PaperConfig>(&app, "paper_deadline.json");
+        let deadlines = config_store::read_config::<Vec<PaperDeadlineInfo>>(&app, "paper_deadlines_cache.json");
+        if let Err(error) = crate::macos_widget_snapshot::publish_deadline_snapshot(&app, &paper_config, &deadlines) {
+            log::warn!("Failed to update macOS deadline widget language: {error}");
+        }
+    }
     crate::sidebar_hotkey::update_global_sidebar_hotkey(config.sidebar_hotkey.clone());
     if scale_changed {
         crate::widget_layout::apply_scale_to_open_widgets(&app, next_scale);
@@ -130,6 +167,25 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     crate::sidebar_dock::apply_config(&app, &config);
     let _ = app.emit("app_config_update", &config);
     Ok(())
+}
+
+/// Update sidebar card layout without overwriting settings edited in another window.
+#[tauri::command]
+pub fn save_sidebar_tile_layout(
+    app: AppHandle,
+    order: Vec<String>,
+    layout: std::collections::HashMap<String, SidebarTileLayoutConfig>,
+    widgets: Option<std::collections::HashMap<String, bool>>,
+) -> Result<AppConfig, String> {
+    let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    config.sidebar_order = Some(order);
+    config.sidebar_tile_layout = Some(layout);
+    if let Some(widgets) = widgets {
+        config.sidebar_widgets = Some(widgets);
+    }
+    config_store::write_config(&app, "app_config.json", &config)?;
+    let _ = app.emit("app_config_update", &config);
+    Ok(config)
 }
 
 /// Update only one widget's always-on-top preference. Widget windows can stay
@@ -145,14 +201,78 @@ pub async fn set_widget_always_on_top(
         return Err(format!("Unsupported widget label: {}", label));
     }
 
+    #[cfg(target_os = "macos")]
+    if let Some(win) = app.get_webview_window(&label) {
+        if pinned {
+            crate::desktop::set_macos_desktop_fixed(&win, false).await?;
+        }
+        win.set_always_on_top(pinned)
+            .map_err(|error| error.to_string())?;
+    }
+
     let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
     config
         .always_on_top
         .get_or_insert_with(Default::default)
-        .insert(label, pinned);
+        .insert(label.clone(), pinned);
+    #[cfg(target_os = "macos")]
+    if pinned {
+        config
+            .embedded
+            .get_or_insert_with(Default::default)
+            .insert(label, false);
+    }
     config_store::write_config(&app, "app_config.json", &config)?;
     let _ = app.emit("app_config_update", &config);
     Ok(config)
+}
+
+/// Persist and apply the macOS desktop-level window mode independently of the
+/// move lock and always-on-top preference.
+#[tauri::command]
+pub async fn set_widget_desktop_fixed(
+    app: AppHandle,
+    label: String,
+    fixed: bool,
+) -> Result<AppConfig, String> {
+    if !crate::widget_layout::is_tracked_widget(&label) {
+        return Err(format!("Unsupported widget label: {}", label));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(win) = app.get_webview_window(&label) {
+            if fixed {
+                win.set_always_on_top(false)
+                    .map_err(|error| error.to_string())?;
+            }
+            crate::desktop::set_macos_desktop_fixed(&win, fixed).await?;
+            if !fixed {
+                let _ = win.set_focus();
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = fixed;
+        return Err("Desktop fixation is only supported on macOS".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+        config
+            .embedded
+            .get_or_insert_with(Default::default)
+            .insert(label.clone(), fixed);
+        if fixed {
+            config
+                .always_on_top
+                .get_or_insert_with(Default::default)
+                .insert(label, false);
+        }
+        config_store::write_config(&app, "app_config.json", &config)?;
+        let _ = app.emit("app_config_update", &config);
+        Ok(config)
+    }
 }
 
 #[tauri::command]
@@ -245,7 +365,7 @@ pub async fn show_main(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn show_sidebar(app: tauri::AppHandle) -> Result<(), String> {
-    crate::sidebar_dock::show(&app, true)?;
+    crate::sidebar_dock::show(&app, !cfg!(target_os = "macos"))?;
     if let Some(tray_menu) = app.get_webview_window("tray-menu") {
         let _ = tray_menu.hide();
     }
@@ -254,7 +374,28 @@ pub async fn show_sidebar(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn hide_sidebar(app: tauri::AppHandle) -> Result<(), String> {
-    crate::sidebar_dock::collapse(&app)
+    crate::sidebar_dock::collapse(&app)?;
+    if let Some(tray_menu) = app.get_webview_window("tray-menu") {
+        let _ = tray_menu.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn toggle_sidebar_visibility(app: tauri::AppHandle) -> Result<(), String> {
+    if crate::sidebar_dock::get_state(&app)?.expanded {
+        hide_sidebar(app).await
+    } else {
+        show_sidebar(app).await
+    }
+}
+
+#[tauri::command]
+pub fn get_native_quota_widget_status() -> bool {
+    #[cfg(target_os = "macos")]
+    { crate::macos_widget_snapshot::native_quota_widget_available() }
+    #[cfg(not(target_os = "macos"))]
+    { false }
 }
 
 #[tauri::command]
@@ -317,6 +458,20 @@ async fn create_widget_impl_with_options(
     focus_window: bool,
 ) -> Result<(), String> {
     log::info!("Creating/Showing widget: {} ({})", title, id);
+    let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    let keep_on_top = config
+        .always_on_top
+        .as_ref()
+        .and_then(|values| values.get(&id))
+        .copied()
+        .unwrap_or(cfg!(windows));
+    #[cfg(target_os = "macos")]
+    let desktop_fixed = config
+        .embedded
+        .as_ref()
+        .and_then(|values| values.get(&id))
+        .copied()
+        .unwrap_or(false);
     let win = if let Some(win) = app.get_webview_window(&id) {
         win
     } else {
@@ -328,7 +483,7 @@ async fn create_widget_impl_with_options(
             .maximizable(false)
             .transparent(true)
             .shadow(false)
-            .always_on_top(true)
+            .always_on_top(keep_on_top)
             .skip_taskbar(true);
 
         match builder.build() {
@@ -345,9 +500,9 @@ async fn create_widget_impl_with_options(
     // native maximize capability enabled also opts them into Windows Aero
     // Snap, which can unexpectedly maximize a widget near a screen edge.
     let _ = win.set_maximizable(false);
+    let _ = win.set_always_on_top(keep_on_top);
 
-    if let Err(err) =
-        crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
+    if let Err(err) = crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
     {
         log::error!(
             "Failed to restore widget layout for '{}' (window may keep bootstrap size 320x400): {}",
@@ -355,7 +510,16 @@ async fn create_widget_impl_with_options(
             err
         );
     }
+    #[cfg(target_os = "macos")]
+    if desktop_fixed {
+        crate::desktop::set_macos_desktop_fixed(&win, true).await?;
+    }
     let _ = win.show();
+    #[cfg(target_os = "macos")]
+    if focus_window && !desktop_fixed {
+        let _ = win.set_focus();
+    }
+    #[cfg(not(target_os = "macos"))]
     if focus_window {
         let _ = win.set_focus();
     }
@@ -402,6 +566,17 @@ pub async fn close_widget(
         let _ = win.hide();
     }
     let _ = config_store::update_widget_visibility_config(&app, &id, false).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hide_all_widgets(
+    app: AppHandle,
+    state: tauri::State<'_, GlobalState>,
+) -> Result<(), String> {
+    for id in crate::widget_layout::TRACKED_WIDGET_IDS {
+        close_widget(app.clone(), state.clone(), id.to_string()).await?;
+    }
     Ok(())
 }
 
@@ -787,18 +962,35 @@ pub async fn restore_widget_position(
         let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
         let always_on_top = config
             .always_on_top
-            .and_then(|m| m.get(&id).cloned())
+            .as_ref()
+            .and_then(|m| m.get(&id).copied())
             .unwrap_or(false);
 
-        // Disable desktop mode to make it a normal top-level window first
+        // Disable Windows desktop parenting before changing the geometry.
         let _ = crate::desktop::set_desktop_mode(app.clone(), id.clone(), false).await;
 
         // Restore to the normalized layout tracked for the current or fallback monitor
         let _ = crate::widget_layout::ensure_widget_layout_for_window(&app, &win, &id);
         let _ = win.show();
+        #[cfg(not(target_os = "macos"))]
         let _ = win.set_focus();
 
         // Re-apply desktop mode if not pinned/always_on_top
+        #[cfg(target_os = "macos")]
+        {
+            let desktop_fixed = config
+                .embedded
+                .as_ref()
+                .and_then(|values| values.get(&id))
+                .copied()
+                .unwrap_or(false);
+            let _ = win.set_always_on_top(always_on_top && !desktop_fixed);
+            let _ = crate::desktop::set_macos_desktop_fixed(&win, desktop_fixed).await;
+            if !desktop_fixed {
+                let _ = win.set_focus();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
         if always_on_top {
             let _ = win.set_always_on_top(true);
         } else {

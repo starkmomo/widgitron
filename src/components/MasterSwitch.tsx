@@ -6,9 +6,10 @@ interface MasterSwitchProps {
   onToggle: (val: boolean) => void;
   loading?: boolean;
   disabled?: boolean;
+  label: string;
 }
 
-export function MasterSwitch({ enabled, onToggle, loading = false, disabled = false }: MasterSwitchProps) {
+export function MasterSwitch({ enabled, onToggle, loading = false, disabled = false, label }: MasterSwitchProps) {
   const isDisabled = disabled || loading;
 
   return (
@@ -16,6 +17,9 @@ export function MasterSwitch({ enabled, onToggle, loading = false, disabled = fa
       type="button"
       onClick={() => !isDisabled && onToggle(!enabled)}
       disabled={isDisabled}
+      role="switch"
+      aria-label={label}
+      aria-checked={enabled}
       aria-busy={loading}
       className={`w-11 h-6 rounded-full relative transition-all duration-300 flex-shrink-0 ${
         enabled ? "bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.3)]" : "bg-slate-700"

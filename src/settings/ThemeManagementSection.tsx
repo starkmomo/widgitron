@@ -175,8 +175,8 @@ export function ThemeManagementSection({
                 }`}
               >
                 {/* Name row */}
-                <div className="flex items-center justify-between mb-2 gap-1">
-                  <div className="font-bold text-[11px] truncate flex-1">{theme.name}</div>
+                <div className="flex flex-col items-start mb-2 gap-1">
+                  <div className="font-bold text-[11px] leading-tight break-words w-full">{theme.name}</div>
                   {theme.is_default && (
                     <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-400 border border-blue-500/10 whitespace-nowrap flex-shrink-0">
                       Preset

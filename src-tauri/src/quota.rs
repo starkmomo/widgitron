@@ -129,7 +129,12 @@ pub fn read_quota_config(app: &AppHandle) -> QuotaConfig {
 pub fn write_quota_config(app: &AppHandle, config: &QuotaConfig) -> Result<(), String> {
     let mut disk_config = config.clone();
     encrypt_quota_config_secrets(&mut disk_config)?;
-    config_store::write_config(app, "quota_config.json", &disk_config)
+    config_store::write_config(app, "quota_config.json", &disk_config)?;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::macos_widget_snapshot::publish_quota_snapshot(app, config) {
+        log::warn!("Failed to publish macOS quota widget snapshot: {error}");
+    }
+    Ok(())
 }
 
 fn encrypt_quota_config_secrets(config: &mut QuotaConfig) -> Result<(), String> {
@@ -4480,10 +4485,20 @@ mod tests {
         assert_eq!(bars.len(), 2);
         assert_eq!(bars[0].name, "5h Usage");
         assert_eq!(bars[0].value, 65.0);
-        assert!(bars[0].reset.as_ref().is_some_and(|reset| reset.contains("2026-09-01")));
+        let expected_five_hour_reset = chrono::DateTime::parse_from_rfc3339("2026-09-01T18:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string();
+        assert_eq!(bars[0].reset.as_deref(), Some(expected_five_hour_reset.as_str()));
         assert_eq!(bars[1].name, "7d Usage");
         assert_eq!(bars[1].value, 83.0);
-        assert!(bars[1].reset.as_ref().is_some_and(|reset| reset.contains("2026-09-08")));
+        let expected_seven_day_reset = chrono::DateTime::parse_from_rfc3339("2026-09-08T18:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string();
+        assert_eq!(bars[1].reset.as_deref(), Some(expected_seven_day_reset.as_str()));
         assert_eq!(res.primary_reset, bars[0].reset);
     }
 
