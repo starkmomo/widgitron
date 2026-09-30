@@ -45,6 +45,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { WidgetTheme, WidgetThemeConfig } from "./types/theme";
 import { hexToRgba, isLightColor } from "./utils/color";
+import { providerLogoToneClass } from "./utils/providerLogo";
 import { listenBackendServiceError } from "./utils/backendServiceError";
 import { listenQuotaMonitorStatus, type QuotaMonitorStatus } from "./utils/quotaMonitorStatus";
 import { listenServiceUpdateEvents } from "./utils/serviceUpdateEvents";
@@ -406,7 +407,7 @@ function SidebarWidgetSection({
   );
 }
 
-const renderProviderIcon = (provider: string, isManual = false) => {
+const renderProviderIcon = (provider: string, isManual = false, lightBackground = false) => {
   if (isManual) {
     return <User size={14} className="text-cyan-400 flex-shrink-0" />;
   }
@@ -416,7 +417,7 @@ const renderProviderIcon = (provider: string, isManual = false) => {
       <img
         src={logoSrc}
         alt=""
-        className="w-3.5 h-3.5 flex-shrink-0 object-contain"
+        className={`w-3.5 h-3.5 flex-shrink-0 object-contain ${providerLogoToneClass(provider, lightBackground)}`}
         draggable={false}
       />
     );
@@ -3182,7 +3183,7 @@ function App() {
                           <div className="relative z-10 flex flex-col gap-4">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2 min-w-0">
-                                {renderProviderIcon(q.provider, isManual)}
+                                {renderProviderIcon(q.provider, isManual, appConfig.theme === "light")}
                                 <h3 className={`text-sm font-bold truncate ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
                                   {q.name}{quotaConfig?.show_account_name && q.account_label ? ` (${q.account_label})` : ""}
                                 </h3>

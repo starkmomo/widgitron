@@ -37,6 +37,7 @@ import {
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { hexToRgba } from "../utils/color";
+import { providerLogoToneClass } from "../utils/providerLogo";
 import { isMacOS } from "../utils/platform";
 import { resolveLanguage } from "../utils/localization";
 import {
@@ -437,7 +438,7 @@ function QuotaItemSettingsPage({
             style={{ background: appConfig.theme === "light" ? "#f8fafc" : "rgba(255,255,255,0.03)" }}
           >
             {PROVIDER_LOGOS[q.provider] ? (
-              <img src={PROVIDER_LOGOS[q.provider]} alt="" className="w-5 h-5 object-contain" draggable={false} />
+              <img src={PROVIDER_LOGOS[q.provider]} alt="" className={`w-5 h-5 object-contain ${providerLogoToneClass(q.provider, appConfig.theme === "light")}`} draggable={false} />
             ) : (
               <Cpu size={14} className="text-slate-400" />
             )}
@@ -601,7 +602,7 @@ function QuotaItemCard({
         <div className="flex-shrink-0 w-8 h-8 rounded-xl border border-[var(--dashboard-border)] flex items-center justify-center overflow-hidden"
           style={{ background: appConfig.theme === "light" ? "#f8fafc" : "rgba(255,255,255,0.03)" }}>
           {PROVIDER_LOGOS[selectedProvider.value] ? (
-            <img src={PROVIDER_LOGOS[selectedProvider.value]} alt="" className="w-5 h-5 object-contain" draggable={false} />
+            <img src={PROVIDER_LOGOS[selectedProvider.value]} alt="" className={`w-5 h-5 object-contain ${providerLogoToneClass(selectedProvider.value, appConfig.theme === "light")}`} draggable={false} />
           ) : (
             <Cpu size={14} className="text-slate-400" />
           )}
@@ -636,7 +637,7 @@ function QuotaItemCard({
                   }`}
                 >
                   {PROVIDER_LOGOS[opt.value] ? (
-                    <img src={PROVIDER_LOGOS[opt.value]} alt="" className="w-4 h-4 object-contain flex-shrink-0" draggable={false} />
+                    <img src={PROVIDER_LOGOS[opt.value]} alt="" className={`w-4 h-4 object-contain flex-shrink-0 ${providerLogoToneClass(opt.value, appConfig.theme === "light")}`} draggable={false} />
                   ) : (
                     <Cpu size={14} className="text-slate-400 flex-shrink-0" />
                   )}
@@ -2820,7 +2821,7 @@ export function SettingsPanel({
                     }`}
                   >
                     {PROVIDER_LOGOS[option.value]
-                      ? <img src={PROVIDER_LOGOS[option.value]} alt="" className="h-5 w-5 object-contain" draggable={false} />
+                      ? <img src={PROVIDER_LOGOS[option.value]} alt="" className={`h-5 w-5 object-contain ${providerLogoToneClass(option.value, appConfig.theme === "light")}`} draggable={false} />
                       : <Cpu size={16} className="text-slate-400" />}
                     {option.label}
                   </button>
