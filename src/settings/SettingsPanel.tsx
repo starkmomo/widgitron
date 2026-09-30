@@ -568,7 +568,8 @@ function QuotaItemCard({
 }) {
   const controls = useDragControls();
   const isOpen = openProviderId === q.id;
-  const selectedProvider = PROVIDER_OPTIONS.find(p => p.value === q.provider) || PROVIDER_OPTIONS[0];
+  const selectedProvider = PROVIDER_OPTIONS.find(p => p.value === q.provider)
+    ?? { value: q.provider, label: q.name || q.provider };
 
   return (
     <Reorder.Item
@@ -891,7 +892,6 @@ interface SettingsPanelProps {
   setUpdateCheckError?: (err: string | null) => void;
   initialSection?: SettingsSection;
   embeddedSection?: SettingsSection;
-  addItemRequest?: number;
 }
 
 const formatArxivKeywordsInput = (keywords?: string[]) => (keywords || []).join(", ");
@@ -942,7 +942,6 @@ export function SettingsPanel({
   setUpdateCheckError,
   initialSection = "general",
   embeddedSection,
-  addItemRequest = 0,
 }: SettingsPanelProps) {
   const [localGpu, setLocalGpu] = useState<GpuConfig>(() => sanitizeGpuConfig(gpuConfig));
   const [localPaper, setLocalPaper] = useState<PaperConfig>(paperConfig);
@@ -966,8 +965,8 @@ export function SettingsPanel({
   const pendingQuotaReorderRef = useRef<QuotaConfig | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [openProviderId, setOpenProviderId] = useState<string | null>(null);
+  const [quotaProviderPickerOpen, setQuotaProviderPickerOpen] = useState(false);
   const [quotaItemSettingsId, setQuotaItemSettingsId] = useState<string | null>(null);
-  const handledAddItemRequest = useRef(0);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "completed" | "error">("idle");
@@ -1273,13 +1272,13 @@ export function SettingsPanel({
     }
   };
 
-  const addQuotaItem = () => {
+  const addQuotaItem = (provider: string) => {
+    const selectedProvider = PROVIDER_OPTIONS.find((option) => option.value === provider);
+    if (!selectedProvider) return;
     const items = localQuota?.items || [];
-    const provider = "antigravity";
-    const label = PROVIDER_OPTIONS.find((p) => p.value === provider)?.label ?? "Antigravity";
     const newItem: QuotaItemConfig = {
-      id: "quota-" + Date.now(),
-      name: label,
+      id: `quota-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: selectedProvider.label,
       provider,
       auth_mode: PROVIDER_AUTH[provider]?.defaultMode ?? "local",
       api_key: "",
@@ -1290,17 +1289,11 @@ export function SettingsPanel({
     };
     const next = { ...localQuota, items: [...items, newItem] };
     setLocalQuota(next);
-    setOpenProviderId(newItem.id);
+    setQuotaProviderPickerOpen(false);
+    setOpenProviderId(null);
     onSaveQuota(next);
     requestAnimationFrame(() => document.getElementById(`quota-card-${newItem.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
   };
-
-  useEffect(() => {
-    if (!embeddedSection || !addItemRequest || handledAddItemRequest.current === addItemRequest) return;
-    handledAddItemRequest.current = addItemRequest;
-    if (embeddedSection === LIVE_DATA_SECTION.GPU) addServer();
-    if (embeddedSection === LIVE_DATA_SECTION.QUOTA) addQuotaItem();
-  }, [addItemRequest, embeddedSection]);
 
   const removeQuotaItem = (id: string) => {
     const items = localQuota?.items || [];
@@ -2797,15 +2790,44 @@ export function SettingsPanel({
 
         <div className="mt-3">
           <button
-            onClick={addQuotaItem}
+            type="button"
+            onClick={() => setQuotaProviderPickerOpen((open) => !open)}
+            aria-expanded={quotaProviderPickerOpen}
+            aria-controls="quota-provider-picker"
             className={`w-full py-4 border-2 border-dashed rounded-2xl flex items-center justify-center gap-2 font-bold uppercase tracking-widest text-xs transition-all ${
               appConfig.theme === "light"
                 ? "border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50/30"
                 : "border-white/10 text-slate-500 hover:text-white hover:border-white/20 hover:bg-white/5"
             }`}
           >
-            <Plus size={16} /> Add New Quota Monitor
+            {quotaProviderPickerOpen ? <><X size={16} /> Hide providers</> : <><Plus size={16} /> Add New Quota Monitor</>}
           </button>
+          {quotaProviderPickerOpen && (
+            <div id="quota-provider-picker" className={`mt-3 rounded-2xl border p-4 ${
+              appConfig.theme === "light" ? "border-slate-200 bg-white" : "border-white/10 bg-white/5"
+            }`}>
+              <div className="mb-3 text-xs font-bold">Choose a provider</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {PROVIDER_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => addQuotaItem(option.value)}
+                    className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition-colors ${
+                      appConfig.theme === "light"
+                        ? "border-slate-200 hover:border-blue-300 hover:bg-blue-50"
+                        : "border-white/10 hover:border-blue-400/40 hover:bg-white/10"
+                    }`}
+                  >
+                    {PROVIDER_LOGOS[option.value]
+                      ? <img src={PROVIDER_LOGOS[option.value]} alt="" className="h-5 w-5 object-contain" draggable={false} />
+                      : <Cpu size={16} className="text-slate-400" />}
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
       <ThemeManagementSection
@@ -3081,14 +3103,12 @@ export function SettingsPanel({
               }`}
             >
               {isActive && (
-                <motion.div
-                  layoutId="active-settings-tab"
+                <div
                   className={`absolute inset-0 rounded-2xl border ${
                     appConfig.theme === "light"
                       ? "bg-blue-50 border-blue-200/50 shadow-sm"
                       : "bg-white/5 border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]"
                   }`}
-                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
                 />
               )}
               <Icon size={16} className="relative z-10 flex-shrink-0" />

@@ -3,6 +3,7 @@
 ## [Unreleased] - 2026-09-30
 
 ### 中文
+- **设置修复**：设置页选中框打开时不再滑入；主页面的“添加额度监控”和“添加服务器”仅展开设置，额度服务商在明确选择后才新增，不再自动创建 Antigravity。
 - **修复**：Windows 侧边栏通过 Tauri 同步窗口显示状态，保留屏幕边缘悬停唤出与离开收起；修正可能完全不可见的问题。Windows 托盘左键打开主界面，右键打开菜单；侧边栏卡片尺寸只保存卡片布局，不覆盖缩放设置。论文截止日期浮窗仅显示已提醒或置顶的会议，同一会议年份只显示一个投稿轮次。
 - **自动构建**：新增 GitHub Actions，在推送和拉取请求时检查 Windows x64 安装包与包含 WidgetKit 扩展的 macOS 应用构建；macOS 检查使用临时签名，无需上传 Apple 凭证。
 - **macOS 系统小组件**：新增额度、GPU 和论文截止日期小组件；GPU 中号小组件可显示三台服务器，直接标出平均使用率，没有 GPU 时显示明确状态。截止日期仅显示用户设置提醒或置顶的近期会议，点击小组件可打开主界面。正常签名的应用通过 App Group 共享展示数据；GitHub 临时签名构建在 macOS 拒绝 App Group 写入时，通过本机回环地址更新小组件。
@@ -11,6 +12,7 @@
 - **arXiv**：不设置关键词时显示所选分类的近期论文，并改进空状态提示。
 
 ### English
+- **Settings fixes**: The selected settings tab no longer slides in on open. Dashboard add buttons only reveal the quota or server settings; a quota monitor is created only after a provider is chosen, with no automatic Antigravity entry.
 - **Fixes**: Synchronized Windows sidebar visibility through Tauri while retaining edge hover reveal and leave to hide behavior; fixed cases where it was completely invisible. Left click on the Windows tray icon opens the dashboard and right click opens the menu. Resizing sidebar cards now saves only card layout, preserving the scale setting. Deadline floating widgets now show only selected conferences and one submission round per conference year.
 - **Continuous builds**: Added GitHub Actions checks for the Windows x64 installer and macOS app with WidgetKit on pushes and pull requests. macOS build checks use ad-hoc signing and require no Apple credentials.
 - **Native macOS widgets**: Added quota, GPU, and paper deadline widgets. The medium GPU widget shows up to three servers with explicit average utilization and a clear no-GPU state. Deadline widgets show only upcoming conferences selected for reminders or pinned by the user; clicking a widget opens the dashboard. Signed apps share display-only snapshots through an App Group; GitHub's ad-hoc builds use a local loopback feed when macOS denies App Group writes.

@@ -431,7 +431,6 @@ function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
-  const [inlineAddItemRequest, setInlineAddItemRequest] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
   const [windowLabel, setWindowLabel] = useState("");
   const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
@@ -725,10 +724,8 @@ function App() {
     setActiveTab("settings");
   };
 
-  const openInlineSettings = (section: SettingsSection, addItem = false) => {
-    const opening = inlineSettingsSection !== section;
-    setInlineSettingsSection(opening ? section : null);
-    if (opening && addItem) setInlineAddItemRequest((request) => request + 1);
+  const openInlineSettings = (section: SettingsSection) => {
+    setInlineSettingsSection((current) => current === section ? null : section);
   };
 
   useEffect(() => {
@@ -2179,7 +2176,6 @@ function App() {
       key={`${embedded ? "inline" : "settings"}-${section}`}
       initialSection={section}
       embeddedSection={embedded ? section : undefined}
-      addItemRequest={embedded ? inlineAddItemRequest : undefined}
       gpuConfig={gpuConfig}
       paperConfig={paperConfig}
       arxivConfig={arxivConfig}
@@ -2484,7 +2480,7 @@ function App() {
                     GPU Monitor Status
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU, true)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} className={sectionActionClass}>
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} className={sectionActionClass}>
                       {inlineSettingsSection === LIVE_DATA_SECTION.GPU ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add server</>}
                     </button>
                     {appConfig.gpu_enabled !== false && (
@@ -2523,7 +2519,7 @@ function App() {
                 {renderInlineSettings(LIVE_DATA_SECTION.GPU)}
                 <div className="space-y-6">
                   {visibleGpuData.length === 0 ? (
-                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Add server"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU, true)} />
+                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Add server"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} />
                   ) : (
                     visibleGpuData.map((server, idx) => {
                       const hasCachedGpus =
@@ -3061,7 +3057,7 @@ function App() {
                     Agent & API Quotas
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA, true)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} className={sectionActionClass}>
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} className={sectionActionClass}>
                       {inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add quota monitor</>}
                     </button>
                     {appConfig.quota_enabled !== false && (
@@ -3110,7 +3106,7 @@ function App() {
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {visibleQuotaData.length === 0 ? (
-                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA, true)} /></div>
+                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} /></div>
                   ) : (
                     visibleQuotaData.map((q) => {
                       const hasValue = q.current_value !== null && q.current_value !== undefined;
