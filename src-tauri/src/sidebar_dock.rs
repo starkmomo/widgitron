@@ -83,6 +83,7 @@ fn hide_leave_delay(sensitivity: u8) -> Duration {
 }
 
 static DOCK_RUNTIME: OnceCell<Arc<Mutex<DockRuntime>>> = OnceCell::new();
+static STARTUP: crate::sidebar_startup::StartupGate = crate::sidebar_startup::StartupGate::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DockEdge {
@@ -308,6 +309,9 @@ pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 }
 
 pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
+    let Some(_owner) = STARTUP.try_enter() else {
+        return Ok(());
+    };
     if DOCK_RUNTIME.get().is_some() {
         apply_config(&app, config);
         return Ok(());
@@ -371,6 +375,10 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
     DOCK_RUNTIME
         .set(runtime.clone())
         .map_err(|_| "Sidebar dock controller is already running".to_string())?;
+
+    log::warn!("[SIDEBAR-SYNC] controller window={:?}, registered window={:?}",
+        native_hwnd(&window),
+        app.get_webview_window(SIDEBAR_LABEL).and_then(|registered| native_hwnd(&registered).ok()));
 
     std::thread::Builder::new()
         .name("widgitron-sidebar-dock".into())
@@ -442,7 +450,7 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
 }
 
 pub fn show(app: &AppHandle, focus: bool) -> Result<(), String> {
-    ensure_started(app)?;
+    require_started()?;
     let runtime = DOCK_RUNTIME
         .get()
         .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())?;
@@ -473,7 +481,7 @@ pub fn show(app: &AppHandle, focus: bool) -> Result<(), String> {
 }
 
 pub fn collapse(app: &AppHandle) -> Result<(), String> {
-    ensure_started(app)?;
+    require_started()?;
     let runtime = DOCK_RUNTIME
         .get()
         .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())?;
@@ -493,7 +501,7 @@ pub fn collapse(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn set_pinned(app: &AppHandle, pinned: bool, focus: bool) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
+    require_started()?;
     let runtime = DOCK_RUNTIME
         .get()
         .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())?;
@@ -523,7 +531,7 @@ pub fn toggle_pinned(
     app: &AppHandle,
     focus_when_pinning: bool,
 ) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
+    require_started()?;
     let pinned = DOCK_RUNTIME
         .get()
         .map(|runtime| !lock_runtime(runtime).pinned)
@@ -532,7 +540,7 @@ pub fn toggle_pinned(
 }
 
 pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
+    require_started()?;
     let runtime = DOCK_RUNTIME
         .get()
         .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())?;
@@ -561,19 +569,25 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
 }
 
 pub fn get_state(app: &AppHandle) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
-    DOCK_RUNTIME
-        .get()
-        .map(|runtime| lock_runtime(runtime).payload())
-        .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())
+    if let Some(runtime) = DOCK_RUNTIME.get() {
+        return Ok(lock_runtime(runtime).payload());
+    }
+    // Reading state during setup must not build a second window. The startup
+    // owner publishes the actual visibility through sidebar_state_update.
+    let config = config_store::read_config::<AppConfig>(app, "app_config.json");
+    Ok(SidebarDockState {
+        edge: DockEdge::parse(config.sidebar_edge.as_deref()).as_str().into(),
+        pinned: config.sidebar_pinned.unwrap_or(false),
+        expanded: false,
+        dragging: false,
+        preview_edge: None,
+    })
 }
 
-fn ensure_started(app: &AppHandle) -> Result<(), String> {
-    if DOCK_RUNTIME.get().is_some() {
-        return Ok(());
-    }
-    let config = config_store::read_config::<AppConfig>(app, "app_config.json");
-    start(app.clone(), &config)
+fn require_started() -> Result<(), String> {
+    // Application setup owns initialization, not window commands.
+    DOCK_RUNTIME.get().map(|_| ())
+        .ok_or_else(|| "Sidebar dock controller is not ready".into())
 }
 
 fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockRuntime>>) {

@@ -128,6 +128,7 @@ pub async fn get_paper_config(app: AppHandle) -> Result<PaperConfig, String> {
 
 #[tauri::command]
 pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
+    log::warn!("[SIDEBAR-SYNC] save requested: {}", sidebar_settings_summary(&config));
     let previous = config_store::read_config::<AppConfig>(&app, "app_config.json");
     // Floating-window visibility is owned by the window commands. Frontend
     // config snapshots can lag behind a recent hide/show event.
@@ -142,6 +143,7 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     }
 
     config_store::write_config(&app, "app_config.json", &config)?;
+    log::warn!("[SIDEBAR-SYNC] config persisted");
     #[cfg(target_os = "macos")]
     if previous.language != config.language {
         crate::macos_tray::refresh(&app);
@@ -165,7 +167,12 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
         crate::widget_layout::apply_scale_to_open_widgets(&app, next_scale);
     }
     crate::sidebar_dock::apply_config(&app, &config);
-    let _ = app.emit("app_config_update", &config);
+    log::warn!("[SIDEBAR-SYNC] native settings applied");
+    app.emit("app_config_update", &config).map_err(|error| {
+        log::error!("[SIDEBAR-SYNC] config notification failed: {error}");
+        error.to_string()
+    })?;
+    log::warn!("[SIDEBAR-SYNC] config notification dispatched");
     Ok(())
 }
 
@@ -184,8 +191,42 @@ pub fn save_sidebar_tile_layout(
         config.sidebar_widgets = Some(widgets);
     }
     config_store::write_config(&app, "app_config.json", &config)?;
-    let _ = app.emit("app_config_update", &config);
+    log::warn!("[SIDEBAR-SYNC] tile settings persisted: {}", sidebar_settings_summary(&config));
+    app.emit("app_config_update", &config).map_err(|error| {
+        log::error!("[SIDEBAR-SYNC] tile notification failed: {error}");
+        error.to_string()
+    })?;
+    log::warn!("[SIDEBAR-SYNC] tile notification dispatched");
     Ok(config)
+}
+
+// Log only presentation settings, never the full config (which can contain
+// account details and other unrelated user data).
+fn sidebar_settings_summary(config: &AppConfig) -> serde_json::Value {
+    serde_json::json!({
+        "theme": config.sidebar_theme.as_ref().and_then(|theme| theme.active_theme_id.as_deref().or(theme.preset.as_deref())),
+        "widgets": config.sidebar_widgets,
+        "hideHeaders": config.sidebar_hide_widget_headers,
+    })
+}
+
+#[tauri::command]
+pub async fn log_sidebar_sync(
+    window: tauri::WebviewWindow,
+    phase: String,
+    details: String,
+) {
+    // This diagnostic is temporary while investigating Windows cross-window
+    // updates. Cap messages and restrict callers to the affected window.
+    if window.label() == "sidebar" {
+        #[cfg(windows)]
+        let identity = format!("{} {:?}", window.label(), window.hwnd());
+        #[cfg(not(windows))]
+        let identity = window.label().to_string();
+        log::warn!("[SIDEBAR-SYNC] frontend [{}] {}: {}", identity,
+            phase.chars().take(48).collect::<String>(),
+            details.chars().take(1024).collect::<String>());
+    }
 }
 
 /// Update only one widget's always-on-top preference. Widget windows can stay

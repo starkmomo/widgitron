@@ -3,6 +3,8 @@
 ## [Unreleased] - 2026-09-30
 
 ### 中文
+- **侧边栏启动修复**：状态查询不再触发窗口创建，初始化只由应用启动流程负责，并防止并发或重入创建重复控制器。增加设置保存、通知接收和界面更新的诊断记录。
+- **Windows 侧边栏**：将主题和模块开关的同步独立于服务初始化，避免其他配置加载失败导致订阅缺失；防止旧请求覆盖新的配置和展开状态，并即时提交侧边栏显示更新。保留原有模糊外观。拖动结束后及时清除移动提示，自定义标题栏颜色也会应用到侧边栏。
 - **设置修复**：设置页选中框打开时不再滑入；主页面的“添加额度监控”和“添加服务器”仅展开设置，额度服务商在明确选择后才新增，不再自动创建 Antigravity。浅色界面的 Cursor 图标现在清晰可见。
 - **修复**：Windows 侧边栏通过 Tauri 同步窗口显示状态，保留屏幕边缘悬停唤出与离开收起；修正可能完全不可见的问题。Windows 托盘左键打开主界面，右键打开菜单；侧边栏卡片尺寸只保存卡片布局，不覆盖缩放设置。论文截止日期浮窗仅显示已提醒或置顶的会议，同一会议年份只显示一个投稿轮次。
 - **自动构建**：新增 GitHub Actions，在推送和拉取请求时检查 Windows x64 安装包与包含 WidgetKit 扩展的 macOS 应用构建；macOS 检查使用临时签名，无需上传 Apple 凭证。
@@ -12,6 +14,8 @@
 - **arXiv**：不设置关键词时显示所选分类的近期论文，并改进空状态提示。
 
 ### English
+- **Sidebar startup fix**: State queries no longer create windows. Application setup owns initialization, with a nonblocking guard against concurrent or reentrant controller creation. Added diagnostics for settings saves, notification delivery, and UI updates.
+- **Windows sidebar**: Subscribe to theme and module settings independently of service initialization, so unrelated loading failures cannot block updates. Prevent stale reads from replacing newer settings or reveal events, and commit sidebar appearance updates immediately. Preserve the original blur styling. Clear the moving overlay when dragging ends, and apply custom header colors.
 - **Settings fixes**: The selected settings tab no longer slides in on open. Dashboard add buttons only reveal the quota or server settings; a quota monitor is created only after a provider is chosen, with no automatic Antigravity entry. The Cursor icon remains visible on light backgrounds.
 - **Fixes**: Synchronized Windows sidebar visibility through Tauri while retaining edge hover reveal and leave to hide behavior; fixed cases where it was completely invisible. Left click on the Windows tray icon opens the dashboard and right click opens the menu. Resizing sidebar cards now saves only card layout, preserving the scale setting. Deadline floating widgets now show only selected conferences and one submission round per conference year.
 - **Continuous builds**: Added GitHub Actions checks for the Windows x64 installer and macOS app with WidgetKit on pushes and pull requests. macOS build checks use ad-hoc signing and require no Apple credentials.

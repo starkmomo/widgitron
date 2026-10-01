@@ -85,6 +85,7 @@ impl DockRuntime {
 }
 
 static DOCK_RUNTIME: OnceCell<Mutex<DockRuntime>> = OnceCell::new();
+static STARTUP: crate::sidebar_startup::StartupGate = crate::sidebar_startup::StartupGate::new();
 
 fn parse_edge(value: Option<&str>) -> &'static str {
     match value {
@@ -150,6 +151,9 @@ pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 }
 
 pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
+    let Some(_owner) = STARTUP.try_enter() else {
+        return Ok(());
+    };
     if DOCK_RUNTIME.get().is_some() {
         apply_config(&app, config);
         return Ok(());
@@ -255,7 +259,7 @@ fn show_with_hover(
 ) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     let _ = wait_for_pointer_entry;
-    ensure_started(app)?;
+    require_started()?;
     let window = ensure_sidebar_window(app)?;
     position_sidebar(app, &window)?;
     #[cfg(target_os = "macos")]
@@ -287,7 +291,7 @@ fn show_with_hover(
 }
 
 pub fn collapse(app: &AppHandle) -> Result<(), String> {
-    ensure_started(app)?;
+    require_started()?;
     {
         let mut runtime = lock_runtime()?;
         runtime.state.expanded = false;
@@ -309,7 +313,7 @@ pub fn collapse(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn set_pinned(app: &AppHandle, pinned: bool, focus: bool) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
+    require_started()?;
     {
         let mut runtime = lock_runtime()?;
         runtime.state.pinned = pinned;
@@ -333,13 +337,13 @@ pub fn toggle_pinned(
     app: &AppHandle,
     focus_when_pinning: bool,
 ) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
+    require_started()?;
     let pinned = !lock_runtime()?.state.pinned;
     set_pinned(app, pinned, focus_when_pinning && pinned)
 }
 
 pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
+    require_started()?;
     ensure_sidebar_window(app)?
         .start_dragging()
         .map_err(|err| err.to_string())?;
@@ -347,16 +351,19 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
 }
 
 pub fn get_state(app: &AppHandle) -> Result<SidebarDockState, String> {
-    ensure_started(app)?;
-    Ok(lock_runtime()?.state.clone())
+    if DOCK_RUNTIME.get().is_some() {
+        return Ok(lock_runtime()?.state.clone());
+    }
+    // Do not create another WebView while application setup is building one.
+    let config = config_store::read_config::<AppConfig>(app, "app_config.json");
+    let mut state = DockRuntime::from_config(&config).state;
+    state.expanded = false;
+    Ok(state)
 }
 
-fn ensure_started(app: &AppHandle) -> Result<(), String> {
-    if DOCK_RUNTIME.get().is_none() {
-        let config = config_store::read_config::<AppConfig>(app, "app_config.json");
-        start(app.clone(), &config)?;
-    }
-    Ok(())
+fn require_started() -> Result<(), String> {
+    DOCK_RUNTIME.get().map(|_| ())
+        .ok_or_else(|| "Sidebar dock controller is not ready".into())
 }
 
 fn emit_state(app: &AppHandle) {
