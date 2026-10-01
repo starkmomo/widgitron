@@ -53,6 +53,7 @@ mod sidebar_hotkey;
 #[path = "sidebar_hotkey_portable.rs"]
 mod sidebar_hotkey;
 mod sqlite_state;
+mod sidebar_startup;
 mod ui_scale;
 mod utils;
 mod vscode_secrets;
@@ -130,6 +131,7 @@ pub fn run() {
             commands::get_antigravity_setup_status,
             commands::restore_widget_position,
             commands::log_frontend_error,
+            commands::log_sidebar_sync,
             ota::check_for_updates,
             ota::download_and_install_update
         ])

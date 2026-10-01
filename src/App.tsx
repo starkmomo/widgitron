@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import {
   LayoutDashboard,
   Settings,
@@ -40,11 +41,13 @@ import {
 } from "./utils/statHints";
 import { tauriInvoke } from "./utils/tauriInvoke";
 import { tauriListen } from "./utils/tauriListen";
+import { startWindowSnapshotSync } from "./utils/windowSnapshotSync";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { WidgetTheme, WidgetThemeConfig } from "./types/theme";
 import { hexToRgba, isLightColor } from "./utils/color";
+import { providerLogoToneClass } from "./utils/providerLogo";
 import { listenBackendServiceError } from "./utils/backendServiceError";
 import { listenQuotaMonitorStatus, type QuotaMonitorStatus } from "./utils/quotaMonitorStatus";
 import { listenServiceUpdateEvents } from "./utils/serviceUpdateEvents";
@@ -406,7 +409,7 @@ function SidebarWidgetSection({
   );
 }
 
-const renderProviderIcon = (provider: string, isManual = false) => {
+const renderProviderIcon = (provider: string, isManual = false, lightBackground = false) => {
   if (isManual) {
     return <User size={14} className="text-cyan-400 flex-shrink-0" />;
   }
@@ -416,7 +419,7 @@ const renderProviderIcon = (provider: string, isManual = false) => {
       <img
         src={logoSrc}
         alt=""
-        className="w-3.5 h-3.5 flex-shrink-0 object-contain"
+        className={`w-3.5 h-3.5 flex-shrink-0 object-contain ${providerLogoToneClass(provider, lightBackground)}`}
         draggable={false}
       />
     );
@@ -431,9 +434,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
-  const [inlineAddItemRequest, setInlineAddItemRequest] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [windowLabel, setWindowLabel] = useState("");
+  const windowLabel = appWindow.label;
   const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
   const [isLocked, setIsLocked] = useState(!isMacOS);
   const [isPinned, setIsPinned] = useState(false);
@@ -576,6 +578,7 @@ function App() {
       return { theme: "dark" };
     }
   });
+  const appConfigSync = useRef<ReturnType<typeof startWindowSnapshotSync<AppConfig>> | null>(null);
   useUiLocalization(resolveLanguage(appConfig.language));
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
@@ -725,15 +728,109 @@ function App() {
     setActiveTab("settings");
   };
 
-  const openInlineSettings = (section: SettingsSection, addItem = false) => {
-    const opening = inlineSettingsSection !== section;
-    setInlineSettingsSection(opening ? section : null);
-    if (opening && addItem) setInlineAddItemRequest((request) => request + 1);
+  const openInlineSettings = (section: SettingsSection) => {
+    setInlineSettingsSection((current) => current === section ? null : section);
   };
 
   useEffect(() => {
+    let lastReadSummary = "";
+    const trace = (phase: string, details: string) => {
+      if (windowLabel === "sidebar" && !isMacOS) {
+        void tauriInvoke("log_sidebar_sync", { phase, details }).catch(console.error);
+      }
+    };
+    const summary = (config: AppConfig) => JSON.stringify({
+      theme: resolveSidebarTheme(config.sidebar_theme).id,
+      widgets: config.sidebar_widgets,
+      hideHeaders: config.sidebar_hide_widget_headers,
+    });
+    const sync = startWindowSnapshotSync<AppConfig>({
+      listen: async (apply) => {
+        trace("subscribe-start", "app_config_update");
+        const stop = await tauriListen("app_config_update", (event) => {
+          trace("event-received", summary(event.payload));
+          apply(event.payload);
+        });
+        trace("subscribe-ready", "app_config_update");
+        return stop;
+      },
+      read: async () => {
+        const timeout = window.setTimeout(() => trace("read-pending", "get_app_config > 2s"), 2000);
+        try {
+          const config = await tauriInvoke("get_app_config");
+          const nextSummary = summary(config);
+          if (lastReadSummary !== nextSummary) {
+            trace("read-completed", nextSummary);
+            lastReadSummary = nextSummary;
+          }
+          return config;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      },
+      apply: (config) => {
+        const update = () => {
+          setAppConfig((previous) => {
+            if (JSON.stringify(previous) === JSON.stringify(config)) return previous;
+            applyServiceDisableClears(previous, config, serviceDisableHandlers);
+            return config;
+          });
+          if (windowLabel.startsWith("widget-")) {
+            setIsPinned(config.always_on_top?.[windowLabel] ?? false);
+            setIsDesktopFixed(config.embedded?.[windowLabel] ?? false);
+          }
+          if (windowLabel === "main") {
+            setActiveWidgets(activeWidgetLabelsFromConfig(config) ?? (isMacOS ? [] : [
+              ...(config.gpu_enabled !== false ? [serviceWidgetMeta("gpu_enabled").id] : []),
+              ...(config.deadline_enabled !== false ? [serviceWidgetMeta("deadline_enabled").id] : []),
+              ...(config.arxiv_enabled !== false ? [serviceWidgetMeta("arxiv_enabled").id] : []),
+              ...(config.quota_enabled !== false ? [serviceWidgetMeta("quota_enabled").id] : []),
+            ]));
+          }
+        };
+        // Native IPC callbacks run outside React input events. Commit sidebar
+        // settings synchronously so the DOM is updated before the callback ends.
+        if (windowLabel === "sidebar" && !isMacOS) flushSync(update);
+        else update();
+        try {
+          if (config.theme) localStorage.setItem("widgitron-theme", config.theme);
+        } catch (error) {
+          console.warn("Could not cache the application theme", error);
+        }
+      },
+      onError: (error) => {
+        console.error("Application settings sync failed", error);
+        void tauriInvoke("log_frontend_error", {
+          source: `${windowLabel}:app-config-sync`,
+          message: String(error),
+        }).catch(console.error);
+      },
+    });
+    appConfigSync.current = sync;
+    return () => {
+      sync.stop();
+      appConfigSync.current = null;
+    };
+  }, [windowLabel]);
+
+  useEffect(() => {
+    if (windowLabel !== "sidebar" || isMacOS) return;
+    const root = document.querySelector("[data-sidebar-theme]");
+    void tauriInvoke("log_sidebar_sync", {
+      phase: "dom-committed",
+      details: JSON.stringify({
+        theme: root?.getAttribute("data-sidebar-theme"),
+        modules: Array.from(document.querySelectorAll("[data-sidebar-module]"))
+          .map((node) => node.getAttribute("data-sidebar-module")),
+        background: root ? getComputedStyle(root).backgroundColor : null,
+        expanded: sidebarDockState.expanded,
+        visibility: document.visibilityState,
+      }),
+    }).catch(console.error);
+  }, [windowLabel, appConfig.sidebar_theme, appConfig.sidebar_widgets, sidebarDockState.expanded]);
+
+  useEffect(() => {
     const win = appWindow;
-    setWindowLabel(win.label);
 
     let unlisteners: (() => void)[] = [];
     let active = true;
@@ -742,16 +839,10 @@ function App() {
       try {
         const label = win.label;
 
-        if (label === "tray-menu") {
-          const config = await tauriInvoke("get_app_config");
-          if (!active) return;
-          setAppConfig(config);
-          const unlisten = await tauriListen("app_config_update", (event) => {
-            if (active) setAppConfig(event.payload);
-          });
-          unlisteners.push(unlisten);
-          return;
-        }
+        // These windows have their own config subscription above. Sidebar
+        // content widgets load their own data; unrelated service/autostart
+        // failures must never prevent appearance updates from being registered.
+        if (label === "tray-menu" || label === "sidebar") return;
 
         if (label.startsWith("widget-")) {
           const [ac, tc] = await Promise.all([
@@ -760,7 +851,6 @@ function App() {
           ]);
           if (!active) return;
 
-          setAppConfig(ac);
           setThemeConfig(tc);
           setCurrentTheme(resolveWidgetTheme(tc, label));
 
@@ -789,25 +879,19 @@ function App() {
             setCurrentTheme(resolveWidgetTheme(config, label));
           });
           unlisteners.push(() => uTheme());
-          const uAppConfig = await tauriListen("app_config_update", (event) => {
-            if (!active) return;
-            const nextConfig = event.payload;
-            setAppConfig(nextConfig);
-            setIsPinned(nextConfig.always_on_top?.[label] ?? false);
-            setIsDesktopFixed(nextConfig.embedded?.[label] ?? false);
-          });
-          unlisteners.push(() => uAppConfig());
           return;
         }
 
-        const [gc, pc, arc, ac, qc, tc, autostartEnabled] = await Promise.all([
+        void isEnabled().then((enabled) => {
+          if (active) setIsAutostart(enabled);
+        }).catch((error) => console.error("Autostart status unavailable", error));
+
+        const [gc, pc, arc, qc, tc] = await Promise.all([
           tauriInvoke("get_gpu_config"),
           tauriInvoke("get_paper_config"),
           tauriInvoke("get_arxiv_config"),
-          tauriInvoke("get_app_config"),
           tauriInvoke("get_quota_config"),
           tauriInvoke("get_theme_config"),
-          isEnabled(),
         ]);
 
         if (!active) return;
@@ -815,10 +899,7 @@ function App() {
         setGpuConfig(gc);
         setPaperConfig(pc);
         setArxivConfig(arc);
-        setAppConfig(ac);
-        if (ac.theme) localStorage.setItem("widgitron-theme", ac.theme);
         setQuotaConfig(qc);
-        setIsAutostart(autostartEnabled);
         setThemeConfig(tc);
 
         const sectionSetters = {
@@ -837,18 +918,6 @@ function App() {
         }
 
         if (win.label === "main") {
-          const labelsFromConfig = activeWidgetLabelsFromConfig(ac);
-          if (labelsFromConfig !== null) {
-            setActiveWidgets(labelsFromConfig);
-          } else {
-            setActiveWidgets(isMacOS ? [] : [
-              ...(ac.gpu_enabled !== false ? [serviceWidgetMeta("gpu_enabled").id] : []),
-              ...(ac.deadline_enabled !== false ? [serviceWidgetMeta("deadline_enabled").id] : []),
-              ...(ac.arxiv_enabled !== false ? [serviceWidgetMeta("arxiv_enabled").id] : []),
-              ...(ac.quota_enabled !== false ? [serviceWidgetMeta("quota_enabled").id] : []),
-            ]);
-          }
-
           const uWidgetVis = await tauriListen(
             "widget_visibility_changed",
             (event) => {
@@ -931,29 +1000,6 @@ function App() {
           u4c();
         } else {
           unlisteners.push(() => u4c());
-        }
-
-        const u4d = await tauriListen("app_config_update", (event) => {
-          if (!active) return;
-          const next = event.payload;
-          setAppConfig((prev) => {
-            applyServiceDisableClears(prev, next, serviceDisableHandlers);
-            if (next?.theme) {
-              localStorage.setItem("widgitron-theme", next.theme);
-            }
-            return next;
-          });
-          if (win.label === "main") {
-            const labels = activeWidgetLabelsFromConfig(next);
-            if (labels !== null) {
-              setActiveWidgets(labels);
-            }
-          }
-        });
-        if (!active) {
-          u4d();
-        } else {
-          unlisteners.push(() => u4d());
         }
 
         const u5 = await tauriListen("theme_update", (event) => {
@@ -1406,8 +1452,10 @@ function App() {
         console.log("Start dragging");
         if (windowLabel === "sidebar") {
           e.preventDefault();
-          const nextState = await tauriInvoke("begin_sidebar_drag");
-          setSidebarDockState(nextState);
+          // The native loop owns drag state. Its completion event can arrive
+          // before this command resolves, so applying the command's initial
+          // snapshot here could leave the "moving" overlay stuck on screen.
+          await tauriInvoke("begin_sidebar_drag");
           return;
         }
         await getCurrentWindow().startDragging();
@@ -1433,27 +1481,38 @@ function App() {
   useEffect(() => {
     if (!["main", "sidebar", "tray-menu"].includes(windowLabel)) return;
 
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    const initializeDockState = async () => {
-      const stopListening = await tauriListen("sidebar_state_update", (event) => {
-        if (active) setSidebarDockState(event.payload);
-      });
-      if (!active) {
-        stopListening();
-        return;
-      }
-      unlisten = stopListening;
-      const state = await tauriInvoke("get_sidebar_state");
-      if (active) setSidebarDockState(state);
-    };
-    initializeDockState().catch(console.error);
+    const sync = startWindowSnapshotSync<SidebarDockState>({
+      listen: (apply) => tauriListen("sidebar_state_update", (event) => apply(event.payload)),
+      read: () => tauriInvoke("get_sidebar_state"),
+      apply: setSidebarDockState,
+      onError: console.error,
+    });
+    return sync.stop;
+  }, [windowLabel]);
 
+  useEffect(() => {
+    if (windowLabel !== "sidebar" || !sidebarDockState.expanded) return;
+    let active = true;
+    let inFlight = false;
+    const refresh = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      try {
+        await appConfigSync.current?.refresh();
+      } finally {
+        inFlight = false;
+      }
+    };
+    // The Windows sidebar is a separate WebView2 window. Check persisted
+    // settings while it is visible so a missed cross-window event cannot leave
+    // theme or module visibility stale. The config file is small.
+    void refresh();
+    const interval = isMacOS ? undefined : window.setInterval(refresh, 500);
     return () => {
       active = false;
-      unlisten?.();
+      if (interval !== undefined) window.clearInterval(interval);
     };
-  }, [windowLabel]);
+  }, [windowLabel, sidebarDockState.expanded]);
 
   useEffect(() => {
     if (!isMacOS || windowLabel !== "main") return;
@@ -1867,6 +1926,7 @@ function App() {
 
     return (
       <div
+        data-sidebar-theme={sidebarTheme.id}
         className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
         }`}
@@ -1913,6 +1973,7 @@ function App() {
         <header
           aria-label="Drag sidebar"
           className={`h-11 shrink-0 flex items-center justify-between gap-2 px-3 border-b ${sidebarIsLight ? "border-slate-300/60" : "border-white/10"} ${isMacOS ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
+          style={{ backgroundColor: hexToRgba(sidebarTheme.header, sidebarTheme.header_opacity) }}
           onMouseDown={isMacOS ? undefined : startDrag}
         >
           <span className="text-xs font-bold tracking-wide">Sidebar</span>
@@ -2011,6 +2072,7 @@ function App() {
                 return (
                   <div
                     key={section.key}
+                    data-sidebar-module={section.key}
                     className={`absolute min-h-0 ${
                       isActive ? "" : "transition-[left,top,width,height,opacity] duration-150"
                     } ${
@@ -2179,7 +2241,6 @@ function App() {
       key={`${embedded ? "inline" : "settings"}-${section}`}
       initialSection={section}
       embeddedSection={embedded ? section : undefined}
-      addItemRequest={embedded ? inlineAddItemRequest : undefined}
       gpuConfig={gpuConfig}
       paperConfig={paperConfig}
       arxivConfig={arxivConfig}
@@ -2484,7 +2545,7 @@ function App() {
                     GPU Monitor Status
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU, true)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} className={sectionActionClass}>
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} className={sectionActionClass}>
                       {inlineSettingsSection === LIVE_DATA_SECTION.GPU ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add server</>}
                     </button>
                     {appConfig.gpu_enabled !== false && (
@@ -2523,7 +2584,7 @@ function App() {
                 {renderInlineSettings(LIVE_DATA_SECTION.GPU)}
                 <div className="space-y-6">
                   {visibleGpuData.length === 0 ? (
-                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Add server"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU, true)} />
+                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Add server"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} />
                   ) : (
                     visibleGpuData.map((server, idx) => {
                       const hasCachedGpus =
@@ -3061,7 +3122,7 @@ function App() {
                     Agent & API Quotas
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA, true)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} className={sectionActionClass}>
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} className={sectionActionClass}>
                       {inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add quota monitor</>}
                     </button>
                     {appConfig.quota_enabled !== false && (
@@ -3110,7 +3171,7 @@ function App() {
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {visibleQuotaData.length === 0 ? (
-                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA, true)} /></div>
+                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} /></div>
                   ) : (
                     visibleQuotaData.map((q) => {
                       const hasValue = q.current_value !== null && q.current_value !== undefined;
@@ -3186,7 +3247,7 @@ function App() {
                           <div className="relative z-10 flex flex-col gap-4">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2 min-w-0">
-                                {renderProviderIcon(q.provider, isManual)}
+                                {renderProviderIcon(q.provider, isManual, appConfig.theme === "light")}
                                 <h3 className={`text-sm font-bold truncate ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
                                   {q.name}{quotaConfig?.show_account_name && q.account_label ? ` (${q.account_label})` : ""}
                                 </h3>

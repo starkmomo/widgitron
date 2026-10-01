@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { Gauge, RefreshCw, AlertCircle, Minus, Plus, Edit2, Globe, Cpu, User } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
-import { hexToRgba, adjustColorOpacity } from "../utils/color";
+import { hexToRgba, adjustColorOpacity, isLightColor } from "../utils/color";
+import { providerLogoToneClass } from "../utils/providerLogo";
 import { isStaleQuotaWarning, quotaHasDisplayValue, orderQuotaByConfig } from "../utils/quotaDisplay";
 import { handleWidgetAppConfigUpdate } from "../utils/widgetLifecycle";
 import { listenQuotaMonitorStatus, type QuotaMonitorStatus } from "../utils/quotaMonitorStatus";
@@ -305,7 +306,7 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
         <img
           src={logoSrc}
           alt=""
-          className="w-[10px] h-[10px] flex-shrink-0 object-contain"
+          className={`w-[10px] h-[10px] flex-shrink-0 object-contain ${providerLogoToneClass(provider, isLightColor(currentTheme.bg_color))}`}
           draggable={false}
         />
       );

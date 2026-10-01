@@ -17,6 +17,7 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
     const unlisteners: (() => void)[] = [];
     let latestThemeConfig: WidgetThemeConfig | null = null;
     let latestAppConfig: AppConfig | null = null;
+    let appConfigEventRevision = 0;
 
     const updateTheme = () => {
       if (!active || !latestThemeConfig) return;
@@ -46,10 +47,26 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
 
         const unlistenApp = await tauriListen("app_config_update", (event) => {
           if (!active) return;
+          appConfigEventRevision += 1;
           latestAppConfig = event.payload;
           updateTheme();
         });
         unlisteners.push(() => unlistenApp());
+
+        if (win.label === "sidebar") {
+          const unlistenSidebar = await tauriListen("sidebar_state_update", (event) => {
+            if (!event.payload.expanded) return;
+            const revision = appConfigEventRevision;
+            tauriInvoke("get_app_config")
+              .then((config) => {
+                if (!active || revision !== appConfigEventRevision) return;
+                latestAppConfig = config;
+                updateTheme();
+              })
+              .catch((error) => console.error("Sidebar theme refresh failed", error));
+          });
+          unlisteners.push(() => unlistenSidebar());
+        }
       } catch (e) {
         console.error("Widget theme load failed", e);
       }

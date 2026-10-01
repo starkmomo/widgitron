@@ -127,6 +127,7 @@ export interface TauriCommandMap {
   exit_app: void;
   set_desktop_mode: void;
   log_frontend_error: void;
+  log_sidebar_sync: void;
 }
 
 export type TauriCommand = keyof TauriCommandMap;
@@ -188,6 +189,7 @@ export const TAURI_COMMAND_NAMES = [
   "exit_app",
   "set_desktop_mode",
   "log_frontend_error",
+  "log_sidebar_sync",
 ] as const satisfies readonly TauriCommand[];
 
 type CommandNameUnion = (typeof TAURI_COMMAND_NAMES)[number];
@@ -199,6 +201,7 @@ void _allCommandsListed;
 export type TauriInvokeResult<C extends TauriCommand> = TauriCommandMap[C];
 
 export interface TauriCommandArgs {
+  log_sidebar_sync: { phase: string; details: string };
   get_app_config: undefined;
   get_gpu_config: undefined;
   ssh_config_has_host: { host: string };
