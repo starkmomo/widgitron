@@ -105,6 +105,17 @@ const ZH: Record<string, string> = {
   "All caught up!": "已全部查看", "Check back later for new papers in CS.": "稍后再来看新的计算机科学论文。",
   "Latest": "最新", "Saved": "已收藏", "Discarded": "已忽略",
   "All": "全部", "All keywords": "全部关键词", "Back": "返回", "More": "更多", "Less": "收起",
+  "Recent": "最近", "Choose submission date": "选择提交日期",
+  "Submission date (UTC)": "提交日期（UTC）", "Show recent papers": "查看最近论文",
+  "View papers": "查看论文",
+  "Previous page": "上一页", "Next page": "下一页", "Paper pagination": "论文翻页",
+  "Loading papers": "正在加载论文", "Loading papers…": "正在加载论文…",
+  "No papers matched your keywords on this submission date.": "该提交日期没有匹配关键词的论文。",
+  "No papers in the selected categories on this submission date.": "该提交日期下，所选分类暂无论文。",
+  "Choose another date or view recent papers. Submissions not yet announced may appear later.": "可换一天或查看最近论文；尚未公布的投稿可能稍后出现。",
+  "All papers in the selected categories, without keyword filtering.": "所选分类的全部论文，不按关键词筛选。",
+  "Could not load papers. Please retry.": "论文加载失败，请重试。",
+  "No papers found in the selected categories.": "所选分类暂无论文。",
   "New": "新增", "Open": "打开", "Close": "关闭", "Delete": "删除", "Delete?": "确认删除？",
   "Copy": "复制", "Copied": "已复制", "Edit": "编辑", "Save": "保存", "Reset": "重置",
   "Refresh All": "全部刷新", "Refresh Deadlines": "刷新截止日期",
@@ -118,6 +129,13 @@ const ZH: Record<string, string> = {
   "My jobs": "我的任务", "All users": "所有用户", "Mine": "我的",
   "Queue": "队列", "Memory": "显存", "Temp": "温度", "Job Run Time": "任务运行时间",
   "Open PDF ↑": "打开 PDF ↑", "Open paper": "打开论文", "Remove from saved": "取消收藏",
+  "Open arXiv ↑": "打开 arXiv ↑", "Open arXiv": "arXiv 页面",
+  "Open arXiv page": "打开 arXiv 页面", "Download PDF": "下载 PDF",
+  "Download PDF to Downloads": "下载 PDF 到下载文件夹", "Downloading…": "下载中…",
+  "Saved to Downloads": "已保存到下载文件夹",
+  "Full abstract": "完整摘要", "Close abstract": "关闭摘要",
+  "Could not open arXiv page.": "无法打开 arXiv 页面。",
+  "Could not download PDF. Try again.": "PDF 下载失败，请重试。",
   "Delete permanently": "永久删除", "← Discard": "← 忽略", "Save →": "收藏 →",
   "Dashboard Theme": "主界面主题",
   "Choose between light and dark mode for the control panel.": "选择主界面的浅色或深色外观。",
@@ -261,7 +279,7 @@ function translated(source: string): string {
   const [, before, core, after] = whitespace;
   const normalized = core.replace(/\s+/g, " ").trim();
   if (ZH[normalized]) return before + ZH[normalized] + after;
-  const count = core.match(/^(Latest|Saved|Discarded) \((\d+)\)$/);
+  const count = core.match(/^(All|Latest|Saved|Discarded) \((\d+)\)$/);
   if (count) return `${before}${ZH[count[1]]} (${count[2]})${after}`;
   const online = core.match(/^(\d+)\/(\d+) servers online$/i);
   if (online) return `${before}${online[1]}/${online[2]} 台服务器在线${after}`;

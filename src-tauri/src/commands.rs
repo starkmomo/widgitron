@@ -778,6 +778,20 @@ pub async fn refresh_arxiv(
 }
 
 #[tauri::command]
+pub async fn get_arxiv_paper_page(
+    app: AppHandle, categories: Vec<String>, keywords: Vec<String>, date: Option<String>, page: usize,
+) -> Result<Option<crate::arxiv::ArxivPaperPage>, String> {
+    crate::arxiv::get_paper_page_cache(&app, &categories, &keywords, date.as_deref(), page)
+}
+
+#[tauri::command]
+pub async fn refresh_arxiv_paper_page(
+    app: AppHandle, categories: Vec<String>, keywords: Vec<String>, date: Option<String>, page: usize, force: bool,
+) -> Result<crate::arxiv::ArxivPaperPage, String> {
+    crate::arxiv::fetch_paper_page(&app, &categories, &keywords, date.as_deref(), page, force).await
+}
+
+#[tauri::command]
 pub async fn get_arxiv_saved_papers(app: AppHandle) -> Result<Vec<ArxivPaper>, String> {
     Ok(config_store::read_config::<Vec<ArxivPaper>>(
         &app,

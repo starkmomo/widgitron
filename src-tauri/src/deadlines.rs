@@ -7,6 +7,75 @@ use crate::config_store;
 use crate::models::{AppConfig, GlobalState, PaperConfig, PaperDeadlineInfo, YamlConfItem};
 
 const DEADLINES_CACHE_FILE: &str = "paper_deadlines_cache.json";
+// The old GitHub Pages URL redirects through HTTP. Use the current HTTPS
+// endpoint, with the same published YAML on GitHub as a fallback.
+const DEADLINE_SOURCES: &[&str] = &[
+    "https://ccfddl.com/conference/allconf.yml",
+    "https://raw.githubusercontent.com/ccfddl/ccfddl.github.io/page/conference/allconf.yml",
+];
+
+fn deadline_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("Could not initialize deadline request: {error}"))
+}
+
+fn request_error(error: reqwest::Error) -> String {
+    // reqwest's Display only says "error decoding response body" for a body
+    // timeout. Include the cause so the log explains the actual failure.
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
+async fn fetch_deadline_yaml(client: &reqwest::Client, sources: &[&str]) -> Result<String, String> {
+    let mut failures = Vec::new();
+    for url in sources {
+        let result = async {
+            let response = client.get(*url).send().await.map_err(request_error)?;
+            let response = response.error_for_status().map_err(request_error)?;
+            let text = response.text().await.map_err(request_error)?;
+            let checked = tokio::task::spawn_blocking(move || {
+                // Reject HTML, truncated YAML, and other invalid payloads before
+                // retaining a response for later settings changes.
+                let items: Vec<YamlConfItem> = serde_yaml::from_str(&text)
+                    .map_err(|error| format!("Invalid deadline data: {error}"))?;
+                if items.is_empty() {
+                    return Err("The deadline source returned no conference data".to_string());
+                }
+                Ok(text)
+            })
+            .await
+            .map_err(|error| format!("Deadline validation task failed: {error}"))??;
+            Ok::<_, String>(checked)
+        }
+        .await;
+        match result {
+            Ok(text) => {
+                log::info!(
+                    "Fetched Paper Deadlines YAML from {url} ({} bytes)",
+                    text.len()
+                );
+                return Ok(text);
+            }
+            Err(error) => {
+                log::warn!("Deadline source {url} failed: {error}");
+                failures.push(format!("{url}: {error}"));
+            }
+        }
+    }
+    Err(format!(
+        "Could not fetch deadline data. {}",
+        failures.join("; ")
+    ))
+}
 
 fn load_deadlines_cache(app: &AppHandle) -> Vec<PaperDeadlineInfo> {
     config_store::read_config::<Vec<PaperDeadlineInfo>>(app, DEADLINES_CACHE_FILE)
@@ -212,7 +281,9 @@ pub fn apply_deadline_fetch_success(
     #[cfg(target_os = "macos")]
     {
         let config = config_store::read_config::<PaperConfig>(app, "paper_deadline.json");
-        if let Err(error) = crate::macos_widget_snapshot::publish_deadline_snapshot(app, &config, &deadlines) {
+        if let Err(error) =
+            crate::macos_widget_snapshot::publish_deadline_snapshot(app, &config, &deadlines)
+        {
             log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
         }
     }
@@ -224,62 +295,39 @@ pub async fn fetch_and_update_paper_deadlines(
     app: &AppHandle,
     state: &GlobalState,
 ) -> Result<Vec<PaperDeadlineInfo>, String> {
+    fetch_and_update_with_client(app, state, &deadline_client()?).await
+}
+
+async fn fetch_and_update_with_client(
+    app: &AppHandle,
+    state: &GlobalState,
+    client: &reqwest::Client,
+) -> Result<Vec<PaperDeadlineInfo>, String> {
+    let text = fetch_deadline_yaml(client, DEADLINE_SOURCES).await?;
+    // Read the current selection after the request completes, so changes made
+    // while refreshing are reflected in the resulting list and widget snapshot.
     let config = config_store::read_config::<PaperConfig>(app, "paper_deadline.json");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
-    let url = "https://ccfddl.github.io/conference/allconf.yml";
-    let res = client.get(url).send().await.map_err(|e| e.to_string())?;
-    if !res.status().is_success() {
-        return Err(format!(
-            "Paper deadline API returned HTTP status {}",
-            res.status()
-        ));
-    }
-    let text = res.text().await.map_err(|e| e.to_string())?;
-    if let Ok(mut last) = state.last_yaml.lock() {
-        *last = Some(text.clone());
-    }
-    let config_clone = config.clone();
+    let text_to_parse = text.clone();
     let deadlines =
-        tokio::task::spawn_blocking(move || build_deadlines_from_yaml(&text, &config_clone))
+        tokio::task::spawn_blocking(move || build_deadlines_from_yaml(&text_to_parse, &config))
             .await
-            .map_err(|e| format!("Deadline parse task failed: {}", e))??;
+            .map_err(|error| format!("Deadline parse task failed: {error}"))??;
+    if let Ok(mut last) = state.last_yaml.lock() {
+        *last = Some(text);
+    }
     apply_deadline_fetch_success(app, state, deadlines.clone());
     Ok(deadlines)
 }
 
-pub fn process_deadlines(
-    app: AppHandle,
-    state: Arc<GlobalState>,
-    config: PaperConfig,
-    text: String,
-) {
-    let app_inner = app.clone();
-    let config_inner = config.clone();
-    let state_inner = state.clone();
-
-    // Offload heavy YAML parsing and processing to blocking thread
-    tokio::task::spawn_blocking(
-        move || match build_deadlines_from_yaml(&text, &config_inner) {
-            Ok(deadlines) => {
-                apply_deadline_fetch_success(&app_inner, state_inner.as_ref(), deadlines);
-            }
-            Err(e) => {
-                log::error!("Error parsing Paper Deadlines YAML: {}", e);
-                restore_and_emit_cached_deadlines(&app_inner, &state_inner, &e);
-            }
-        },
-    );
-}
-
 // --- Paper Deadline Polling Task ---
 pub async fn start_paper_monitor(app: AppHandle, state: Arc<GlobalState>) {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
+    let client = match deadline_client() {
+        Ok(client) => client,
+        Err(error) => {
+            restore_and_emit_cached_deadlines(&app, &state, &error);
+            return;
+        }
+    };
 
     // Populate state from disk cache on startup
     {
@@ -352,32 +400,11 @@ pub async fn start_paper_monitor(app: AppHandle, state: Arc<GlobalState>) {
             continue;
         }
 
-        // Use exact URL from Python code
-        let url = "https://ccfddl.github.io/conference/allconf.yml";
-        match client.get(url).send().await {
-            Ok(res) => {
-                if !res.status().is_success() {
-                    let err = format!("Paper deadline API returned HTTP status {}", res.status());
-                    log::error!("{}", err);
-                    restore_and_emit_cached_deadlines(&app, &state, &err);
-                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-                    backoff_secs = (backoff_secs * 2).min(900);
-                    continue;
-                }
-                if let Ok(text) = res.text().await {
-                    log::info!("Fetched Paper Deadlines YAML ({} bytes)", text.len());
-                    {
-                        if let Ok(mut last) = state.last_yaml.lock() {
-                            *last = Some(text.clone());
-                        }
-                    }
-                    process_deadlines(app.clone(), state.clone(), config.clone(), text);
-                    backoff_secs = 60;
-                }
-            }
-            Err(e) => {
-                log::error!("Error fetching paper deadlines: {}", e);
-                restore_and_emit_cached_deadlines(&app, &state, &e.to_string());
+        match fetch_and_update_with_client(&app, state.as_ref(), &client).await {
+            Ok(_) => backoff_secs = 60,
+            Err(error) => {
+                log::error!("Error fetching paper deadlines: {error}");
+                restore_and_emit_cached_deadlines(&app, &state, &error);
                 tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 backoff_secs = (backoff_secs * 2).min(900);
                 continue;
@@ -393,6 +420,101 @@ pub async fn start_paper_monitor(app: AppHandle, state: Arc<GlobalState>) {
             if !ac.deadline_enabled.unwrap_or(true) {
                 break;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const YAML: &str = "- title: Example\n  confs:\n  - year: '2100'\n    timeline:\n    - deadline: '2100-10-10 23:59:59'\n";
+    const GZIP_YAML: &[u8] = &[
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 211, 85, 40, 201, 44, 201, 73, 181, 82, 112, 173, 72,
+        204, 45, 200, 73, 229, 82, 80, 72, 206, 207, 75, 43, 182, 2, 50, 116, 21, 42, 83, 19, 139,
+        172, 20, 212, 141, 12, 13, 12, 212, 129, 2, 10, 64, 197, 185, 169, 57, 153, 121, 169, 86,
+        96, 158, 174, 66, 74, 106, 98, 10, 152, 15, 81, 164, 107, 8, 66, 10, 70, 198, 86, 166, 150,
+        64, 164, 206, 5, 0, 156, 225, 138, 230, 95, 0, 0, 0,
+    ];
+
+    async fn source(body: &[u8], gzip: bool, truncated: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = body.to_vec();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            stream.read(&mut request).await.unwrap();
+            let encoding = if gzip {
+                "Content-Encoding: gzip\r\n"
+            } else {
+                ""
+            };
+            let length = body.len() + if truncated { 100 } else { 0 };
+            let header = format!("HTTP/1.1 200 OK\r\nContent-Type: text/yaml\r\n{encoding}Content-Length: {length}\r\nConnection: close\r\n\r\n");
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(&body).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        format!("http://{address}/allconf.yml")
+    }
+
+    #[tokio::test]
+    async fn decodes_gzip_deadlines() {
+        let url = source(GZIP_YAML, true, false).await;
+        let text = fetch_deadline_yaml(&deadline_client().unwrap(), &[&url])
+            .await
+            .unwrap();
+        assert_eq!(text, YAML);
+        let config = PaperConfig {
+            filter_by_rank: None,
+            filter_by_core: None,
+            ..PaperConfig::default()
+        };
+        assert_eq!(build_deadlines_from_yaml(&text, &config).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn incomplete_response_uses_backup() {
+        let broken = source(b"- title:", false, true).await;
+        let backup = source(YAML.as_bytes(), false, false).await;
+        let text = fetch_deadline_yaml(&deadline_client().unwrap(), &[&broken, &backup])
+            .await
+            .unwrap();
+        assert_eq!(text, YAML);
+    }
+
+    #[tokio::test]
+    async fn invalid_payload_uses_backup_and_all_failures_return_error() {
+        let invalid = source(b"<html>unavailable</html>", false, false).await;
+        let backup = source(YAML.as_bytes(), false, false).await;
+        assert_eq!(
+            fetch_deadline_yaml(&deadline_client().unwrap(), &[&invalid, &backup])
+                .await
+                .unwrap(),
+            YAML
+        );
+        let empty = source(b"[]", false, false).await;
+        assert!(fetch_deadline_yaml(&deadline_client().unwrap(), &[&empty])
+            .await
+            .unwrap_err()
+            .contains("no conference data"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requests the live public deadline sources"]
+    async fn live_deadline_sources_are_readable() {
+        let client = deadline_client().unwrap();
+        for url in DEADLINE_SOURCES {
+            let text = fetch_deadline_yaml(&client, &[*url]).await.unwrap();
+            let deadlines = build_deadlines_from_yaml(&text, &PaperConfig::default()).unwrap();
+            assert!(!deadlines.is_empty());
+            println!(
+                "{url}: {} bytes, {} upcoming deadlines",
+                text.len(),
+                deadlines.len()
+            );
         }
     }
 }

@@ -25,6 +25,7 @@ use tauri::Manager;
 
 mod antigravity;
 mod arxiv;
+mod arxiv_download;
 mod commands;
 mod config_store;
 mod deadlines;
@@ -116,9 +117,12 @@ pub fn run() {
             commands::get_arxiv_saved_papers,
             commands::get_arxiv_discarded_papers,
             commands::open_link,
+            arxiv_download::download_arxiv_pdf,
             commands::remove_arxiv_saved_paper,
             commands::remove_arxiv_discarded_paper,
             commands::refresh_arxiv,
+            commands::get_arxiv_paper_page,
+            commands::refresh_arxiv_paper_page,
             commands::open_log_dir,
             commands::open_config_dir,
             commands::get_config_dir_path,

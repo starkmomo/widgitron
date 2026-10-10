@@ -1,8 +1,11 @@
 # Changelog
 
-## [Unreleased] - 2026-09-30
+## [Unreleased] - 2026-10-10
 
 ### 中文
+- **arXiv 日期与翻页**：在“最新”左侧增加“全部”页签，并在关键词设置旁提供提交日期（UTC）月历，统一页签与工具栏布局，并区分无论文和网络错误提示；“最新”的默认行为和关键词分组保持原样，选日期时查询当天匹配关键词的论文，“全部”不按关键词筛选，默认显示最近投稿日。每页 100 篇，使用上一页/下一页切换，按分类、关键词、日期和页码缓存已浏览内容，刷新失败时保留当前页。
+- **截止日期刷新**：更新数据源到当前 HTTPS 地址，支持 gzip 响应并在请求或解析失败时尝试 GitHub 备用源；手动刷新和后台更新共用处理逻辑，失败时保留缓存，并记录具体错误原因。
+- **arXiv 论文卡片**：标题完整换行显示，卡片列数按内容区域宽度调整；摘要按卡片剩余高度自动调整预览行数，避免短标题卡片留出大块空白；可点击“完整摘要”打开独立阅读面板，不改变卡片布局；分别提供打开 arXiv 页面和下载 PDF 的图标按钮。PDF 保存到系统下载目录，避免覆盖同名文件，并显示下载结果。侧边栏和浮窗使用相同操作。
 - **侧边栏启动修复**：状态查询不再触发窗口创建，初始化只由应用启动流程负责，并防止并发或重入创建重复控制器。增加设置保存、通知接收和界面更新的诊断记录。
 - **Windows 侧边栏**：将主题和模块开关的同步独立于服务初始化，避免其他配置加载失败导致订阅缺失；防止旧请求覆盖新的配置和展开状态，并即时提交侧边栏显示更新。保留原有模糊外观。拖动结束后及时清除移动提示，自定义标题栏颜色也会应用到侧边栏。
 - **设置修复**：设置页选中框打开时不再滑入；主页面的“添加额度监控”和“添加服务器”仅展开设置，额度服务商在明确选择后才新增，不再自动创建 Antigravity。浅色界面的 Cursor 图标现在清晰可见。
@@ -14,6 +17,9 @@
 - **arXiv**：不设置关键词时显示所选分类的近期论文，并改进空状态提示。
 
 ### English
+- **arXiv dates and pagination**: Add All before Latest and a submission date (UTC) calendar beside keyword settings, stabilize tab and toolbar layout, and distinguish empty dates from network errors. Preserve the default Latest behavior and keyword groups; a selected date queries that day's keyword matches. All ignores keywords and defaults to the latest submission day. Display 100 papers per page with Previous/Next navigation, cache browsed pages by categories, keywords, date and page number, and preserve the current page on refresh failure.
+- **Deadline refresh**: Use the current HTTPS data source with gzip support and a GitHub fallback for request or parsing failures. Manual and background refreshes share the same handling, preserve cached data on failure, and log the underlying error.
+- **arXiv paper cards**: Show complete wrapping titles and adapt column count to the available content width. Adapt abstract preview line counts to the available card height, with a full abstract reading dialog that preserves the card layout. Provide separate icon buttons for opening the arXiv page and downloading the PDF to the system Downloads folder, without overwriting existing files, and show download feedback. Sidebar and floating widgets use the same actions.
 - **Sidebar startup fix**: State queries no longer create windows. Application setup owns initialization, with a nonblocking guard against concurrent or reentrant controller creation. Added diagnostics for settings saves, notification delivery, and UI updates.
 - **Windows sidebar**: Subscribe to theme and module settings independently of service initialization, so unrelated loading failures cannot block updates. Prevent stale reads from replacing newer settings or reveal events, and commit sidebar appearance updates immediately. Preserve the original blur styling. Clear the moving overlay when dragging ends, and apply custom header colors.
 - **Settings fixes**: The selected settings tab no longer slides in on open. Dashboard add buttons only reveal the quota or server settings; a quota monitor is created only after a provider is chosen, with no automatic Antigravity entry. The Cursor icon remains visible on light backgrounds.

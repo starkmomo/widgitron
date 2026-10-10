@@ -13,6 +13,9 @@ import { ALL_ARXIV_KEYWORDS, UNCATEGORIZED_ARXIV_KEYWORD, filterArxivPapersByKey
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
+import { arxivPaperLinks } from "../utils/arxivPaperLinks";
+import { ArxivPaperActions } from "../components/ArxivPaperActions";
+import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
 
 type SwipeDirection = "left" | "right" | "up";
 
@@ -198,7 +201,8 @@ export function ArxivWidgetContent({
       await tauriInvoke("mark_arxiv_seen", { id: paper.id, saved: true });
       setCurrentIndex((prev) => prev + 1);
     } else if (direction === "up") {
-      await tauriInvoke("open_link", { url: paper.link });
+      const links = arxivPaperLinks(paper);
+      if (links) await tauriInvoke("open_link", { url: links.pageUrl });
     }
   };
 
@@ -390,14 +394,11 @@ export function ArxivWidgetContent({
               data-no-drag="true"
               className="absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-5 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
             >
-              <h3 className="text-[10px] font-bold mb-3 leading-relaxed">{currentPaper.title}</h3>
-              <p
-                className="text-[9px] opacity-60 mb-4 line-clamp-10 leading-relaxed"
-                style={{ color: subText }}
-              >
-                {currentPaper.summary}
-              </p>
-              <div className="mt-auto pt-4 border-t border-white/5">
+              <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1">
+                <h3 className="shrink-0 text-[10px] font-bold mb-3 leading-relaxed break-words">{currentPaper.title}</h3>
+                <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} />
+              </div>
+              <div className="shrink-0 pt-3 border-t border-white/5 space-y-2">
                 <div className="flex flex-wrap gap-1">
                   <span
                     className="text-[8px] bg-white/5 px-2 py-0.5 rounded-full font-medium"
@@ -413,10 +414,11 @@ export function ArxivWidgetContent({
                     )}
                   </span>
                 </div>
+                <ArxivPaperActions key={currentPaper.id} paper={currentPaper} compact />
                 {arxivConfig.show_card_hints !== false && (
                   <div className="flex items-center justify-between mt-3 text-[8px] font-black uppercase tracking-widest">
                     <span className="text-red-400">← Discard</span>
-                    <span className="text-blue-400">Open PDF ↑</span>
+                    <span className="text-blue-400">Open arXiv ↑</span>
                     <span className="text-emerald-400">Save →</span>
                   </div>
                 )}

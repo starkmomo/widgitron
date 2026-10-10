@@ -105,3 +105,13 @@ body {
 .light-theme ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.2);
 }
+
+/* Reserve two header rows so counts and dates cannot move the action controls. */
+.arxiv-header { container-type: inline-size; }
+.arxiv-header-main { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.arxiv-view-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(100%, 28rem); flex-shrink: 0; }
+@container (max-width: 640px) {
+  .arxiv-header-main { flex-direction: column; align-items: flex-start; }
+  .arxiv-view-tabs { width: 100%; }
+  .arxiv-service-label { display: none; }
+}
