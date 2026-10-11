@@ -79,6 +79,13 @@ body {
   box-shadow: inset 0 0 0 1px #cbd5e1;
 }
 
+/* AppKit clips the macOS main window and draws its outline and shadow.
+   A second CSS curve/stroke would be clipped by the native window corners. */
+.macos-dashboard {
+  border: none;
+  border-radius: 0;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

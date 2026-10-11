@@ -2294,7 +2294,7 @@ function App() {
   return (
     <div
       className={`absolute inset-0 flex overflow-hidden ${appConfig.theme === "light" ? "light-theme" : ""} glass ${
-        isMaximized ? "rounded-none" : "rounded-xl dashboard-accent-border"
+        isMacOS ? "macos-dashboard" : isMaximized ? "rounded-none" : "rounded-xl dashboard-accent-border"
       }`}
     >
       {/* Sidebar */}

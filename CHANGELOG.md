@@ -1,8 +1,9 @@
 # Changelog
 
-## [Unreleased] - 2026-10-10
+## [Unreleased] - 2026-10-11
 
 ### 中文
+- **macOS 窗口边缘**：主窗口统一使用系统圆角、轮廓与阴影，修正网页描边与原生圆角叠加时四角轮廓断开的外观。
 - **arXiv 日期与翻页**：在“最新”左侧增加“全部”页签，并在关键词设置旁提供提交日期（UTC）月历，统一页签与工具栏布局，并区分无论文和网络错误提示；“最新”的默认行为和关键词分组保持原样，选日期时查询当天匹配关键词的论文，“全部”不按关键词筛选，默认显示最近投稿日。每页 100 篇，使用上一页/下一页切换，按分类、关键词、日期和页码缓存已浏览内容，刷新失败时保留当前页。
 - **截止日期刷新**：更新数据源到当前 HTTPS 地址，支持 gzip 响应并在请求或解析失败时尝试 GitHub 备用源；手动刷新和后台更新共用处理逻辑，失败时保留缓存，并记录具体错误原因。
 - **arXiv 论文卡片**：标题完整换行显示，卡片列数按内容区域宽度调整；摘要按卡片剩余高度自动调整预览行数，避免短标题卡片留出大块空白；可点击“完整摘要”打开独立阅读面板，不改变卡片布局；分别提供打开 arXiv 页面和下载 PDF 的图标按钮。PDF 保存到系统下载目录，避免覆盖同名文件，并显示下载结果。侧边栏和浮窗使用相同操作。
@@ -17,6 +18,7 @@
 - **arXiv**：不设置关键词时显示所选分类的近期论文，并改进空状态提示。
 
 ### English
+- **macOS window edges**: Use the system corner clipping, outline, and shadow for the main window, avoiding broken corner outlines caused by overlapping web and native window borders.
 - **arXiv dates and pagination**: Add All before Latest and a submission date (UTC) calendar beside keyword settings, stabilize tab and toolbar layout, and distinguish empty dates from network errors. Preserve the default Latest behavior and keyword groups; a selected date queries that day's keyword matches. All ignores keywords and defaults to the latest submission day. Display 100 papers per page with Previous/Next navigation, cache browsed pages by categories, keywords, date and page number, and preserve the current page on refresh failure.
 - **Deadline refresh**: Use the current HTTPS data source with gzip support and a GitHub fallback for request or parsing failures. Manual and background refreshes share the same handling, preserve cached data on failure, and log the underlying error.
 - **arXiv paper cards**: Show complete wrapping titles and adapt column count to the available content width. Adapt abstract preview line counts to the available card height, with a full abstract reading dialog that preserves the card layout. Provide separate icon buttons for opening the arXiv page and downloading the PDF to the system Downloads folder, without overwriting existing files, and show download feedback. Sidebar and floating widgets use the same actions.
