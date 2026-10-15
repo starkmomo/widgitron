@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Local, TimeZone};
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
@@ -8,6 +8,75 @@ use crate::models::{AppConfig, ArxivConfig, ArxivPaper, GlobalState};
 const ARXIV_PAGE_SIZE: usize = 100;
 const ARXIV_MIN_PAPERS_PER_KEYWORD: usize = 10;
 const ARXIV_MIN_PAPERS_WITHOUT_KEYWORDS: usize = 20;
+const ARXIV_BROWSE_CACHE_FILE: &str = "arxiv_browse_cache.json";
+const ARXIV_BROWSE_CACHE_VERSION: u8 = 1;
+const ARXIV_BROWSE_MAX_CACHED_PAGES: usize = 24;
+static BROWSE_FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static API_REQUEST_LOCK: tokio::sync::Mutex<Option<tokio::time::Instant>> =
+    tokio::sync::Mutex::const_new(None);
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ArxivPaperPage {
+    papers: Vec<ArxivPaper>,
+    data_date: Option<String>,
+    total: usize,
+    page: usize,
+    page_size: usize,
+    fresh: bool,
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct CachedPaperPage {
+    query: String,
+    requested_date: Option<String>,
+    fetched_at: i64,
+    result: ArxivPaperPage,
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct BrowseCache {
+    version: u8,
+    pages: Vec<CachedPaperPage>,
+}
+
+fn cached_paper_page(
+    cache: &BrowseCache,
+    query: &str,
+    date: Option<&str>,
+    page: usize,
+    now: i64,
+) -> Option<ArxivPaperPage> {
+    if cache.version != ARXIV_BROWSE_CACHE_VERSION {
+        return None;
+    }
+    let cached = cache.pages.iter().find(|cached| {
+        cached.query == query
+            && cached.requested_date.as_deref() == date
+            && cached.result.page == page
+    })?;
+    let mut result = cached.result.clone();
+    // Historical dates are stable; the automatic latest-day lookup expires sooner.
+    let ttl = if date.is_some() { 86400 } else { 3600 };
+    result.fresh = (0..ttl).contains(&(now - cached.fetched_at));
+    Some(result)
+}
+
+pub fn get_paper_page_cache(
+    app: &AppHandle,
+    categories: &[String],
+    keywords: &[String],
+    date: Option<&str>,
+    page: usize,
+) -> Result<Option<ArxivPaperPage>, String> {
+    validate_browse_request(date, page)?;
+    Ok(cached_paper_page(
+        &config_store::read_config::<BrowseCache>(app, ARXIV_BROWSE_CACHE_FILE),
+        &build_browse_query(categories, keywords),
+        date,
+        page,
+        Utc::now().timestamp(),
+    ))
+}
 
 fn normalize_keyword(keyword: &str) -> String {
     keyword.trim().trim_matches('"').to_lowercase()
@@ -146,6 +215,7 @@ fn parse_arxiv_response(
     let mut buf = Vec::new();
     let mut papers = Vec::new();
     let mut total_results = None;
+    let mut feed_complete = false;
 
     let mut current_paper = ArxivPaper {
         id: String::new(),
@@ -237,8 +307,13 @@ fn parse_arxiv_response(
             }
             Ok(Event::End(e)) => {
                 let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                if name == "entry" {
+                if name == "feed" {
+                    feed_complete = true;
+                } else if name == "entry" {
                     in_entry = false;
+                    if current_paper.id.contains("arxiv.org/api/errors") {
+                        return Err(format!("Arxiv API error: {}", current_paper.summary));
+                    }
                     current_paper.matched_keywords =
                         matched_keywords_for_paper(&current_paper, keywords);
                     papers.push(current_paper.clone());
@@ -276,7 +351,36 @@ fn parse_arxiv_response(
         buf.clear();
     }
 
+    if !feed_complete || in_entry {
+        return Err("Incomplete or invalid arXiv response".to_string());
+    }
     Ok((papers, total_results))
+}
+
+fn collect_query_page(
+    papers: &mut Vec<ArxivPaper>,
+    page: Vec<ArxivPaper>,
+    today_start: DateTime<Local>,
+    tomorrow_start: DateTime<Local>,
+    minimum_count: Option<usize>,
+) -> bool {
+    for paper in page {
+        match paper_updated_at(&paper) {
+            Some(updated) if updated >= today_start && updated < tomorrow_start => {
+                papers.push(paper)
+            }
+            Some(updated) if updated < today_start => {
+                if minimum_count.is_some_and(|min| papers.len() < min) {
+                    papers.push(paper);
+                }
+                if minimum_count.map_or(true, |min| papers.len() >= min) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 async fn fetch_arxiv_page(
@@ -285,18 +389,43 @@ async fn fetch_arxiv_page(
     start: usize,
     keywords: &[String],
 ) -> Result<(Vec<ArxivPaper>, Option<usize>), String> {
+    fetch_arxiv_page_with_options(
+        client,
+        query,
+        start,
+        keywords,
+        ARXIV_PAGE_SIZE,
+        "lastUpdatedDate",
+    )
+    .await
+}
+
+async fn fetch_arxiv_page_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    start: usize,
+    keywords: &[String],
+    page_size: usize,
+    sort_by: &str,
+) -> Result<(Vec<ArxivPaper>, Option<usize>), String> {
     let start_param = start.to_string();
-    let page_size_param = ARXIV_PAGE_SIZE.to_string();
+    let page_size_param = page_size.to_string();
     let params = [
         ("search_query", query),
         ("start", start_param.as_str()),
         ("max_results", page_size_param.as_str()),
-        ("sortBy", "lastUpdatedDate"),
+        ("sortBy", sort_by),
         ("sortOrder", "descending"),
     ];
     let url = reqwest::Url::parse_with_params("https://export.arxiv.org/api/query", &params)
         .map_err(|e| e.to_string())?;
 
+    // Pace all API requests, including background keywords and manual page changes.
+    let mut last_request = API_REQUEST_LOCK.lock().await;
+    if let Some(last) = *last_request {
+        tokio::time::sleep(Duration::from_secs(3).saturating_sub(last.elapsed())).await;
+    }
+    *last_request = Some(tokio::time::Instant::now());
     let res = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !res.status().is_success() {
         return Err(format!("Arxiv API returned HTTP status {}", res.status()));
@@ -318,7 +447,7 @@ async fn fetch_papers_for_query(
     let mut total_results = None;
 
     loop {
-        let (mut page_papers, page_total_results) =
+        let (page_papers, page_total_results) =
             fetch_arxiv_page(client, query, start, keywords).await?;
 
         if total_results.is_none() {
@@ -326,25 +455,13 @@ async fn fetch_papers_for_query(
         }
 
         let fetched_count = page_papers.len();
-        let mut should_stop = false;
-
-        for paper in page_papers.drain(..) {
-            match paper_updated_at(&paper) {
-                Some(updated_at) if updated_at >= today_start && updated_at < tomorrow_start => {
-                    papers.push(paper);
-                }
-                Some(updated_at) if updated_at < today_start => {
-                    if minimum_count.is_some_and(|min| papers.len() < min) {
-                        papers.push(paper);
-                    }
-                    if minimum_count.map_or(true, |min| papers.len() >= min) {
-                        should_stop = true;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
+        let should_stop = collect_query_page(
+            &mut papers,
+            page_papers,
+            today_start,
+            tomorrow_start,
+            minimum_count,
+        );
 
         if should_stop || fetched_count < ARXIV_PAGE_SIZE {
             break;
@@ -354,15 +471,15 @@ async fn fetch_papers_for_query(
         if total_results.is_some_and(|total| start >= total) {
             break;
         }
+        // The all-papers view can span many pages. Pace requests rather than
+        // issuing a burst against the public API.
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 
     Ok(papers)
 }
 
-pub async fn perform_arxiv_fetch(
-    app: &AppHandle,
-    state: &GlobalState,
-) -> Result<Vec<ArxivPaper>, String> {
+fn arxiv_client(app: &AppHandle) -> Result<reqwest::Client, String> {
     let app_config = config_store::read_config::<AppConfig>(app, "app_config.json");
     let mut client_builder = reqwest::Client::builder()
         .user_agent("Widgitron/1.0 (contact: researcher@widgitron.app)")
@@ -379,7 +496,162 @@ pub async fn perform_arxiv_fetch(
         client_builder = client_builder.proxy(proxy);
     }
 
-    let client = client_builder.build().map_err(|e| e.to_string())?;
+    client_builder.build().map_err(|e| e.to_string())
+}
+
+fn validate_browse_request(date: Option<&str>, page: usize) -> Result<(), String> {
+    if page == 0 || page > 300 {
+        return Err("Invalid arXiv page number".to_string());
+    }
+    if let Some(date) = date {
+        let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| "Invalid arXiv submission date".to_string())?;
+        if parsed.to_string() != date {
+            return Err("Invalid arXiv submission date".to_string());
+        }
+    } else if page != 1 {
+        return Err("Choose an arXiv date before requesting another page".to_string());
+    }
+    Ok(())
+}
+
+fn build_browse_query(categories: &[String], keywords: &[String]) -> String {
+    let categories = build_category_query(categories);
+    let terms: Vec<_> = get_unique_keywords(keywords)
+        .iter()
+        .filter_map(|keyword| arxiv_keyword_query(keyword))
+        .collect();
+    if terms.is_empty() {
+        categories
+    } else {
+        format!("{} AND ({})", categories, terms.join(" OR "))
+    }
+}
+
+fn query_for_submission_date(query: &str, date: &str) -> Result<String, String> {
+    validate_browse_request(Some(date), 1)?;
+    let day = date.replace('-', "");
+    Ok(format!(
+        "{} AND submittedDate:[{}0000 TO {}2359]",
+        query, day, day
+    ))
+}
+
+async fn fetch_browse_page(
+    client: &reqwest::Client,
+    query: &str,
+    keywords: &[String],
+    requested_date: Option<&str>,
+    page: usize,
+) -> Result<ArxivPaperPage, String> {
+    validate_browse_request(requested_date, page)?;
+    let data_date = if let Some(date) = requested_date {
+        Some(date.to_string())
+    } else {
+        // Find the latest available submission day, rather than guessing today/yesterday.
+        let (recent, total) =
+            fetch_arxiv_page_with_options(client, query, 0, keywords, 1, "submittedDate").await?;
+        if recent.is_empty() {
+            if total.is_some_and(|total| total > 0) {
+                return Err("arXiv returned an incomplete page. Please refresh again.".to_string());
+            }
+            None
+        } else {
+            Some(
+                DateTime::parse_from_rfc3339(&recent[0].published)
+                    .map_err(|_| "arXiv returned an invalid submission date".to_string())?
+                    .with_timezone(&Utc)
+                    .date_naive()
+                    .to_string(),
+            )
+        }
+    };
+    let Some(date) = data_date else {
+        return Ok(ArxivPaperPage {
+            page,
+            page_size: ARXIV_PAGE_SIZE,
+            fresh: true,
+            ..Default::default()
+        });
+    };
+    let dated_query = query_for_submission_date(query, &date)?;
+    let start = (page - 1) * ARXIV_PAGE_SIZE;
+    let (papers, total) = fetch_arxiv_page_with_options(
+        client,
+        &dated_query,
+        start,
+        keywords,
+        ARXIV_PAGE_SIZE,
+        "submittedDate",
+    )
+    .await?;
+    let total = total.ok_or_else(|| "arXiv did not return the paper count".to_string())?;
+    if papers.is_empty() && total > start {
+        return Err("arXiv returned an incomplete page. Please refresh again.".to_string());
+    }
+    Ok(ArxivPaperPage {
+        papers,
+        data_date: Some(date),
+        total,
+        page,
+        page_size: ARXIV_PAGE_SIZE,
+        fresh: true,
+    })
+}
+
+pub async fn fetch_paper_page(
+    app: &AppHandle,
+    categories: &[String],
+    keywords: &[String],
+    date: Option<&str>,
+    page: usize,
+    force: bool,
+) -> Result<ArxivPaperPage, String> {
+    validate_browse_request(date, page)?;
+    let _guard = BROWSE_FETCH_LOCK.lock().await;
+    let query = build_browse_query(categories, keywords);
+    let mut cache = config_store::read_config::<BrowseCache>(app, ARXIV_BROWSE_CACHE_FILE);
+    if !force {
+        if let Some(result) = cached_paper_page(&cache, &query, date, page, Utc::now().timestamp())
+            .filter(|result| result.fresh)
+        {
+            return Ok(result);
+        }
+    }
+    let result = fetch_browse_page(&arxiv_client(app)?, &query, keywords, date, page).await?;
+    if cache.version != ARXIV_BROWSE_CACHE_VERSION {
+        cache = BrowseCache {
+            version: ARXIV_BROWSE_CACHE_VERSION,
+            pages: Vec::new(),
+        };
+    }
+    cache.pages.retain(|cached| {
+        !(cached.query == query
+            && cached.requested_date.as_deref() == date
+            && cached.result.page == page)
+    });
+    cache.pages.push(CachedPaperPage {
+        query,
+        requested_date: date.map(str::to_string),
+        fetched_at: Utc::now().timestamp(),
+        result: result.clone(),
+    });
+    if cache.pages.len() > ARXIV_BROWSE_MAX_CACHED_PAGES {
+        cache
+            .pages
+            .drain(..cache.pages.len() - ARXIV_BROWSE_MAX_CACHED_PAGES);
+    }
+    if let Err(error) = config_store::write_config(app, ARXIV_BROWSE_CACHE_FILE, &cache) {
+        log::warn!("Could not cache the arXiv page: {error}");
+    }
+    Ok(result)
+}
+
+pub async fn perform_arxiv_fetch(
+    app: &AppHandle,
+    state: &GlobalState,
+) -> Result<Vec<ArxivPaper>, String> {
+    let client = arxiv_client(app)?;
 
     let config = config_store::read_config::<ArxivConfig>(app, "arxiv_config.json");
 
@@ -490,11 +762,9 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
             if let Ok(metadata) = std::fs::metadata(&cache_path) {
                 if let Ok(modified) = metadata.modified() {
                     if let Ok(elapsed) = modified.elapsed() {
-                        let has_cached_papers = !config_store::read_config::<Vec<ArxivPaper>>(
-                            &app,
-                            "arxiv_cache.json",
-                        )
-                        .is_empty();
+                        let has_cached_papers =
+                            !config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_cache.json")
+                                .is_empty();
                         if elapsed < Duration::from_secs(1800) && has_cached_papers {
                             // 30 minutes
                             skip_fetch = true;
@@ -564,5 +834,95 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paper(id: usize, updated: DateTime<Local>) -> ArxivPaper {
+        ArxivPaper {
+            id: format!("https://arxiv.org/abs/2610.{id:05}v1"),
+            title: "A paper unrelated to the configured keyword".into(),
+            summary: "An abstract about a different research area".into(),
+            matched_keywords: Vec::new(),
+            authors: vec!["Researcher".into()],
+            link: String::new(),
+            published: updated.to_rfc3339(),
+            updated: updated.to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn date_queries_use_utc_submission_ranges_and_preserve_keyword_filters() {
+        let query = build_browse_query(&["cs.AI".into()], &["omni".into(), "agentic rl".into()]);
+        assert_eq!(
+            query,
+            "(cat:cs.AI*) AND (all:omni OR (all:agentic AND all:rl))"
+        );
+        assert_eq!(query_for_submission_date(&query, "2026-10-08").unwrap(),
+            "(cat:cs.AI*) AND (all:omni OR (all:agentic AND all:rl)) AND submittedDate:[202610080000 TO 202610082359]");
+        assert_eq!(build_browse_query(&["cs".into()], &[]), "(cat:cs*)");
+        assert!(query_for_submission_date(&query, "2026-02-30").is_err());
+        assert!(validate_browse_request(None, 2).is_err());
+        assert!(validate_browse_request(Some("2026-10-08"), 0).is_err());
+    }
+
+    #[test]
+    fn page_cache_is_isolated_by_date_keywords_and_page() {
+        let cache = BrowseCache {
+            version: ARXIV_BROWSE_CACHE_VERSION,
+            pages: vec![CachedPaperPage {
+                query: "cat:cs* AND all:omni".into(),
+                requested_date: Some("2026-10-08".into()),
+                fetched_at: 100,
+                result: ArxivPaperPage {
+                    page: 2,
+                    total: 137,
+                    data_date: Some("2026-10-08".into()),
+                    papers: vec![paper(101, Local::now())],
+                    ..Default::default()
+                },
+            }],
+        };
+        let query = "cat:cs* AND all:omni";
+        let found = cached_paper_page(&cache, query, Some("2026-10-08"), 2, 200).unwrap();
+        assert!(found.fresh);
+        assert_eq!(found.total, 137);
+        assert_eq!(found.papers.len(), 1);
+        assert!(cached_paper_page(&cache, query, Some("2026-10-09"), 2, 200).is_none());
+        assert!(cached_paper_page(&cache, query, Some("2026-10-08"), 1, 200).is_none());
+        assert!(cached_paper_page(&cache, "cat:cs*", Some("2026-10-08"), 2, 200).is_none());
+        assert!(
+            !cached_paper_page(&cache, query, Some("2026-10-08"), 2, 90000)
+                .unwrap()
+                .fresh
+        );
+    }
+
+    #[test]
+    fn latest_keyword_view_retains_its_recent_paper_fallback() {
+        let (start, end) = today_local_bounds().unwrap();
+        let mut latest = Vec::new();
+        assert!(!collect_query_page(
+            &mut latest,
+            vec![paper(1, start - chrono::Duration::seconds(1))],
+            start,
+            end,
+            Some(20)
+        ));
+        assert_eq!(latest.len(), 1);
+    }
+
+    #[test]
+    fn invalid_or_truncated_feed_is_not_a_successful_empty_day() {
+        assert!(parse_arxiv_response("<html>Temporary error</html>", &[]).is_err());
+        assert!(parse_arxiv_response("<feed><entry><title>Incomplete", &[]).is_err());
+        let (papers, total) = parse_arxiv_response(
+            "<feed xmlns='http://www.w3.org/2005/Atom'><opensearch:totalResults xmlns:opensearch='http://a9.com/-/spec/opensearch/1.1/'>0</opensearch:totalResults></feed>", &[],
+        ).unwrap();
+        assert!(papers.is_empty());
+        assert_eq!(total, Some(0));
     }
 }

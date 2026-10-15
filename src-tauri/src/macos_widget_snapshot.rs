@@ -109,6 +109,10 @@ struct DeadlineSnapshotItem<'a> {
     title: &'a str,
     year: &'a str,
     deadline_utc: &'a str,
+    deadline_stage: &'a crate::models::DeadlineStage,
+    deadline_note: Option<&'a str>,
+    deadline_label: &'a str,
+    timeline: &'a [crate::models::DeadlineMilestone],
 }
 
 fn language(app: &AppHandle) -> String {
@@ -171,52 +175,45 @@ pub fn publish_deadline_snapshot(
     deadlines: &[PaperDeadlineInfo],
 ) -> Result<(), String> {
     let language = language(app);
-    let has_selections = config.subscribed_titles.as_ref().is_some_and(|items| !items.is_empty())
+    let has_selections = config.followed_conference_ids.as_ref().is_some_and(|items| !items.is_empty())
+        || config.subscribed_titles.as_ref().is_some_and(|items| !items.is_empty())
         || config.pinned_deadline_ids.as_ref().is_some_and(|items| !items.is_empty());
-    let items = selected_deadlines(config, deadlines).into_iter().map(|deadline| DeadlineSnapshotItem {
+    let selected = selected_deadlines(config, deadlines);
+    let items = selected.iter().map(|deadline| DeadlineSnapshotItem {
         title: &deadline.title,
         year: &deadline.year,
         deadline_utc: &deadline.deadline_utc,
+        deadline_stage: &deadline.deadline_stage,
+        deadline_note: deadline.deadline_note.as_deref(),
+        deadline_label: &deadline.deadline_label,
+        timeline: &deadline.timeline,
     }).collect();
     write_snapshot(app, "deadline-snapshot.json", &DeadlineSnapshot { language: &language, has_selections, items })
 }
 
-fn selected_deadlines<'a>(config: &PaperConfig, deadlines: &'a [PaperDeadlineInfo]) -> Vec<&'a PaperDeadlineInfo> {
-    let subscribed: HashSet<String> = config.subscribed_titles.as_ref().into_iter().flatten()
-        .map(|title| title.trim().to_lowercase()).collect();
-    let pinned: HashSet<&str> = config.pinned_deadline_ids.as_ref().into_iter().flatten()
-        .map(String::as_str).collect();
+fn selected_deadlines(config: &PaperConfig, deadlines: &[PaperDeadlineInfo]) -> Vec<PaperDeadlineInfo> {
+    let mut normalized = config.clone();
+    crate::deadlines::migrate_conference_preferences(&mut normalized, deadlines, chrono::Utc::now());
+    let config = &normalized;
+    let ignored: HashSet<String> = config.ignored_conference_ids.iter().flatten().cloned().collect();
+    let followed: HashSet<String> = config.followed_conference_ids.iter().flatten().cloned().collect();
     let now = chrono::Utc::now();
-    let mut by_conference: HashMap<_, (&PaperDeadlineInfo, bool, chrono::DateTime<chrono::Utc>)> = HashMap::new();
+    let mut by_conference: HashMap<String, PaperDeadlineInfo> = HashMap::new();
     for deadline in deadlines {
-        let key = format!("{}|{}|{}", deadline.title.trim().to_lowercase(), deadline.year.trim().to_lowercase(), deadline.deadline_utc.trim());
-        let is_pinned = pinned.contains(key.as_str());
-        if !is_pinned && !subscribed.contains(&deadline.title.trim().to_lowercase()) {
-            continue;
-        }
-        let Ok(date) = chrono::DateTime::parse_from_rfc3339(&deadline.deadline_utc) else {
-            continue;
-        };
-        let date = date.with_timezone(&chrono::Utc);
-        if date <= now {
-            continue;
-        }
-
-        let conference = (deadline.title.trim().to_lowercase(), deadline.year.trim().to_lowercase());
-        let replace = match by_conference.get(&conference) {
-            None => true,
-            Some((_, current_pinned, current_date)) => {
-                (is_pinned && !*current_pinned)
-                    || (is_pinned == *current_pinned && date < *current_date)
-            }
-        };
-        if replace {
-            by_conference.insert(conference, (deadline, is_pinned, date));
+        let conference = crate::deadlines::conference_id(&deadline.title, &deadline.year);
+        if ignored.contains(&conference) || !followed.contains(&conference) { continue; }
+        let Some(projected) = crate::deadlines::project_deadline(deadline, now) else { continue };
+        let time = |item: &PaperDeadlineInfo| if item.deadline_utc.is_empty() { "9999".to_string() } else { item.deadline_utc.clone() };
+        if by_conference.get(&conference).is_none_or(|current| time(&projected) < time(current)) {
+            by_conference.insert(conference, projected);
         }
     }
     let mut selected: Vec<_> = by_conference.into_values().collect();
-    selected.sort_by(|a, b| a.2.cmp(&b.2));
-    selected.into_iter().map(|(deadline, _, _)| deadline).collect()
+    selected.sort_by(|a, b| {
+        let time = |item: &PaperDeadlineInfo| if item.deadline_utc.is_empty() { "9999".to_string() } else { item.deadline_utc.clone() };
+        time(a).cmp(&time(b))
+    });
+    selected
 }
 
 fn write_snapshot<T: Serialize>(app: &AppHandle, file: &str, snapshot: &T) -> Result<(), String> {
@@ -305,6 +302,7 @@ mod tests {
     fn deadline(title: &str, days_from_now: i64) -> PaperDeadlineInfo {
         PaperDeadlineInfo {
             title: title.to_string(),
+            description: None,
             year: "2026".to_string(),
             deadline_utc: (chrono::Utc::now() + chrono::Duration::days(days_from_now)).to_rfc3339(),
             timezone: "UTC".to_string(),
@@ -314,6 +312,10 @@ mod tests {
             link: String::new(),
             ccf: None,
             core: None,
+            deadline_stage: crate::models::DeadlineStage::Unspecified,
+            deadline_note: None,
+            deadline_label: String::new(),
+            timeline: Vec::new(),
         }
     }
 
@@ -332,6 +334,23 @@ mod tests {
         let selected = selected_deadlines(&config, &deadlines);
         assert_eq!(selected.iter().map(|item| item.title.as_str()).collect::<Vec<_>>(), vec!["NeurIPS", "ICML"]);
         assert!(selected_deadlines(&PaperConfig::default(), &deadlines).is_empty());
+        let ignored = PaperConfig { ignored_titles: Some(vec!["NEURIPS".into()]), ..config };
+        assert_eq!(selected_deadlines(&ignored, &deadlines).iter().map(|item| item.title.as_str()).collect::<Vec<_>>(), vec!["ICML"]);
+    }
+
+    #[test]
+    fn follows_only_the_selected_edition_and_never_expired_entries() {
+        let mut current = deadline("CVPR", 3);
+        current.year = "2027".into();
+        let mut next = deadline("CVPR", 30);
+        next.year = "2028".into();
+        let config = PaperConfig { followed_conference_ids: Some(vec!["cvpr|2027".into()]), ..PaperConfig::default() };
+        let selected = selected_deadlines(&config, &[current, next]);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].year, "2027");
+        let mut expired = deadline("CVPR", -1);
+        expired.year = "2027".into();
+        assert!(selected_deadlines(&config, &[expired]).is_empty());
     }
 
     #[test]
@@ -355,6 +374,6 @@ mod tests {
         };
         let selected = selected_deadlines(&pinned_config, &deadlines);
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].deadline_utc, second.deadline_utc);
+        assert_eq!(selected[0].deadline_utc, first.deadline_utc);
     }
 }

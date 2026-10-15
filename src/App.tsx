@@ -11,13 +11,10 @@ import {
   Activity,
   Lock,
   Unlock,
-  Bell,
   Pin,
   PinOff,
   Monitor,
-  Trophy,
   Copy,
-  ExternalLink,
   Trash2,
   RefreshCw,
   Gauge,
@@ -41,6 +38,11 @@ import {
 } from "./utils/statHints";
 import { tauriInvoke } from "./utils/tauriInvoke";
 import { tauriListen } from "./utils/tauriListen";
+import { ArxivPaperActions } from "./components/ArxivPaperActions";
+import { ArxivAbstractPreview } from "./components/ArxivAbstractPreview";
+import { useArxivPaperPages } from "./hooks/useArxivPaperPages";
+import { ArxivDateFilter } from "./components/ArxivDateFilter";
+import { ArxivPagination } from "./components/ArxivPagination";
 import { startWindowSnapshotSync } from "./utils/windowSnapshotSync";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -72,8 +74,9 @@ import { StatCard } from "./components/StatCard";
 import { SectionEmptyState } from "./components/SectionEmptyState";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
-import { DeadlineCountdown } from "./components/DeadlineCountdown";
-import { deadlineInstanceKey } from "./utils/deadlineKeys";
+import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
+import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
+import { updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
 import {
   compactSidebarTileLayout,
@@ -436,19 +439,66 @@ function App() {
   const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const windowLabel = appWindow.label;
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    let queue = Promise.resolve();
+    const consumeNavigation = () => {
+      // Serialize reads so an older IPC response cannot replace a newer click.
+      queue = queue.then(async () => {
+        if (!active) return;
+        try {
+          const destination = await tauriInvoke("take_pending_main_navigation");
+          if (active && destination) {
+            setInlineSettingsSection(null);
+            setActiveTab(destination);
+          }
+        } catch (error) {
+          console.error("Widget navigation failed", error);
+        }
+      });
+    };
+    tauriListen("main_navigation_pending", consumeNavigation).then(stop => {
+      if (!active) { stop(); return; }
+      unlisten = stop;
+      consumeNavigation();
+    }).catch(error => console.error("Widget navigation listener failed", error));
+    return () => { active = false; unlisten?.(); };
+  }, [windowLabel]);
   const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
   const [isLocked, setIsLocked] = useState(!isMacOS);
   const [isPinned, setIsPinned] = useState(false);
   const [isDesktopFixed, setIsDesktopFixed] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
+  const { conferences: deadlineConferences, now: deadlineNow } = useDeadlineConferences(deadlines);
   const [gpuConfig, setGpuConfig] = useState<GpuConfig>({ servers: [] });
   const [paperConfig, setPaperConfig] = useState<PaperConfig>({});
+  const paperConfigRef = useRef(paperConfig);
+  paperConfigRef.current = paperConfig;
+  const paperSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const paperSaveRevision = useRef(0);
+  const [paperSaveError, setPaperSaveError] = useState(false);
+  const paperPendingWrites = useRef(0);
+  const [paperPreferenceUndo, setPaperPreferenceUndo] = useState<PaperConfig | null>(null);
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    const sync = startWindowSnapshotSync<PaperConfig>({
+      listen: handler => tauriListen("paper_config_update", event => handler(event.payload)),
+      read: () => tauriInvoke("get_paper_config"),
+      apply: config => { if (!paperPendingWrites.current) { paperConfigRef.current = config; setPaperConfig(config); } },
+      onError: error => console.error("Conference preferences sync failed", error),
+    });
+    return () => sync.stop();
+  }, [windowLabel]);
   const [arxivConfig, setArxivConfig] = useState<ArxivConfig>({});
   const [arxivPapers, setArxivPapers] = useState<ArxivPaper[]>([]);
   const [arxivSavedPapers, setArxivSavedPapers] = useState<ArxivPaper[]>([]);
   const [arxivDiscardedPapers, setArxivDiscardedPapers] = useState<ArxivPaper[]>([]);
-  const [arxivView, setArxivView] = useState<"new" | "saved" | "discarded">("new");
+  const [arxivView, setArxivView] = useState<"all" | "new" | "saved" | "discarded">("new");
+  const [arxivDate, setArxivDate] = useState("");
+  const arxivHeaderRef = useRef<HTMLDivElement>(null);
   const [collapsedArxivKeywords, setCollapsedArxivKeywords] = useState<Set<string>>(new Set());
   const [isRefreshingArxiv, setIsRefreshingArxiv] = useState(false);
   const [arxivRefreshError, setArxivRefreshError] = useState<string | null>(null);
@@ -580,6 +630,15 @@ function App() {
   });
   const appConfigSync = useRef<ReturnType<typeof startWindowSnapshotSync<AppConfig>> | null>(null);
   useUiLocalization(resolveLanguage(appConfig.language));
+  const pagedArxivView = arxivView === "all" || (arxivView === "new" && arxivDate !== "");
+  const pagedArxiv = useArxivPaperPages(
+    windowLabel === "main" && activeTab === "arxiv" && pagedArxivView && appConfig.arxiv_enabled !== false,
+    arxivConfig.categories, arxivView === "new" ? arxivConfig.keywords : [], arxivDate || null,
+  );
+  const refreshingArxivView = pagedArxivView ? pagedArxiv.loading : isRefreshingArxiv;
+  useEffect(() => {
+    if (pagedArxivView && pagedArxiv.loaded) arxivHeaderRef.current?.scrollIntoView({ block: "start" });
+  }, [pagedArxivView, pagedArxiv.page, pagedArxiv.data_date, pagedArxiv.loaded]);
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
@@ -886,9 +945,8 @@ function App() {
           if (active) setIsAutostart(enabled);
         }).catch((error) => console.error("Autostart status unavailable", error));
 
-        const [gc, pc, arc, qc, tc] = await Promise.all([
+        const [gc, arc, qc, tc] = await Promise.all([
           tauriInvoke("get_gpu_config"),
-          tauriInvoke("get_paper_config"),
           tauriInvoke("get_arxiv_config"),
           tauriInvoke("get_quota_config"),
           tauriInvoke("get_theme_config"),
@@ -897,7 +955,6 @@ function App() {
         if (!active) return;
 
         setGpuConfig(gc);
-        setPaperConfig(pc);
         setArxivConfig(arc);
         setQuotaConfig(qc);
         setThemeConfig(tc);
@@ -1144,32 +1201,54 @@ function App() {
   };
 
   const savePaperConfig = async (newConfig: PaperConfig) => {
+    const previous = paperConfigRef.current;
+    const revision = ++paperSaveRevision.current;
+    paperPendingWrites.current += 1;
+    paperConfigRef.current = newConfig;
+    setPaperConfig(newConfig);
+    setPaperSaveError(false);
+    // Respond to the click immediately and serialize writes so fast actions
+    // cannot replace one another with a stale config or delayed response.
+    const save = paperSaveQueue.current.catch(() => {}).then(() => tauriInvoke("save_paper_config", { config: newConfig }));
+    paperSaveQueue.current = save;
     try {
-      await tauriInvoke("save_paper_config", { config: newConfig });
-      setPaperConfig(newConfig);
+      await save;
     } catch (e) {
       console.error("Save failed", e);
+      if (revision !== paperSaveRevision.current) return;
+      let saved = previous;
+      try { saved = await tauriInvoke("get_paper_config"); } catch { /* Keep the last known config if reading also fails. */ }
+      if (revision === paperSaveRevision.current) {
+        paperConfigRef.current = saved;
+        setPaperConfig(saved);
+        setPaperSaveError(true);
+        setPaperPreferenceUndo(null);
+      }
+    } finally {
+      paperPendingWrites.current -= 1;
+      if (!paperPendingWrites.current && revision === paperSaveRevision.current) {
+        try {
+          const saved = await tauriInvoke("get_paper_config");
+          if (!paperPendingWrites.current && revision === paperSaveRevision.current) {
+            paperConfigRef.current = saved;
+            setPaperConfig(saved);
+          }
+        } catch (error) { console.error("Could not reload conference preferences", error); }
+      }
     }
   };
 
-  const togglePinDeadline = async (deadline: PaperDeadlineInfo) => {
-    const key = deadlineInstanceKey(deadline);
-    const pinned = paperConfig.pinned_deadline_ids || [];
-    const nextPinned = pinned.includes(key)
-      ? pinned.filter((item) => item !== key)
-      : [...pinned, key];
-    const nextConfig = { ...paperConfig, pinned_deadline_ids: nextPinned };
-    await savePaperConfig(nextConfig);
+  const setConferencePreference = (ids: string[], action: ConferencePreference, undoable = false) => {
+    const previous = paperConfigRef.current;
+    setPaperPreferenceUndo(undoable ? previous : null);
+    void savePaperConfig(updateConferencePreferences(previous, ids, action));
   };
 
-  const toggleSubscribeConference = async (title: string) => {
-    const subscribed = paperConfig.subscribed_titles || [];
-    const titleKey = title.toLowerCase();
-    const nextSubscribed = subscribed.some((t) => t.toLowerCase() === titleKey)
-      ? subscribed.filter((t) => t.toLowerCase() !== titleKey)
-      : [...subscribed, title];
-    const nextConfig = { ...paperConfig, subscribed_titles: nextSubscribed };
-    await savePaperConfig(nextConfig);
+  const undoConferencePreference = () => {
+    if (!paperPreferenceUndo) return;
+    const { followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids } = paperPreferenceUndo;
+    setPaperPreferenceUndo(null);
+    void savePaperConfig({ ...paperConfigRef.current, followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids });
   };
 
   const onSaveApp = async (config: AppConfig) => {
@@ -1235,8 +1314,8 @@ function App() {
   };
 
 
-  const activeArxivPapers = arxivView === "new" ? arxivPapers : arxivView === "saved" ? arxivSavedPapers : arxivDiscardedPapers;
-  const arxivKeywordGroups = groupArxivPapersByKeyword(arxivPapers, arxivConfig.keywords);
+  const activeArxivPapers = pagedArxivView ? pagedArxiv.papers : arxivView === "new" ? arxivPapers : arxivView === "saved" ? arxivSavedPapers : arxivDiscardedPapers;
+  const arxivKeywordGroups = groupArxivPapersByKeyword(arxivView === "new" && arxivDate ? pagedArxiv.papers : arxivPapers, arxivConfig.keywords);
   const toggleArxivKeywordGroup = (keyword: string) => {
     setCollapsedArxivKeywords((prev) => {
       const next = new Set(prev);
@@ -1256,20 +1335,18 @@ function App() {
         appConfig.theme === "light" ? "bg-white" : "bg-white/5"
       }`}
     >
-      <div className="flex-1">
+      <div className="flex flex-1 min-w-0 min-h-0 flex-col">
         <h3
-          className={`text-sm font-bold line-clamp-2 mb-2 ${
+          className={`shrink-0 text-sm font-bold leading-relaxed break-words mb-2 ${
             appConfig.theme === "light" ? "text-slate-900" : "text-white"
           }`}
         >
           {paper.title}
         </h3>
-        <p className="text-[10px] text-slate-500 line-clamp-6 leading-relaxed">
-          {paper.summary}
-        </p>
+        <ArxivAbstractPreview paper={paper} isLight={appConfig.theme === "light"} />
       </div>
-      <div className="flex items-center justify-between mt-2 pt-4 border-t border-white/5">
-        <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5">
+        <div className="flex flex-wrap gap-1 min-w-0">
           <span className="text-[9px] font-medium text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full">
             {paper.authors.length > 0 ? (
               <>
@@ -1281,7 +1358,7 @@ function App() {
             )}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-start gap-1">
           {arxivView === "saved" && (
             <button
               onClick={() => tauriInvoke("remove_arxiv_saved_paper", { id: paper.id })}
@@ -1300,13 +1377,7 @@ function App() {
               <Trash2 size={14} />
             </button>
           )}
-          <button
-            onClick={() => tauriInvoke("open_link", { url: paper.link })}
-            className="p-2 rounded-xl bg-white/5 text-slate-400 hover:text-white transition-colors"
-            title="Open paper"
-          >
-            <ExternalLink size={14} />
-          </button>
+          <ArxivPaperActions paper={paper} />
         </div>
       </div>
     </div>
@@ -1652,7 +1723,7 @@ function App() {
         key: "deadlines",
         title: "Deadlines",
         accentColor: sidebarTheme.deadlines,
-        content: <DeadlineWidgetContent hideHeader={hideSidebarWidgetHeaders} />,
+        content: <DeadlineWidgetContent hideHeader={hideSidebarWidgetHeaders} language={resolveLanguage(appConfig.language)} />,
       },
       {
         key: "arxiv",
@@ -2214,7 +2285,7 @@ function App() {
           data-tauri-drag-region={!isLocked ? "true" : "false"}
         >
           {isGpu && <GPUWidgetContent />}
-          {isDeadline && <DeadlineWidgetContent />}
+          {isDeadline && <DeadlineWidgetContent language={resolveLanguage(appConfig.language)} />}
           {windowLabel.includes("arxiv") && <ArxivWidgetContent />}
           {isQuota && <QuotaWidgetContent />}
         </div>
@@ -2272,13 +2343,13 @@ function App() {
 
   const renderInlineSettings = (section: SettingsSection) =>
     inlineSettingsSection === section && (
-      <div className="mb-8 rounded-2xl border border-[var(--dashboard-border)] bg-[var(--card-bg)] p-5">
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-bold">{LIVE_DATA_SECTION_LABELS[section as keyof typeof LIVE_DATA_SECTION_LABELS]}</h3>
+      <section aria-label="Page settings" className={`mb-8 rounded-2xl border border-l-[3px] p-5 shadow-sm ${appConfig.theme === "light" ? "border-blue-200 border-l-blue-500 bg-blue-50/70" : "border-blue-400/25 border-l-blue-400 bg-blue-500/5"}`}>
+        <div className="mb-5 flex items-center justify-between gap-3 border-b border-blue-400/15 pb-4">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-blue-500"><Settings size={16} /><span>{LIVE_DATA_SECTION_LABELS[section as keyof typeof LIVE_DATA_SECTION_LABELS]}</span><span>Settings</span></h3>
           <button type="button" onClick={() => setInlineSettingsSection(null)} aria-label="Close settings" title="Close settings" className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--dashboard-border)] text-red-500 hover:bg-red-500/10 focus-visible:outline-2 focus-visible:outline-red-500"><X size={16} /></button>
         </div>
         {renderSettingsPanel(section, true)}
-      </div>
+      </section>
     );
 
   const sectionActionClass = `inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${appConfig.theme === "light" ? "border-slate-200 bg-white text-slate-700 hover:bg-blue-50" : "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"}`;
@@ -2287,7 +2358,7 @@ function App() {
   return (
     <div
       className={`absolute inset-0 flex overflow-hidden ${appConfig.theme === "light" ? "light-theme" : ""} glass ${
-        isMaximized ? "rounded-none" : "rounded-xl dashboard-accent-border"
+        isMacOS ? "macos-dashboard" : isMaximized ? "rounded-none" : "rounded-xl dashboard-accent-border"
       }`}
     >
       {/* Sidebar */}
@@ -2427,7 +2498,7 @@ function App() {
                   />
                   <StatCard
                     label="Active Deadlines"
-                    value={deadlines.length.toString()}
+                    value={deadlineConferences.length.toString()}
                     icon={<Calendar className="text-emerald-400" />}
                     theme={appConfig.theme}
                     hint={paperStatHint}
@@ -2823,114 +2894,12 @@ function App() {
                   )}
                 />
                 {renderInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
-                <p className="text-xs text-slate-500">
-                  Add the Paper Deadlines widget in Notification Center.
-                </p>
-                <div className="space-y-4">
-                  {deadlines.length === 0 ? (
-                    <SectionEmptyState message="No deadlines match your current filters." action={inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES ? "Hide settings" : "Adjust filters"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} />
-                  ) : (
-                    deadlines.map((dl, idx) => {
-                      const deadlineKey = deadlineInstanceKey(dl);
-                      const isPinned = (paperConfig.pinned_deadline_ids || []).includes(deadlineKey);
-                      const isSubscribed = (paperConfig.subscribed_titles || []).some(
-                        (title) => title.toLowerCase() === dl.title.toLowerCase()
-                      );
-                      return (
-                        <div
-                          key={idx}
-                          className={`border border-[var(--dashboard-border)] rounded-2xl p-6 flex items-center justify-between hover:bg-black/5 transition-all group ${
-                            appConfig.theme === "light" ? "bg-white" : "bg-white/5"
-                          }`}
-                        >
-                          <div className="flex items-center gap-6">
-                            <div
-                              className={`w-16 h-16 rounded-2xl flex flex-col items-center justify-center relative ${
-                                appConfig.theme === "light"
-                                  ? "bg-purple-100 text-purple-600"
-                                  : "bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/20 text-purple-400"
-                              }`}
-                            >
-                              <span className="text-[10px] font-black uppercase tracking-tighter opacity-60">
-                                {dl.sub}
-                              </span>
-                              <Trophy
-                                size={20}
-                                className={appConfig.theme === "light" ? "text-purple-600" : "text-purple-400"}
-                              />
-                              <button
-                                onClick={() => togglePinDeadline(dl)}
-                                className={`absolute -top-2 -right-2 p-1.5 rounded-full shadow-lg transition-all ${
-                                  isPinned ? "bg-amber-500 text-white scale-110" : "bg-slate-800 text-slate-500 opacity-0 group-hover:opacity-100"
-                                }`}
-                                title={isPinned ? "Unpin this deadline from widget" : "Pin this deadline to widget"}
-                              >
-                                <Pin size={10} className={isPinned ? "fill-current" : ""} />
-                              </button>
-                            </div>
-                            <div>
-                              <h3
-                                className={`text-lg font-bold group-hover:text-purple-400 transition-colors flex flex-wrap items-center gap-2 ${
-                                  appConfig.theme === "light" ? "text-slate-900" : "text-white"
-                                }`}
-                              >
-                                <span>{dl.title} {dl.year}</span>
-                                {dl.ccf && (
-                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
-                                    appConfig.theme === "light" ? "bg-purple-100 text-purple-700" : "bg-purple-500/10 text-purple-400 border border-purple-500/20"
-                                  }`}>
-                                    {dl.ccf === "N" ? "Non CCF" : `CCF ${dl.ccf}`}
-                                  </span>
-                                )}
-                                {dl.core && (
-                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
-                                    appConfig.theme === "light" ? "bg-blue-100 text-blue-700" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                                  }`}>
-                                    {dl.core === "N" ? "Non Core" : `Core ${dl.core}`}
-                                  </span>
-                                )}
-                              </h3>
-                              <div className="flex items-center gap-3 mt-1">
-                                <p className="text-xs text-slate-500 font-medium">{dl.place}</p>
-                                <div className="w-1 h-1 rounded-full bg-slate-700" />
-                                <div className="text-[10px] font-mono font-bold text-purple-500/80">
-                                  <DeadlineCountdown date={dl.deadline_utc} />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-right flex flex-col items-end gap-2">
-                            <button
-                              onClick={() => toggleSubscribeConference(dl.title)}
-                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                isSubscribed
-                                  ? "bg-emerald-500 text-white"
-                                  : appConfig.theme === "light"
-                                    ? "bg-slate-100 text-slate-700 hover:bg-emerald-100"
-                                    : "bg-white/10 text-slate-200 hover:bg-emerald-500/20"
-                              }`}
-                              title={isSubscribed ? "Stop reminding me" : "Remind me"}
-                              aria-pressed={isSubscribed}
-                            >
-                              <Bell size={13} className={isSubscribed ? "fill-current" : ""} />
-                              {isSubscribed ? "Reminding" : "Remind me"}
-                            </button>
-                            <div
-                              className={`text-xl font-black ${
-                                appConfig.theme === "light" ? "text-slate-900" : "text-white"
-                              }`}
-                            >
-                              {new Date(dl.deadline_utc).toLocaleDateString()}
-                            </div>
-                            <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                              Deadline (UTC)
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                {paperSaveError && <p role="alert" className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-xs text-red-500">Could not save conference preferences. Please try again.</p>}
+                <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
+                  language={resolveLanguage(appConfig.language)}
+                  isLight={appConfig.theme === "light"} onPreference={setConferencePreference}
+                  canUndo={Boolean(paperPreferenceUndo)} onUndo={undoConferencePreference}
+                  onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} />
               </motion.div>
             )}
 
@@ -2941,8 +2910,8 @@ function App() {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
-                  <div className="flex flex-wrap items-center gap-6">
+                <div ref={arxivHeaderRef} className="arxiv-header relative z-20 mb-6 space-y-4 scroll-mt-8">
+                  <div className="arxiv-header-main">
                     <h2
                       className={`text-2xl font-bold tracking-tight ${
                         appConfig.theme === "light" ? "text-slate-900" : "text-white"
@@ -2951,13 +2920,27 @@ function App() {
                       Arxiv Radar
                     </h2>
                     <div
-                      className={`flex items-center p-1 rounded-xl ${
+                      className={`arxiv-view-tabs p-1 rounded-xl ${
                         appConfig.theme === "light" ? "bg-slate-100" : "bg-white/5"
                       }`}
                     >
                       <button
+                        onClick={() => setArxivView("all")}
+                        aria-pressed={arxivView === "all"}
+                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
+                          arxivView === "all"
+                            ? appConfig.theme === "light"
+                              ? "bg-white text-slate-900 shadow-sm"
+                              : "bg-white/10 text-white shadow-lg"
+                            : "text-slate-500 hover:text-slate-400"
+                        }`}
+                      >
+                        {arxivView === "all" && pagedArxiv.loaded ? `All (${pagedArxiv.total})` : "All"}
+                      </button>
+                      <button
                         onClick={() => setArxivView("new")}
-                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        aria-pressed={arxivView === "new"}
+                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
                           arxivView === "new"
                             ? appConfig.theme === "light"
                               ? "bg-white text-slate-900 shadow-sm"
@@ -2965,11 +2948,12 @@ function App() {
                             : "text-slate-500 hover:text-slate-400"
                         }`}
                       >
-                        {`Latest (${arxivPapers.length})`}
+                        {arxivDate ? arxivView === "new" && pagedArxiv.loaded ? `Latest (${pagedArxiv.total})` : "Latest" : `Latest (${arxivPapers.length})`}
                       </button>
                       <button
                         onClick={() => setArxivView("saved")}
-                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        aria-pressed={arxivView === "saved"}
+                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
                           arxivView === "saved"
                             ? appConfig.theme === "light"
                               ? "bg-white text-slate-900 shadow-sm"
@@ -2981,7 +2965,8 @@ function App() {
                       </button>
                       <button
                         onClick={() => setArxivView("discarded")}
-                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        aria-pressed={arxivView === "discarded"}
+                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
                           arxivView === "discarded"
                             ? appConfig.theme === "light"
                               ? "bg-white text-slate-900 shadow-sm"
@@ -2993,41 +2978,48 @@ function App() {
                       </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.ARXIV)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.ARXIV} className={sectionActionClass}>
-                      {inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Edit keywords</>}
-                    </button>
-                    {appConfig.arxiv_enabled !== false && (
-                      <button
-                        onClick={handleRefreshArxiv}
-                        disabled={isRefreshingArxiv}
-                        className={`p-2 rounded-xl border border-[var(--dashboard-border)] ${
-                          appConfig.theme === "light"
-                            ? "bg-white hover:bg-slate-50 text-slate-700 shadow-sm"
-                            : "bg-white/5 hover:bg-white/10 text-white/80 hover:text-white"
-                        } disabled:opacity-50 transition-all flex items-center justify-center`}
-                        title="Refresh papers"
-                      >
-                        <RefreshCw size={14} className={isRefreshingArxiv ? "animate-spin" : ""} />
+                  <div className="arxiv-header-actions flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-h-9">
+                      {(arxivView === "all" || arxivView === "new") && (
+                        <ArxivDateFilter date={arxivDate} onChange={setArxivDate} buttonClass={sectionActionClass} isLight={appConfig.theme === "light"} language={resolveLanguage(appConfig.language)} />
+                      )}
+                      <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.ARXIV)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.ARXIV} className={sectionActionClass}>
+                        {inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Edit keywords</>}
                       </button>
-                    )}
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                      {appConfig.arxiv_enabled !== false ? "Service Enabled" : "Service Disabled"}
-                    </span>
-                    <MasterSwitch
-                      label="Arxiv monitoring"
-                      enabled={appConfig.arxiv_enabled !== false}
-                      loading={checkServiceToggleBusy("arxiv_enabled")}
-                      disabled={checkServiceToggleBusy("arxiv_enabled")}
-                      onToggle={(val) => handleMasterServiceToggle("arxiv_enabled", val)}
-                    />
+                    </div>
+                    <div className="arxiv-service-actions flex shrink-0 items-center gap-3">
+                      {appConfig.arxiv_enabled !== false && (
+                        <button
+                          onClick={pagedArxivView ? pagedArxiv.refresh : handleRefreshArxiv}
+                          disabled={refreshingArxivView}
+                          className={`p-2 rounded-xl border border-[var(--dashboard-border)] ${
+                            appConfig.theme === "light"
+                              ? "bg-white hover:bg-slate-50 text-slate-700 shadow-sm"
+                              : "bg-white/5 hover:bg-white/10 text-white/80 hover:text-white"
+                          } disabled:opacity-50 transition-all flex items-center justify-center`}
+                          title="Refresh papers"
+                        >
+                          <RefreshCw size={14} className={refreshingArxivView ? "animate-spin" : ""} />
+                        </button>
+                      )}
+                      <span className="arxiv-service-label text-[10px] font-semibold whitespace-nowrap text-slate-500">
+                        {appConfig.arxiv_enabled !== false ? "Service Enabled" : "Service Disabled"}
+                      </span>
+                      <MasterSwitch
+                        label="Arxiv monitoring"
+                        enabled={appConfig.arxiv_enabled !== false}
+                        loading={checkServiceToggleBusy("arxiv_enabled")}
+                        disabled={checkServiceToggleBusy("arxiv_enabled")}
+                        onToggle={(val) => handleMasterServiceToggle("arxiv_enabled", val)}
+                      />
+                    </div>
                   </div>
                 </div>
                 <ServiceErrorBanners
-                  backendError={arxivError}
-                  refreshError={arxivRefreshError}
+                  backendError={pagedArxivView ? null : arxivError}
+                  refreshError={pagedArxivView ? pagedArxiv.error : arxivRefreshError}
                   onDismissBackend={() => setArxivError(null)}
-                  onDismissRefresh={() => setArxivRefreshError(null)}
+                  onDismissRefresh={pagedArxivView ? pagedArxiv.dismissError : () => setArxivRefreshError(null)}
                   theme={appConfig.theme}
                   showBackend={appConfig.arxiv_enabled !== false}
                   backendCachedLabel={cachedLabelWhen(
@@ -3035,22 +3027,43 @@ function App() {
                     CACHED_LABELS.arxiv.backend
                   )}
                   refreshCachedLabel={cachedLabelWhen(
-                    arxivPapers.length > 0,
+                    activeArxivPapers.length > 0,
                     CACHED_LABELS.arxiv.refresh
                   )}
                 />
                 {renderInlineSettings(LIVE_DATA_SECTION.ARXIV)}
-                {activeArxivPapers.length === 0 ? (
+                {pagedArxivView && (
+                  <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                    {pagedArxiv.data_date && <span><span>Submission date (UTC)</span><span data-no-localize> · {pagedArxiv.data_date}</span></span>}
+                    {arxivView === "all" && <span>All papers in the selected categories, without keyword filtering.</span>}
+                  </div>
+                )}
+                {pagedArxivView && pagedArxiv.total > 0 && (
+                  <div className="mb-6">
+                    <ArxivPagination page={pagedArxiv.page} pageSize={pagedArxiv.page_size} total={pagedArxiv.total} loading={pagedArxiv.loading} onPrevious={pagedArxiv.previousPage} onNext={pagedArxiv.nextPage} isLight={appConfig.theme === "light"} />
+                  </div>
+                )}
+                {pagedArxivView && pagedArxiv.loading && activeArxivPapers.length === 0 ? (
+                  <div role="status" className="flex items-center justify-center gap-2 py-16 text-xs text-slate-500">
+                    <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
+                    Loading papers…
+                  </div>
+                ) : activeArxivPapers.length === 0 ? (
                   <SectionEmptyState
-                    message={arxivView === "new"
+                    message={pagedArxivView
+                      ? pagedArxiv.error ? "Could not load papers. Please retry." : arxivDate
+                        ? arxivView === "new" && (arxivConfig.keywords?.length ?? 0) > 0 ? "No papers matched your keywords on this submission date." : "No papers in the selected categories on this submission date."
+                        : "No papers found in the selected categories."
+                      : arxivView === "new"
                       ? (arxivConfig.keywords?.length ?? 0) === 0
                         ? "No recent papers in the selected category. Try another category or refresh later."
                         : "No new papers. Adjust keywords or wait for the next update."
                       : arxivView === "saved"
                       ? "No saved papers yet. Swipe right on a paper to save it."
                       : "No discarded papers. Swipe left on a paper to discard it."}
-                    action={arxivView === "new" ? (arxivConfig.keywords?.length ? "Edit keywords" : "Choose category") : "Show latest"}
-                    onAction={arxivView === "new"
+                    detail={pagedArxivView && arxivDate && !pagedArxiv.error ? "Choose another date or view recent papers. Submissions not yet announced may appear later." : undefined}
+                    action={pagedArxivView ? arxivDate && !pagedArxiv.error ? "Show recent papers" : "Refresh papers" : arxivView === "new" ? (arxivConfig.keywords?.length ? "Edit keywords" : "Choose category") : "Show latest"}
+                    onAction={pagedArxivView ? arxivDate && !pagedArxiv.error ? () => setArxivDate("") : pagedArxiv.refresh : arxivView === "new"
                       ? () => openInlineSettings(LIVE_DATA_SECTION.ARXIV)
                       : () => setArxivView("new")}
                   />
@@ -3090,7 +3103,7 @@ function App() {
                             />
                           </button>
                           {!collapsed && (
-                            <div className="p-5 pt-0 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            <div className="p-5 pt-0 grid grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-4">
                               {group.papers.map((paper, idx) => renderArxivPaperCard(paper, idx))}
                             </div>
                           )}
@@ -3099,9 +3112,12 @@ function App() {
                     })}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-4">
                     {activeArxivPapers.map((paper, idx) => renderArxivPaperCard(paper, idx))}
                   </div>
+                )}
+                {pagedArxivView && pagedArxiv.total > 0 && (
+                  <ArxivPagination page={pagedArxiv.page} pageSize={pagedArxiv.page_size} total={pagedArxiv.total} loading={pagedArxiv.loading} onPrevious={pagedArxiv.previousPage} onNext={pagedArxiv.nextPage} isLight={appConfig.theme === "light"} />
                 )}
               </motion.div>
             )}

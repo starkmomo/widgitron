@@ -13,9 +13,10 @@
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "acceptFirstMouse": true,
         "trafficLightPosition": { "x": 18, "y": 20 },
-        "transparent": true,
-        "shadow": false,
+        "transparent": false,
+        "shadow": true,
         "visible": true,
         "center": true
       },

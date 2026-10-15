@@ -7,7 +7,9 @@ private let appGroup = Bundle.main.object(forInfoDictionaryKey: "WidgitronAppGro
 private let quotaWidgetKind = "com.evan.widgitron.quota"
 private let gpuWidgetKind = "com.evan.widgitron.gpu"
 private let deadlineWidgetKind = "com.evan.widgitron.deadlines"
-private let openAppURL = URL(string: "widgitron://open")
+private let quotaAppURL = URL(string: "widgitron://open/quota")
+private let gpuAppURL = URL(string: "widgitron://open/gpu")
+private let deadlineAppURL = URL(string: "widgitron://open/deadlines")
 private let snapshotBaseURL = URL(string: "http://127.0.0.1:42837")!
 
 private func cachedSnapshotURL(_ file: String) -> URL? {
@@ -163,7 +165,7 @@ private struct QuotaView: View {
         }
         .padding(isSmall ? 12 : 14)
         .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-        .widgetURL(openAppURL)
+        .widgetURL(quotaAppURL)
     }
 
     private func quotaRow(_ item: QuotaItem) -> some View {
@@ -353,7 +355,7 @@ private struct GpuView: View {
         }
         .padding(family == .systemSmall ? 12 : 14)
         .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-        .widgetURL(openAppURL)
+        .widgetURL(gpuAppURL)
     }
 }
 
@@ -382,22 +384,59 @@ private struct DeadlineSnapshot: Decodable {
     }
 }
 
+private func deadlineDate(_ value: String?) -> Date? {
+    guard let value else { return nil }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = formatter.date(from: value) { return date }
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value)
+}
+
+private struct DeadlineMilestone: Decodable {
+    let label: String
+    let stage: String
+    let deadlineUTC: String?
+    let note: String?
+    enum CodingKeys: String, CodingKey {
+        case label, stage, note
+        case deadlineUTC = "deadline_utc"
+    }
+    var date: Date? { deadlineDate(deadlineUTC) }
+}
+
 private struct DeadlineItem: Decodable {
     let title: String
     let year: String
     let deadlineUTC: String
+    let deadlineStage: String?
+    let deadlineNote: String?
+    let deadlineLabel: String?
+    let timeline: [DeadlineMilestone]?
 
     enum CodingKeys: String, CodingKey {
-        case title, year
+        case title, year, timeline
         case deadlineUTC = "deadline_utc"
+        case deadlineStage = "deadline_stage"
+        case deadlineNote = "deadline_note"
+        case deadlineLabel = "deadline_label"
     }
+    var date: Date? { deadlineDate(deadlineUTC) }
 
-    var date: Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: deadlineUTC) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: deadlineUTC)
+    func upcoming(at now: Date) -> DeadlineItem? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let timeline, !timeline.isEmpty else {
+            return date.map { $0 > now ? self : nil } ?? nil
+        }
+        let next = timeline.filter { $0.date.map { $0 > now } ?? false }
+            .min { ($0.date ?? .distantFuture) < ($1.date ?? .distantFuture) }
+            ?? ((Int(year) ?? 0) >= calendar.component(.year, from: now)
+                ? timeline.first { $0.deadlineUTC == nil } : nil)
+        guard let next else { return nil }
+        return DeadlineItem(title: title, year: year, deadlineUTC: next.deadlineUTC ?? "",
+                            deadlineStage: next.stage, deadlineNote: next.note,
+                            deadlineLabel: next.label, timeline: timeline)
     }
 }
 
@@ -412,7 +451,8 @@ private struct DeadlineProvider: TimelineProvider {
         let formatter = ISO8601DateFormatter()
         return DeadlineEntry(date: .now, snapshot: DeadlineSnapshot(
             language: "zh-CN", hasSelections: true,
-            items: [DeadlineItem(title: "NeurIPS", year: "2026", deadlineUTC: formatter.string(from: date))]))
+            items: [DeadlineItem(title: "NeurIPS", year: "2026", deadlineUTC: formatter.string(from: date),
+                                 deadlineStage: "submission", deadlineNote: nil, deadlineLabel: "Paper submission", timeline: nil)]))
     }
 
     func getSnapshot(in context: Context, completion: @escaping (DeadlineEntry) -> Void) {
@@ -424,10 +464,18 @@ private struct DeadlineProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<DeadlineEntry>) -> Void) {
         loadSnapshot("deadline-snapshot.json", as: DeadlineSnapshot.self) { snapshot in
-            let entry = DeadlineEntry(date: .now, snapshot: snapshot)
-            completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
+            let now = Date.now
+            // Schedule stage boundaries as WidgetKit entries, so rollover does
+            // not depend on the host app running or a network refresh completing.
+            let boundaries = Set((snapshot?.items ?? []).flatMap { item in
+                item.timeline?.compactMap { $0.date } ?? [item.date].compactMap { $0 }
+            }.filter { $0 > now && $0 < now.addingTimeInterval(86_400) })
+            let dates = [now] + boundaries.sorted().prefix(40).map { $0.addingTimeInterval(1) }
+            let entries = dates.map { DeadlineEntry(date: $0, snapshot: snapshot) }
+            completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(5 * 60))))
         }
     }
+
 }
 
 private struct DeadlineView: View {
@@ -435,7 +483,10 @@ private struct DeadlineView: View {
     @Environment(\.widgetFamily) private var family
 
     private var chinese: Bool { entry.snapshot?.language != "en" }
-    private var allItems: [DeadlineItem] { entry.snapshot?.items ?? [] }
+    private var allItems: [DeadlineItem] {
+        (entry.snapshot?.items ?? []).compactMap { $0.upcoming(at: entry.date) }
+            .sorted { ($0.date ?? .distantFuture) < ($1.date ?? .distantFuture) }
+    }
     private var capacity: Int { family == .systemSmall ? 2 : 3 }
     private var items: [DeadlineItem] {
         Array(allItems.prefix(capacity))
@@ -461,8 +512,8 @@ private struct DeadlineView: View {
             if items.isEmpty {
                 Spacer(minLength: 0)
                 Text(entry.snapshot?.hasSelections == true
-                     ? (chinese ? "已提醒会议暂无即将截止日期" : "No upcoming selected deadlines")
-                     : (chinese ? "打开 Widgitron 选择提醒会议" : "Open Widgitron to choose conferences"))
+                     ? (chinese ? "已关注会议暂无即将截止日期" : "No upcoming followed deadlines")
+                     : (chinese ? "打开 Widgitron 关注会议" : "Open Widgitron to follow conferences"))
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             } else {
@@ -474,7 +525,7 @@ private struct DeadlineView: View {
         }
         .padding(family == .systemSmall ? 12 : 14)
         .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-        .widgetURL(openAppURL)
+        .widgetURL(deadlineAppURL)
     }
 
     private func deadlineRow(_ item: DeadlineItem, prominent: Bool) -> some View {
@@ -483,18 +534,55 @@ private struct DeadlineView: View {
                 Text("\(item.title) \(item.year)")
                     .font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 0)
-                if !prominent, let date = item.date {
+                if let date = item.date {
                     Text(remaining(date))
                         .font(.caption2.weight(.bold)).foregroundStyle(.tint).lineLimit(1)
                 }
             }
-            if let date = item.date {
-                if prominent {
-                    Text(remaining(date)).font(.title3.weight(.bold)).foregroundStyle(.tint)
+            if family == .systemSmall {
+                stageCaption(item)
+                if let date = item.date {
+                    Text(DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .short))
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                } else {
+                    Text("TBD").font(.caption2).foregroundStyle(.secondary)
                 }
-                Text(DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .short))
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+            } else {
+                // Keep three medium rows within the widget's fixed height.
+                HStack(spacing: 6) {
+                    stageCaption(item)
+                    Spacer(minLength: 0)
+                    if let date = item.date {
+                        Text(DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .short))
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                    } else {
+                        Text("TBD").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
             }
+        }
+    }
+
+    private func stageCaption(_ item: DeadlineItem) -> some View {
+        Text(stageLabel(item))
+            .font(.system(size: 10, weight: item.deadlineStage == "arr_commitment" ? .semibold : .regular))
+            .foregroundStyle(item.deadlineStage == "arr_commitment" ? Color.orange : Color.secondary)
+            .lineLimit(1).minimumScaleFactor(0.7)
+            .accessibilityLabel(item.deadlineNote ?? stageLabel(item))
+    }
+
+    private func stageLabel(_ item: DeadlineItem) -> String {
+        // Stage copy remains English even when the surrounding interface is Chinese.
+        if let label = item.deadlineLabel, !label.isEmpty { return label }
+        switch item.deadlineStage {
+        case "abstract_submission": return "Abstract submission"
+        case "submission": return "Paper submission"
+        case "full_paper_submission": return "Full paper submission"
+        case "arr_commitment": return "ARR commitment · reviewed papers only"
+        case "arr_submission": return "ARR submission"
+        case "rebuttal": return "Rebuttal / author response"
+        case "decision": return "Decision notification"
+        default: return item.deadlineNote ?? "Deadline type not specified"
         }
     }
 
@@ -518,7 +606,7 @@ private struct DeadlineWidget: Widget {
             DeadlineView(entry: entry)
         }
         .configurationDisplayName(galleryChinese ? "Widgitron · 论文截止日期" : "Widgitron · Paper Deadlines")
-        .description(galleryChinese ? "只显示已选择提醒的会议" : "Show only selected conferences")
+        .description(galleryChinese ? "显示已关注会议的最近截止节点" : "Show the next deadline for followed conferences")
         .supportedFamilies([.systemSmall, .systemMedium])
         .contentMarginsDisabled()
     }

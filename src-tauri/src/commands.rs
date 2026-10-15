@@ -1,6 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::config_store;
+static PAPER_CONFIG_REFRESH_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 use crate::models::{
     AppConfig, ArxivConfig, ArxivPaper, GlobalState, GpuConfig, PaperConfig, PaperDeadlineInfo,
     QuotaConfig, QuotaItem, ServerGpuData, SidebarTileLayoutConfig, ToggleWidgetResponse,
@@ -57,8 +58,10 @@ pub async fn save_gpu_config(
 pub async fn save_paper_config(
     app: AppHandle,
     state: tauri::State<'_, GlobalState>,
-    config: PaperConfig,
+    mut config: PaperConfig,
 ) -> Result<(), String> {
+    let known = state.deadlines.lock().map(|items| items.clone()).unwrap_or_default();
+    crate::deadlines::migrate_conference_preferences(&mut config, &known, chrono::Utc::now());
     config_store::write_config(&app, "paper_deadline.json", &config)?;
     let _ = app.emit("paper_config_update", &config);
     #[cfg(target_os = "macos")]
@@ -94,11 +97,19 @@ pub async fn save_paper_config(
                 log::warn!("Deadline reprocess task failed: {}", e);
             }
         }
-    } else if let Err(e) =
-        crate::deadlines::fetch_and_update_paper_deadlines(&app, state.inner()).await
-    {
-        log::warn!("Deadline fetch after config save failed: {}", e);
-        let _ = app.emit("paper_error", e);
+    } else if PAPER_CONFIG_REFRESH_RUNNING.compare_exchange(false, true,
+        std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire).is_ok() {
+        // Preference writes must not wait for a network request: rapid bulk
+        // actions need to reach disk before the user can close the application.
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = handle.state::<GlobalState>();
+            if let Err(error) = crate::deadlines::fetch_and_update_paper_deadlines(&handle, state.inner()).await {
+                log::warn!("Deadline fetch after config save failed: {error}");
+                let _ = handle.emit("paper_error", error);
+            }
+            PAPER_CONFIG_REFRESH_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+        });
     }
 
     Ok(())
@@ -120,10 +131,7 @@ pub async fn get_gpu_config(app: AppHandle) -> Result<GpuConfig, String> {
 
 #[tauri::command]
 pub async fn get_paper_config(app: AppHandle) -> Result<PaperConfig, String> {
-    Ok(config_store::read_config::<PaperConfig>(
-        &app,
-        "paper_deadline.json",
-    ))
+    Ok(crate::deadlines::read_paper_config(&app))
 }
 
 #[tauri::command]
@@ -156,7 +164,7 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
         if let Err(error) = crate::macos_widget_snapshot::publish_gpu_snapshot(&app, &gpu_config, &gpu_data) {
             log::warn!("Failed to update macOS GPU widget language: {error}");
         }
-        let paper_config = config_store::read_config::<PaperConfig>(&app, "paper_deadline.json");
+        let paper_config = crate::deadlines::read_paper_config(&app);
         let deadlines = config_store::read_config::<Vec<PaperDeadlineInfo>>(&app, "paper_deadlines_cache.json");
         if let Err(error) = crate::macos_widget_snapshot::publish_deadline_snapshot(&app, &paper_config, &deadlines) {
             log::warn!("Failed to update macOS deadline widget language: {error}");
@@ -775,6 +783,20 @@ pub async fn refresh_arxiv(
 ) -> Result<Vec<ArxivPaper>, String> {
     let global_state = state.inner();
     crate::arxiv::perform_arxiv_fetch(&app, global_state).await
+}
+
+#[tauri::command]
+pub async fn get_arxiv_paper_page(
+    app: AppHandle, categories: Vec<String>, keywords: Vec<String>, date: Option<String>, page: usize,
+) -> Result<Option<crate::arxiv::ArxivPaperPage>, String> {
+    crate::arxiv::get_paper_page_cache(&app, &categories, &keywords, date.as_deref(), page)
+}
+
+#[tauri::command]
+pub async fn refresh_arxiv_paper_page(
+    app: AppHandle, categories: Vec<String>, keywords: Vec<String>, date: Option<String>, page: usize, force: bool,
+) -> Result<crate::arxiv::ArxivPaperPage, String> {
+    crate::arxiv::fetch_paper_page(&app, &categories, &keywords, date.as_deref(), page, force).await
 }
 
 #[tauri::command]

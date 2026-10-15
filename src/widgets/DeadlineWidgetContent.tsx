@@ -3,6 +3,9 @@ import { Trophy, RefreshCw } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
 import { hexToRgba } from "../utils/color";
 import { DeadlineCountdown } from "../components/DeadlineCountdown";
+import { DeadlineStageDetails } from "../components/DeadlineStageDetails";
+import { DeadlineTimeline } from "../components/DeadlineTimeline";
+import { useDeadlineConferences } from "../hooks/useDeadlineConferences";
 import { handleWidgetAppConfigUpdate } from "../utils/widgetLifecycle";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
@@ -10,12 +13,14 @@ import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveD
 import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import type { PaperConfig, PaperDeadlineInfo } from "../types/config";
-import { deadlineInstanceKey, selectWidgetDeadlines } from "../utils/deadlineKeys";
+import type { UiLanguage } from "../utils/localization";
+import { deadlineConferenceKey, selectWidgetDeadlines } from "../utils/deadlineKeys";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 
-export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boolean }) {
+export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHeader?: boolean; language: UiLanguage }) {
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
+  const { conferences, now } = useDeadlineConferences(deadlines);
   const [paperConfig, setPaperConfig] = useState<PaperConfig>({});
   const [paperBackendError, setPaperBackendError] = useState<string | null>(null);
   const [paperRefreshError, setPaperRefreshError] = useState<string | null>(null);
@@ -137,9 +142,9 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
   const mainText = getT("Main Text", "#ffffff");
   const subText = getT("Sub Text", "#64748b");
 
-  const displayList = selectWidgetDeadlines(deadlines, paperConfig);
+  const displayList = selectWidgetDeadlines(conferences, paperConfig, now);
   const hasSelections = Boolean(
-    paperConfig.pinned_deadline_ids?.length || paperConfig.subscribed_titles?.length
+    paperConfig.followed_conference_ids?.length || paperConfig.pinned_deadline_ids?.length || paperConfig.pinned_titles?.length || paperConfig.subscribed_titles?.length
   );
 
   const handleRefresh = async () => {
@@ -209,11 +214,11 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
         ) : displayList.length > 0 ? (
           displayList.map((dl) => (
             <div
-              key={deadlineInstanceKey(dl)}
+              key={deadlineConferenceKey(dl)}
               className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10"
             >
-              <div className="flex items-center justify-between relative z-10">
-                <div className="flex flex-col min-w-0">
+              <div className="flex items-start justify-between relative z-10 gap-2">
+                <div className="flex flex-col min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-black truncate">
                       {dl.title} {dl.year}
@@ -230,16 +235,21 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
                       📍 {dl.place || "Online"}
                     </span>
                   </div>
+                  <DeadlineStageDetails deadline={dl} compact color={subText} isLight={dashboardTheme === "light"} />
                 </div>
                 <div className="text-right flex-shrink-0 pl-2">
                   <div
                     className="text-[10px] font-black tabular-nums bg-white/5 px-2 py-1 rounded-lg border border-white/5"
                     style={{ color: highlight }}
                   >
-                    <DeadlineCountdown date={dl.deadline_utc} />
+                    {dl.deadline_utc ? <DeadlineCountdown date={dl.deadline_utc} /> : "TBD"}
                   </div>
                 </div>
               </div>
+              <details className="relative z-10 mt-2 text-[9px]" data-no-drag="true">
+                <summary className="cursor-pointer" style={{ color: subText }}>View timeline</summary>
+                <DeadlineTimeline deadline={dl} now={now} language={language} compact />
+              </details>
               <div
                 className="absolute top-0 right-0 w-16 h-16 rounded-full blur-xl -mr-8 -mt-8 pointer-events-none"
                 style={{ backgroundColor: `${accent}22` }}
@@ -258,7 +268,7 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
             <span className="text-[9px] opacity-70 leading-relaxed">
               {hasSelections
                 ? "No upcoming deadlines for the selected conferences."
-                : "Select Remind me or pin a deadline on the main page."}
+                : "Follow a conference on the main page to show it here."}
             </span>
           </div>
         )}

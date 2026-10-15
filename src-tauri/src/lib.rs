@@ -25,12 +25,14 @@ use tauri::Manager;
 
 mod antigravity;
 mod arxiv;
+mod arxiv_download;
 mod commands;
 mod config_store;
 mod deadlines;
 mod desktop;
 mod gpu;
 mod logger;
+mod main_navigation;
 #[cfg(target_os = "macos")]
 mod macos_setup;
 #[cfg(target_os = "macos")]
@@ -61,6 +63,7 @@ mod widget_layout;
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(main_navigation::MainNavigation::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -78,6 +81,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            main_navigation::take_pending_main_navigation,
             commands::create_widget,
             commands::close_widget,
             commands::hide_all_widgets,
@@ -116,9 +120,12 @@ pub fn run() {
             commands::get_arxiv_saved_papers,
             commands::get_arxiv_discarded_papers,
             commands::open_link,
+            arxiv_download::download_arxiv_pdf,
             commands::remove_arxiv_saved_paper,
             commands::remove_arxiv_discarded_paper,
             commands::refresh_arxiv,
+            commands::get_arxiv_paper_page,
+            commands::refresh_arxiv_paper_page,
             commands::open_log_dir,
             commands::open_config_dir,
             commands::get_config_dir_path,
@@ -179,7 +186,7 @@ pub fn run() {
                 if let Err(error) = macos_widget_snapshot::publish_gpu_snapshot(&handle, &gpu_config, &cached_gpu) {
                     log::warn!("Failed to publish macOS GPU widget snapshot: {error}");
                 }
-                let paper_config = config_store::read_config::<models::PaperConfig>(&handle, "paper_deadline.json");
+                let paper_config = deadlines::read_paper_config(&handle);
                 if let Err(error) = macos_widget_snapshot::publish_deadline_snapshot(&handle, &paper_config, &cached_deadlines) {
                     log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
                 }
@@ -611,9 +618,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             let open_main = match event {
                 tauri::RunEvent::Reopen { has_visible_windows: false, .. } => true,
-                tauri::RunEvent::Opened { urls } => urls.iter().any(|url| {
-                    url.scheme() == "widgitron" && url.host_str() == Some("open")
-                }),
+                tauri::RunEvent::Opened { urls } => {
+                    let mut handled = false;
+                    for url in &urls {
+                        handled |= main_navigation::handle_widget_url(app, url);
+                    }
+                    handled
+                }
                 _ => false,
             };
             #[cfg(target_os = "macos")]

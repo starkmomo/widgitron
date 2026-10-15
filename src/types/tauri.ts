@@ -71,7 +71,18 @@ export type LiveDataCommandResult = {
   refresh_quota: QuotaItem[];
 };
 
+export interface ArxivPaperPage {
+  papers: ArxivPaper[];
+  data_date: string | null;
+  total: number;
+  page: number;
+  page_size: number;
+  fresh: boolean;
+}
+
 export interface TauriCommandMap {
+  get_arxiv_paper_page: ArxivPaperPage | null;
+  refresh_arxiv_paper_page: ArxivPaperPage;
   get_app_config: AppConfig;
   get_gpu_config: GpuConfig;
   ssh_config_has_host: boolean;
@@ -111,11 +122,13 @@ export interface TauriCommandMap {
   open_log_dir: void;
   open_config_dir: void;
   open_link: void;
+  download_arxiv_pdf: string;
   mark_arxiv_seen: void;
   remove_arxiv_saved_paper: void;
   remove_arxiv_discarded_paper: void;
   update_manual_quota: void;
   show_main: void;
+  take_pending_main_navigation: "quota" | "gpu" | "deadlines" | null;
   show_sidebar: void;
   hide_sidebar: void;
   toggle_sidebar_visibility: void;
@@ -134,6 +147,8 @@ export type TauriCommand = keyof TauriCommandMap;
 
 /** All frontend/backend command names — useful for grep and runtime checks. */
 export const TAURI_COMMAND_NAMES = [
+  "get_arxiv_paper_page",
+  "refresh_arxiv_paper_page",
   "get_app_config",
   "get_gpu_config",
   "ssh_config_has_host",
@@ -173,11 +188,13 @@ export const TAURI_COMMAND_NAMES = [
   "open_log_dir",
   "open_config_dir",
   "open_link",
+  "download_arxiv_pdf",
   "mark_arxiv_seen",
   "remove_arxiv_saved_paper",
   "remove_arxiv_discarded_paper",
   "update_manual_quota",
   "show_main",
+  "take_pending_main_navigation",
   "show_sidebar",
   "hide_sidebar",
   "toggle_sidebar_visibility",
@@ -201,6 +218,8 @@ void _allCommandsListed;
 export type TauriInvokeResult<C extends TauriCommand> = TauriCommandMap[C];
 
 export interface TauriCommandArgs {
+  get_arxiv_paper_page: { categories: string[]; keywords: string[]; date: string | null; page: number };
+  refresh_arxiv_paper_page: { categories: string[]; keywords: string[]; date: string | null; page: number; force: boolean };
   log_sidebar_sync: { phase: string; details: string };
   get_app_config: undefined;
   get_gpu_config: undefined;
@@ -241,6 +260,7 @@ export interface TauriCommandArgs {
   close_widget: { id: string };
   set_desktop_mode: { label: string; enabled: boolean };
   open_link: { url: string };
+  download_arxiv_pdf: { id: string };
   mark_arxiv_seen: { id: string; saved: boolean };
   remove_arxiv_saved_paper: { id: string };
   remove_arxiv_discarded_paper: { id: string };
@@ -255,6 +275,7 @@ export interface TauriCommandArgs {
     error?: string;
   };
   show_main: undefined;
+  take_pending_main_navigation: undefined;
   hide_all_widgets: undefined;
   show_sidebar: undefined;
   hide_sidebar: undefined;

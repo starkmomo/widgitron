@@ -23,6 +23,7 @@ import { tauriListen } from "../utils/tauriListen";
 import { MasterSwitch } from "../components/MasterSwitch";
 import { providerSupportsQuotaVisualizations } from "../components/QuotaVisualizations";
 import { ThemeManagementSection } from "./ThemeManagementSection";
+import { conferencePreferenceIds, updateConferencePreferences } from "../utils/deadlineKeys";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { listenGpuDataSync } from "../utils/gpuDataSync";
@@ -903,21 +904,6 @@ const parseArxivKeywordsInput = (value: string) =>
     .map((keyword) => keyword.trim())
     .filter(Boolean);
 
-const formatDeadlineSubscriptionsInput = (titles?: string[]) => (titles || []).join(", ");
-
-const parseDeadlineSubscriptionsInput = (value: string) => {
-  const seen = new Set<string>();
-  return value
-    .split(",")
-    .map((title) => title.trim())
-    .filter((title) => {
-      const normalized = title.toLowerCase();
-      if (!normalized || seen.has(normalized)) return false;
-      seen.add(normalized);
-      return true;
-    });
-};
-
 export function SettingsPanel({
   gpuConfig,
   paperConfig,
@@ -954,9 +940,6 @@ export function SettingsPanel({
     globalScalePercent(appConfig.global_scale)
   );
   const committedGlobalScaleRef = useRef(normalizeGlobalScale(appConfig.global_scale));
-  const [deadlineSubscriptionsInput, setDeadlineSubscriptionsInput] = useState(() =>
-    formatDeadlineSubscriptionsInput(paperConfig.subscribed_titles)
-  );
   const [arxivKeywordsInput, setArxivKeywordsInput] = useState(() =>
     formatArxivKeywordsInput(arxivConfig.keywords)
   );
@@ -1172,7 +1155,6 @@ export function SettingsPanel({
 
   useEffect(() => {
     setLocalPaper(paperConfig);
-    setDeadlineSubscriptionsInput(formatDeadlineSubscriptionsInput(paperConfig.subscribed_titles));
   }, [paperConfig]);
 
   useEffect(() => {
@@ -2297,13 +2279,13 @@ export function SettingsPanel({
           <Plus size={16} /> Add New Server
         </button>
       </div>
-      <ThemeManagementSection
+      {!embeddedSection && <ThemeManagementSection
         themeConfig={themeConfig}
         onSaveThemes={onSaveThemes}
         dashboardTheme={appConfig.theme ?? "dark"}
         activeWidgets={activeWidgets}
         widgetId={serviceWidgetMeta("gpu_enabled").id}
-      />
+      />}
     </section>
     );
   };
@@ -2460,38 +2442,25 @@ export function SettingsPanel({
           </div>
         </div>
 
-        <div className="space-y-3 border-t border-[var(--dashboard-border)] pt-6">
-          <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-            Subscribed Conferences
-          </label>
-          <input
-            type="text"
-            value={deadlineSubscriptionsInput}
-            onChange={(e) => setDeadlineSubscriptionsInput(e.target.value)}
-            onBlur={(e) => {
-              const nextTitles = parseDeadlineSubscriptionsInput(e.target.value);
-              const nextConfig = { ...localPaper, subscribed_titles: nextTitles };
-              setDeadlineSubscriptionsInput(formatDeadlineSubscriptionsInput(nextTitles));
-              setLocalPaper(nextConfig);
-              onSavePaper(nextConfig);
-            }}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            className={`w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
-              appConfig.theme === "light"
-                ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
-                : "bg-black/40 border-white/10 text-white focus:bg-black/60"
-            }`}
-            placeholder="VLDB, SIGMOD, KDD"
-          />
-        </div>
+        {!embeddedSection && <div className="space-y-3 border-t border-[var(--dashboard-border)] pt-6">
+          <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Subscribed Conferences</label>
+          <div className="flex flex-wrap gap-2">
+            {conferencePreferenceIds(localPaper, "followed").map(id => <button key={id} type="button"
+              onClick={() => { const next = updateConferencePreferences(localPaper, [id], "unfollow"); setLocalPaper(next); onSavePaper(next); }}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--dashboard-border)] px-3 py-2 text-xs text-slate-500" title="Unfollow conference">
+              <span data-no-localize>{id.replace("|", " ").toUpperCase()}</span><X size={12} />
+            </button>)}
+            {!conferencePreferenceIds(localPaper, "followed").length && <p className="text-xs text-slate-500">No followed conferences.</p>}
+          </div>
+        </div>}
       </div>
-      <ThemeManagementSection
+      {!embeddedSection && <ThemeManagementSection
         themeConfig={themeConfig}
         onSaveThemes={onSaveThemes}
         dashboardTheme={appConfig.theme ?? "dark"}
         activeWidgets={activeWidgets}
         widgetId={serviceWidgetMeta("deadline_enabled").id}
-      />
+      />}
     </section>
   );
 
@@ -2674,13 +2643,13 @@ export function SettingsPanel({
           />
         </div>
       </div>
-      <ThemeManagementSection
+      {!embeddedSection && <ThemeManagementSection
         themeConfig={themeConfig}
         onSaveThemes={onSaveThemes}
         dashboardTheme={appConfig.theme ?? "dark"}
         activeWidgets={activeWidgets}
         widgetId={serviceWidgetMeta("arxiv_enabled").id}
-      />
+      />}
     </section>
   );
 
@@ -2831,13 +2800,13 @@ export function SettingsPanel({
           )}
         </div>
       </div>
-      <ThemeManagementSection
+      {!embeddedSection && <ThemeManagementSection
         themeConfig={themeConfig}
         onSaveThemes={onSaveThemes}
         dashboardTheme={appConfig.theme ?? "dark"}
         activeWidgets={activeWidgets}
         widgetId={serviceWidgetMeta("quota_enabled").id}
-      />
+      />}
     </section>
     );
   };
