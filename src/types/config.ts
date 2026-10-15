@@ -197,9 +197,12 @@ export interface PaperConfig {
   show_past_deadlines?: boolean;
   filter_by_rank?: string[];
   filter_by_sub?: string[];
-  pinned_titles?: string[];
-  pinned_deadline_ids?: string[];
-  subscribed_titles?: string[];
+  pinned_titles?: string[] | null;
+  pinned_deadline_ids?: string[] | null;
+  subscribed_titles?: string[] | null;
+  ignored_titles?: string[] | null;
+  followed_conference_ids?: string[] | null;
+  ignored_conference_ids?: string[] | null;
   filter_by_core?: string[];
 }
 
@@ -265,8 +268,21 @@ export interface ServerGpuData {
   slurm_queue_jobs?: SlurmQueueJob[] | null;
 }
 
+export type DeadlineStage = "abstract_submission" | "submission" | "full_paper_submission" | "arr_submission" | "arr_commitment" | "rebuttal" | "decision" | "unspecified";
+
+export interface DeadlineMilestone {
+  id: string;
+  label: string;
+  stage: DeadlineStage;
+  deadline_utc: string | null;
+  source_time: string;
+  note: string | null;
+  round: number;
+}
+
 export interface PaperDeadlineInfo {
   title: string;
+  description?: string | null;
   year: string;
   deadline_utc: string;
   timezone: string;
@@ -276,6 +292,10 @@ export interface PaperDeadlineInfo {
   link: string;
   ccf?: string | null;
   core?: string | null;
+  deadline_stage?: DeadlineStage;
+  deadline_note?: string | null;
+  deadline_label?: string;
+  timeline?: DeadlineMilestone[];
 }
 
 export interface QuotaBar {

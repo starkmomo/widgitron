@@ -92,8 +92,8 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
           }}
         >
           <div className="flex max-h-[calc(100dvh_-_2rem)] flex-col">
-            <header className="flex shrink-0 items-start gap-4 p-5 pb-4">
-              <h2 id={titleId} data-no-localize className="min-w-0 flex-1 max-h-[30dvh] overflow-y-auto text-base font-bold leading-relaxed break-words">
+            <header className={`flex shrink-0 items-start ${compact ? "gap-2 p-3 pb-2" : "gap-4 p-5 pb-4"}`}>
+              <h2 id={titleId} data-no-localize className={`min-w-0 flex-1 max-h-[30dvh] overflow-y-auto font-bold break-words ${compact ? "text-sm leading-snug" : "text-base leading-relaxed"}`}>
                 {paper.title}
               </h2>
               <button
@@ -107,7 +107,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
                 <X size={18} aria-hidden="true" />
               </button>
             </header>
-            <div tabIndex={0} className={`min-h-0 overflow-y-auto overscroll-contain px-5 pb-5 text-sm leading-7 ${isLight ? "text-slate-600" : "text-slate-300"}`}>
+            <div tabIndex={0} className={`min-h-0 overflow-y-auto overscroll-contain ${compact ? "px-3 pb-3 text-xs leading-[1.6]" : "px-5 pb-5 text-sm leading-7"} ${isLight ? "text-slate-600" : "text-slate-300"}`}>
               <p data-no-localize className="whitespace-pre-line break-words">{paper.summary}</p>
             </div>
           </div>

@@ -37,7 +37,7 @@ impl Default for GpuConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PaperConfig {
     pub update_interval: Option<u64>,
     pub max_deadlines: Option<usize>,
@@ -47,6 +47,9 @@ pub struct PaperConfig {
     pub pinned_titles: Option<Vec<String>>,
     pub pinned_deadline_ids: Option<Vec<String>>,
     pub subscribed_titles: Option<Vec<String>>,
+    pub ignored_titles: Option<Vec<String>>,
+    pub followed_conference_ids: Option<Vec<String>>,
+    pub ignored_conference_ids: Option<Vec<String>>,
     pub filter_by_core: Option<Vec<String>>,
 }
 
@@ -61,6 +64,9 @@ impl Default for PaperConfig {
             pinned_titles: None,
             pinned_deadline_ids: None,
             subscribed_titles: None,
+            ignored_titles: None,
+            followed_conference_ids: None,
+            ignored_conference_ids: None,
             filter_by_core: Some(vec!["A*".into(), "A".into()]),
         }
     }
@@ -940,9 +946,36 @@ pub struct ServerGpuData {
     pub slurm_queue_jobs: Option<Vec<SlurmQueueJob>>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeadlineStage {
+    AbstractSubmission,
+    Submission,
+    FullPaperSubmission,
+    ArrSubmission,
+    ArrCommitment,
+    Rebuttal,
+    Decision,
+    #[default]
+    Unspecified,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeadlineMilestone {
+    pub id: String,
+    pub label: String,
+    pub stage: DeadlineStage,
+    pub deadline_utc: Option<String>,
+    pub source_time: String,
+    pub note: Option<String>,
+    pub round: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PaperDeadlineInfo {
     pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub year: String,
     pub deadline_utc: String, // ISO8601
     pub timezone: String,
@@ -952,11 +985,25 @@ pub struct PaperDeadlineInfo {
     pub link: String,
     pub ccf: Option<String>,
     pub core: Option<String>,
+    // Older disk caches did not retain timeline comments. Never assume that an
+    // unlabelled date is an initial paper submission deadline.
+    #[serde(default)]
+    pub deadline_stage: DeadlineStage,
+    #[serde(default)]
+    pub deadline_note: Option<String>,
+    #[serde(default)]
+    pub deadline_label: String,
+    #[serde(default)]
+    pub timeline: Vec<DeadlineMilestone>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct YamlConfTimeline {
     pub deadline: Option<String>,
+    pub abstract_deadline: Option<String>,
+    pub rebuttal_deadline: Option<String>,
+    pub decision_deadline: Option<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -977,6 +1024,7 @@ pub struct YamlConfRank {
 #[derive(Debug, Deserialize)]
 pub struct YamlConfItem {
     pub title: String,
+    pub description: Option<String>,
     pub sub: Option<String>,
     pub rank: Option<YamlConfRank>,
     pub confs: Option<Vec<YamlConfYear>>,

@@ -183,7 +183,7 @@ pub fn run() {
                 if let Err(error) = macos_widget_snapshot::publish_gpu_snapshot(&handle, &gpu_config, &cached_gpu) {
                     log::warn!("Failed to publish macOS GPU widget snapshot: {error}");
                 }
-                let paper_config = config_store::read_config::<models::PaperConfig>(&handle, "paper_deadline.json");
+                let paper_config = deadlines::read_paper_config(&handle);
                 if let Err(error) = macos_widget_snapshot::publish_deadline_snapshot(&handle, &paper_config, &cached_deadlines) {
                     log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
                 }

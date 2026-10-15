@@ -11,11 +11,9 @@ import {
   Activity,
   Lock,
   Unlock,
-  Bell,
   Pin,
   PinOff,
   Monitor,
-  Trophy,
   Copy,
   Trash2,
   RefreshCw,
@@ -76,8 +74,9 @@ import { StatCard } from "./components/StatCard";
 import { SectionEmptyState } from "./components/SectionEmptyState";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
-import { DeadlineCountdown } from "./components/DeadlineCountdown";
-import { deadlineInstanceKey } from "./utils/deadlineKeys";
+import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
+import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
+import { updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
 import {
   compactSidebarTileLayout,
@@ -446,8 +445,26 @@ function App() {
   const [isDesktopFixed, setIsDesktopFixed] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
+  const { conferences: deadlineConferences, now: deadlineNow } = useDeadlineConferences(deadlines);
   const [gpuConfig, setGpuConfig] = useState<GpuConfig>({ servers: [] });
   const [paperConfig, setPaperConfig] = useState<PaperConfig>({});
+  const paperConfigRef = useRef(paperConfig);
+  paperConfigRef.current = paperConfig;
+  const paperSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const paperSaveRevision = useRef(0);
+  const [paperSaveError, setPaperSaveError] = useState(false);
+  const paperPendingWrites = useRef(0);
+  const [paperPreferenceUndo, setPaperPreferenceUndo] = useState<PaperConfig | null>(null);
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    const sync = startWindowSnapshotSync<PaperConfig>({
+      listen: handler => tauriListen("paper_config_update", event => handler(event.payload)),
+      read: () => tauriInvoke("get_paper_config"),
+      apply: config => { if (!paperPendingWrites.current) { paperConfigRef.current = config; setPaperConfig(config); } },
+      onError: error => console.error("Conference preferences sync failed", error),
+    });
+    return () => sync.stop();
+  }, [windowLabel]);
   const [arxivConfig, setArxivConfig] = useState<ArxivConfig>({});
   const [arxivPapers, setArxivPapers] = useState<ArxivPaper[]>([]);
   const [arxivSavedPapers, setArxivSavedPapers] = useState<ArxivPaper[]>([]);
@@ -901,9 +918,8 @@ function App() {
           if (active) setIsAutostart(enabled);
         }).catch((error) => console.error("Autostart status unavailable", error));
 
-        const [gc, pc, arc, qc, tc] = await Promise.all([
+        const [gc, arc, qc, tc] = await Promise.all([
           tauriInvoke("get_gpu_config"),
-          tauriInvoke("get_paper_config"),
           tauriInvoke("get_arxiv_config"),
           tauriInvoke("get_quota_config"),
           tauriInvoke("get_theme_config"),
@@ -912,7 +928,6 @@ function App() {
         if (!active) return;
 
         setGpuConfig(gc);
-        setPaperConfig(pc);
         setArxivConfig(arc);
         setQuotaConfig(qc);
         setThemeConfig(tc);
@@ -1159,32 +1174,54 @@ function App() {
   };
 
   const savePaperConfig = async (newConfig: PaperConfig) => {
+    const previous = paperConfigRef.current;
+    const revision = ++paperSaveRevision.current;
+    paperPendingWrites.current += 1;
+    paperConfigRef.current = newConfig;
+    setPaperConfig(newConfig);
+    setPaperSaveError(false);
+    // Respond to the click immediately and serialize writes so fast actions
+    // cannot replace one another with a stale config or delayed response.
+    const save = paperSaveQueue.current.catch(() => {}).then(() => tauriInvoke("save_paper_config", { config: newConfig }));
+    paperSaveQueue.current = save;
     try {
-      await tauriInvoke("save_paper_config", { config: newConfig });
-      setPaperConfig(newConfig);
+      await save;
     } catch (e) {
       console.error("Save failed", e);
+      if (revision !== paperSaveRevision.current) return;
+      let saved = previous;
+      try { saved = await tauriInvoke("get_paper_config"); } catch { /* Keep the last known config if reading also fails. */ }
+      if (revision === paperSaveRevision.current) {
+        paperConfigRef.current = saved;
+        setPaperConfig(saved);
+        setPaperSaveError(true);
+        setPaperPreferenceUndo(null);
+      }
+    } finally {
+      paperPendingWrites.current -= 1;
+      if (!paperPendingWrites.current && revision === paperSaveRevision.current) {
+        try {
+          const saved = await tauriInvoke("get_paper_config");
+          if (!paperPendingWrites.current && revision === paperSaveRevision.current) {
+            paperConfigRef.current = saved;
+            setPaperConfig(saved);
+          }
+        } catch (error) { console.error("Could not reload conference preferences", error); }
+      }
     }
   };
 
-  const togglePinDeadline = async (deadline: PaperDeadlineInfo) => {
-    const key = deadlineInstanceKey(deadline);
-    const pinned = paperConfig.pinned_deadline_ids || [];
-    const nextPinned = pinned.includes(key)
-      ? pinned.filter((item) => item !== key)
-      : [...pinned, key];
-    const nextConfig = { ...paperConfig, pinned_deadline_ids: nextPinned };
-    await savePaperConfig(nextConfig);
+  const setConferencePreference = (ids: string[], action: ConferencePreference, undoable = false) => {
+    const previous = paperConfigRef.current;
+    setPaperPreferenceUndo(undoable ? previous : null);
+    void savePaperConfig(updateConferencePreferences(previous, ids, action));
   };
 
-  const toggleSubscribeConference = async (title: string) => {
-    const subscribed = paperConfig.subscribed_titles || [];
-    const titleKey = title.toLowerCase();
-    const nextSubscribed = subscribed.some((t) => t.toLowerCase() === titleKey)
-      ? subscribed.filter((t) => t.toLowerCase() !== titleKey)
-      : [...subscribed, title];
-    const nextConfig = { ...paperConfig, subscribed_titles: nextSubscribed };
-    await savePaperConfig(nextConfig);
+  const undoConferencePreference = () => {
+    if (!paperPreferenceUndo) return;
+    const { followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids } = paperPreferenceUndo;
+    setPaperPreferenceUndo(null);
+    void savePaperConfig({ ...paperConfigRef.current, followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids });
   };
 
   const onSaveApp = async (config: AppConfig) => {
@@ -2279,13 +2316,13 @@ function App() {
 
   const renderInlineSettings = (section: SettingsSection) =>
     inlineSettingsSection === section && (
-      <div className="mb-8 rounded-2xl border border-[var(--dashboard-border)] bg-[var(--card-bg)] p-5">
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-bold">{LIVE_DATA_SECTION_LABELS[section as keyof typeof LIVE_DATA_SECTION_LABELS]}</h3>
+      <section aria-label="Page settings" className={`mb-8 rounded-2xl border border-l-[3px] p-5 shadow-sm ${appConfig.theme === "light" ? "border-blue-200 border-l-blue-500 bg-blue-50/70" : "border-blue-400/25 border-l-blue-400 bg-blue-500/5"}`}>
+        <div className="mb-5 flex items-center justify-between gap-3 border-b border-blue-400/15 pb-4">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-blue-500"><Settings size={16} /><span>{LIVE_DATA_SECTION_LABELS[section as keyof typeof LIVE_DATA_SECTION_LABELS]}</span><span>Settings</span></h3>
           <button type="button" onClick={() => setInlineSettingsSection(null)} aria-label="Close settings" title="Close settings" className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--dashboard-border)] text-red-500 hover:bg-red-500/10 focus-visible:outline-2 focus-visible:outline-red-500"><X size={16} /></button>
         </div>
         {renderSettingsPanel(section, true)}
-      </div>
+      </section>
     );
 
   const sectionActionClass = `inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${appConfig.theme === "light" ? "border-slate-200 bg-white text-slate-700 hover:bg-blue-50" : "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"}`;
@@ -2434,7 +2471,7 @@ function App() {
                   />
                   <StatCard
                     label="Active Deadlines"
-                    value={deadlines.length.toString()}
+                    value={deadlineConferences.length.toString()}
                     icon={<Calendar className="text-emerald-400" />}
                     theme={appConfig.theme}
                     hint={paperStatHint}
@@ -2830,114 +2867,11 @@ function App() {
                   )}
                 />
                 {renderInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
-                <p className="text-xs text-slate-500">
-                  Add the Paper Deadlines widget in Notification Center.
-                </p>
-                <div className="space-y-4">
-                  {deadlines.length === 0 ? (
-                    <SectionEmptyState message="No deadlines match your current filters." action={inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES ? "Hide settings" : "Adjust filters"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} />
-                  ) : (
-                    deadlines.map((dl, idx) => {
-                      const deadlineKey = deadlineInstanceKey(dl);
-                      const isPinned = (paperConfig.pinned_deadline_ids || []).includes(deadlineKey);
-                      const isSubscribed = (paperConfig.subscribed_titles || []).some(
-                        (title) => title.toLowerCase() === dl.title.toLowerCase()
-                      );
-                      return (
-                        <div
-                          key={idx}
-                          className={`border border-[var(--dashboard-border)] rounded-2xl p-6 flex items-center justify-between hover:bg-black/5 transition-all group ${
-                            appConfig.theme === "light" ? "bg-white" : "bg-white/5"
-                          }`}
-                        >
-                          <div className="flex items-center gap-6">
-                            <div
-                              className={`w-16 h-16 rounded-2xl flex flex-col items-center justify-center relative ${
-                                appConfig.theme === "light"
-                                  ? "bg-purple-100 text-purple-600"
-                                  : "bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/20 text-purple-400"
-                              }`}
-                            >
-                              <span className="text-[10px] font-black uppercase tracking-tighter opacity-60">
-                                {dl.sub}
-                              </span>
-                              <Trophy
-                                size={20}
-                                className={appConfig.theme === "light" ? "text-purple-600" : "text-purple-400"}
-                              />
-                              <button
-                                onClick={() => togglePinDeadline(dl)}
-                                className={`absolute -top-2 -right-2 p-1.5 rounded-full shadow-lg transition-all ${
-                                  isPinned ? "bg-amber-500 text-white scale-110" : "bg-slate-800 text-slate-500 opacity-0 group-hover:opacity-100"
-                                }`}
-                                title={isPinned ? "Unpin this deadline from widget" : "Pin this deadline to widget"}
-                              >
-                                <Pin size={10} className={isPinned ? "fill-current" : ""} />
-                              </button>
-                            </div>
-                            <div>
-                              <h3
-                                className={`text-lg font-bold group-hover:text-purple-400 transition-colors flex flex-wrap items-center gap-2 ${
-                                  appConfig.theme === "light" ? "text-slate-900" : "text-white"
-                                }`}
-                              >
-                                <span>{dl.title} {dl.year}</span>
-                                {dl.ccf && (
-                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
-                                    appConfig.theme === "light" ? "bg-purple-100 text-purple-700" : "bg-purple-500/10 text-purple-400 border border-purple-500/20"
-                                  }`}>
-                                    {dl.ccf === "N" ? "Non CCF" : `CCF ${dl.ccf}`}
-                                  </span>
-                                )}
-                                {dl.core && (
-                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
-                                    appConfig.theme === "light" ? "bg-blue-100 text-blue-700" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                                  }`}>
-                                    {dl.core === "N" ? "Non Core" : `Core ${dl.core}`}
-                                  </span>
-                                )}
-                              </h3>
-                              <div className="flex items-center gap-3 mt-1">
-                                <p className="text-xs text-slate-500 font-medium">{dl.place}</p>
-                                <div className="w-1 h-1 rounded-full bg-slate-700" />
-                                <div className="text-[10px] font-mono font-bold text-purple-500/80">
-                                  <DeadlineCountdown date={dl.deadline_utc} />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-right flex flex-col items-end gap-2">
-                            <button
-                              onClick={() => toggleSubscribeConference(dl.title)}
-                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                isSubscribed
-                                  ? "bg-emerald-500 text-white"
-                                  : appConfig.theme === "light"
-                                    ? "bg-slate-100 text-slate-700 hover:bg-emerald-100"
-                                    : "bg-white/10 text-slate-200 hover:bg-emerald-500/20"
-                              }`}
-                              title={isSubscribed ? "Stop reminding me" : "Remind me"}
-                              aria-pressed={isSubscribed}
-                            >
-                              <Bell size={13} className={isSubscribed ? "fill-current" : ""} />
-                              {isSubscribed ? "Reminding" : "Remind me"}
-                            </button>
-                            <div
-                              className={`text-xl font-black ${
-                                appConfig.theme === "light" ? "text-slate-900" : "text-white"
-                              }`}
-                            >
-                              {new Date(dl.deadline_utc).toLocaleDateString()}
-                            </div>
-                            <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                              Deadline (UTC)
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                {paperSaveError && <p role="alert" className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-xs text-red-500">Could not save conference preferences. Please try again.</p>}
+                <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
+                  isLight={appConfig.theme === "light"} onPreference={setConferencePreference}
+                  canUndo={Boolean(paperPreferenceUndo)} onUndo={undoConferencePreference}
+                  onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} />
               </motion.div>
             )}
 
