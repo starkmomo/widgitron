@@ -128,6 +128,7 @@ export interface TauriCommandMap {
   remove_arxiv_discarded_paper: void;
   update_manual_quota: void;
   show_main: void;
+  take_pending_main_navigation: "quota" | "gpu" | "deadlines" | null;
   show_sidebar: void;
   hide_sidebar: void;
   toggle_sidebar_visibility: void;
@@ -193,6 +194,7 @@ export const TAURI_COMMAND_NAMES = [
   "remove_arxiv_discarded_paper",
   "update_manual_quota",
   "show_main",
+  "take_pending_main_navigation",
   "show_sidebar",
   "hide_sidebar",
   "toggle_sidebar_visibility",
@@ -273,6 +275,7 @@ export interface TauriCommandArgs {
     error?: string;
   };
   show_main: undefined;
+  take_pending_main_navigation: undefined;
   hide_all_widgets: undefined;
   show_sidebar: undefined;
   hide_sidebar: undefined;

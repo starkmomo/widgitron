@@ -7,7 +7,9 @@ private let appGroup = Bundle.main.object(forInfoDictionaryKey: "WidgitronAppGro
 private let quotaWidgetKind = "com.evan.widgitron.quota"
 private let gpuWidgetKind = "com.evan.widgitron.gpu"
 private let deadlineWidgetKind = "com.evan.widgitron.deadlines"
-private let openAppURL = URL(string: "widgitron://open")
+private let quotaAppURL = URL(string: "widgitron://open/quota")
+private let gpuAppURL = URL(string: "widgitron://open/gpu")
+private let deadlineAppURL = URL(string: "widgitron://open/deadlines")
 private let snapshotBaseURL = URL(string: "http://127.0.0.1:42837")!
 
 private func cachedSnapshotURL(_ file: String) -> URL? {
@@ -163,7 +165,7 @@ private struct QuotaView: View {
         }
         .padding(isSmall ? 12 : 14)
         .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-        .widgetURL(openAppURL)
+        .widgetURL(quotaAppURL)
     }
 
     private func quotaRow(_ item: QuotaItem) -> some View {
@@ -353,7 +355,7 @@ private struct GpuView: View {
         }
         .padding(family == .systemSmall ? 12 : 14)
         .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-        .widgetURL(openAppURL)
+        .widgetURL(gpuAppURL)
     }
 }
 
@@ -523,7 +525,7 @@ private struct DeadlineView: View {
         }
         .padding(family == .systemSmall ? 12 : 14)
         .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-        .widgetURL(openAppURL)
+        .widgetURL(deadlineAppURL)
     }
 
     private func deadlineRow(_ item: DeadlineItem, prominent: Bool) -> some View {

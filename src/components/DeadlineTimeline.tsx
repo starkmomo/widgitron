@@ -1,8 +1,9 @@
 import type { PaperDeadlineInfo } from "../types/config";
+import type { UiLanguage } from "../utils/localization";
 import { deadlineStageNote, deadlineTimeline } from "../utils/deadlineKeys";
 
-export function DeadlineTimeline({ deadline, now, compact = false }: {
-  deadline: PaperDeadlineInfo; now: number; compact?: boolean;
+export function DeadlineTimeline({ deadline, now, language, compact = false }: {
+  deadline: PaperDeadlineInfo; now: number; language: UiLanguage; compact?: boolean;
 }) {
   const events = deadlineTimeline(deadline);
   const rounds = new Set(events.map(event => event.round)).size;
@@ -24,8 +25,8 @@ export function DeadlineTimeline({ deadline, now, compact = false }: {
                   <span data-no-localize className={`${compact ? "text-[10px]" : "text-xs"} font-semibold break-words`}>
                     {event.label}{rounds > 1 ? ` · Round ${event.round}` : ""}
                   </span>
-                  <time className="text-[10px] tabular-nums" dateTime={event.deadline_utc ?? undefined} title={`${event.source_time} (${deadline.timezone})${event.deadline_utc ? ` · ${event.deadline_utc}` : ""}`}>
-                    {Number.isFinite(time) ? new Date(time).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : event.source_time || "TBD"}
+                  <time data-no-localize className="text-[10px] tabular-nums" dateTime={event.deadline_utc ?? undefined} title={`${event.source_time} (${deadline.timezone})${event.deadline_utc ? ` · ${event.deadline_utc}` : ""}`}>
+                    {Number.isFinite(time) ? new Date(time).toLocaleString(language, { dateStyle: "medium", timeStyle: "short" }) : event.source_time || "TBD"}
                   </time>
                 </div>
                 {(past || active || !Number.isFinite(time)) && (

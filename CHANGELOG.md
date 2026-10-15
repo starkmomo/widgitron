@@ -3,6 +3,8 @@
 ## [Unreleased] - 2026-10-15
 
 ### 中文
+- **macOS 小组件跳转**：点击额度、GPU 或截止日期小组件时打开对应模块页面；应用尚未启动时保留跳转请求，界面就绪后执行。
+- **截止日期语言**：时间线和会议卡片中的日期格式跟随界面语言切换，英文界面不再沿用系统的中文日期格式；保持本地时区显示。
 - **页面内设置与摘要阅读**：页面展开的设置使用淡蓝色底、强调边线和标题分隔；主题与样式仅保留在完整设置页。侧边栏和浮窗中的完整摘要使用更紧凑的字号、行距和内边距，并保留滚动阅读。
 - **会议搜索与关注**：支持按会议缩写、英文全称及年份搜索，并提供“全部 / 已关注 / 已忽略”页签；按“会议＋年份”保存选择，不自动延续到下一届。增加批量关注、忽略、取消关注、恢复、清空和已过期条目清理，可撤销批量操作；过期选择保留供管理，未知日期不误判为过期。合并重复的置顶和提醒操作为“关注”，自动保留旧选择。关注的会议按最近截止节点显示在侧边栏、浮窗和 macOS 小组件；忽略与关注互斥，已忽略会议可恢复。点击后立即反馈并按顺序保存，避免连续操作覆盖；macOS 主窗口接受未激活时的首次点击。
 - **会议时间线**：每个会议年份合并为一张卡片，收录摘要、正文、ARR、rebuttal 和 decision 等数据源节点；倒计时自动跟随最近的未截止节点，展开可查看包含已过期节点的完整时间线。阶段标签和原始备注保持英文；已关注会议会跨阶段保留，侧边栏、浮窗和 macOS 小组件同步跟随下一节点。按 UTC 偏移、AoE 和 PT 夏令时正确换算截止时间，界面明确展示本地时间。
@@ -21,6 +23,8 @@
 - **arXiv**：不设置关键词时显示所选分类的近期论文，并改进空状态提示。
 
 ### English
+- **macOS widget navigation**: Open the matching quota, GPU, or deadline page when a widget is clicked, retaining the destination until the main interface is ready on a cold launch.
+- **Deadline date language**: Format timeline and conference card dates using the selected interface language instead of the system language, while preserving the local time zone.
 - **Inline settings and abstract reading**: Distinguish expanded page settings with a tinted surface, accent border, and separated header. Keep theme styling in the full Settings page. Use denser type, line spacing, and padding for full abstracts in sidebars and floating widgets while preserving scrolling.
 - **Conference search and following**: Search by acronym, source full name, and year across All, Followed, and Ignored tabs. Store preferences per conference edition without automatically following later years. Add bulk follow, ignore, unfollow, restore, clear-all, and expired cleanup with Undo; retain expired selections for management and never treat unknown dates as expired. Combine the overlapping pin and reminder controls into Follow while preserving existing selections. Show followed conferences in sidebar, floating, and macOS widgets ordered by their next deadline. Ignoring removes Follow and can be reversed. Update controls immediately, serialize preference saves to preserve rapid changes, and accept the first click in an inactive macOS main window.
 - **Conference timelines**: Show one card per conference year with every available abstract, paper, ARR, rebuttal, and decision milestone. Count down to the nearest upcoming stage, roll forward locally, and expand to view the complete timeline including past events. Keep stage labels and source notes in English, preserve followed conferences across stage changes, and synchronize sidebar, floating, and macOS widgets. Correctly convert UTC offsets, AoE, and Pacific daylight-saving time, and explicitly display local time.

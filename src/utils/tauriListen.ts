@@ -21,6 +21,7 @@ import type {
 
 export interface TauriEventMap {
   app_config_update: AppConfigUpdatePayload;
+  main_navigation_pending: UnitPayload;
   gpu_config_update: GpuConfigUpdatePayload;
   paper_config_update: PaperConfigUpdatePayload;
   arxiv_config_update: ArxivConfigUpdatePayload;
@@ -49,6 +50,7 @@ export type TauriEventPayload<E extends TauriEvent> = TauriEventMap[E];
 /** All frontend/backend event names — useful for grep and runtime checks. */
 export const TAURI_EVENT_NAMES = [
   "app_config_update",
+  "main_navigation_pending",
   "gpu_config_update",
   "paper_config_update",
   "arxiv_config_update",

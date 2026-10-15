@@ -13,11 +13,12 @@ import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveD
 import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import type { PaperConfig, PaperDeadlineInfo } from "../types/config";
+import type { UiLanguage } from "../utils/localization";
 import { deadlineConferenceKey, selectWidgetDeadlines } from "../utils/deadlineKeys";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 
-export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boolean }) {
+export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHeader?: boolean; language: UiLanguage }) {
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
   const { conferences, now } = useDeadlineConferences(deadlines);
   const [paperConfig, setPaperConfig] = useState<PaperConfig>({});
@@ -247,7 +248,7 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
               </div>
               <details className="relative z-10 mt-2 text-[9px]" data-no-drag="true">
                 <summary className="cursor-pointer" style={{ color: subText }}>View timeline</summary>
-                <DeadlineTimeline deadline={dl} now={now} compact />
+                <DeadlineTimeline deadline={dl} now={now} language={language} compact />
               </details>
               <div
                 className="absolute top-0 right-0 w-16 h-16 rounded-full blur-xl -mr-8 -mt-8 pointer-events-none"

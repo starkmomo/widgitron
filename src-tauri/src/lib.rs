@@ -32,6 +32,7 @@ mod deadlines;
 mod desktop;
 mod gpu;
 mod logger;
+mod main_navigation;
 #[cfg(target_os = "macos")]
 mod macos_setup;
 #[cfg(target_os = "macos")]
@@ -62,6 +63,7 @@ mod widget_layout;
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(main_navigation::MainNavigation::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -79,6 +81,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            main_navigation::take_pending_main_navigation,
             commands::create_widget,
             commands::close_widget,
             commands::hide_all_widgets,
@@ -615,9 +618,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             let open_main = match event {
                 tauri::RunEvent::Reopen { has_visible_windows: false, .. } => true,
-                tauri::RunEvent::Opened { urls } => urls.iter().any(|url| {
-                    url.scheme() == "widgitron" && url.host_str() == Some("open")
-                }),
+                tauri::RunEvent::Opened { urls } => {
+                    let mut handled = false;
+                    for url in &urls {
+                        handled |= main_navigation::handle_widget_url(app, url);
+                    }
+                    handled
+                }
                 _ => false,
             };
             #[cfg(target_os = "macos")]

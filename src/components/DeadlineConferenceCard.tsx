@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { ChevronDown, EyeOff, RotateCcw, Star, Trophy } from "lucide-react";
 import type { PaperDeadlineInfo } from "../types/config";
+import type { UiLanguage } from "../utils/localization";
 import { DeadlineCountdown } from "./DeadlineCountdown";
 import { DeadlineStageDetails } from "./DeadlineStageDetails";
 import { DeadlineTimeline } from "./DeadlineTimeline";
 import { conferenceHasExpired } from "../utils/deadlineKeys";
 
-export function DeadlineConferenceCard({ deadline, now, isLight, isFollowed, isIgnored, onFollow, onIgnore, onRestore, selecting = false, selected = false, onSelect }: {
-  deadline: PaperDeadlineInfo; now: number; isLight: boolean; isFollowed: boolean;
+export function DeadlineConferenceCard({ deadline, now, language, isLight, isFollowed, isIgnored, onFollow, onIgnore, onRestore, selecting = false, selected = false, onSelect }: {
+  deadline: PaperDeadlineInfo; now: number; language: UiLanguage; isLight: boolean; isFollowed: boolean;
   isIgnored: boolean; onFollow: () => void; onIgnore: () => void; onRestore: () => void;
   selecting?: boolean; selected?: boolean; onSelect?: () => void;
 }) {
@@ -60,15 +61,15 @@ export function DeadlineConferenceCard({ deadline, now, isLight, isFollowed, isI
               </button>
             </>}
           </div>}
-          <time dateTime={deadline.deadline_utc || undefined} className={`text-xl font-bold tabular-nums ${expired ? "text-slate-500" : ""}`}>{date ? date.toLocaleDateString() : "TBD"}</time>
-          {date && <span className="text-[10px] text-slate-500">{date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</span>}
+          <time data-no-localize dateTime={deadline.deadline_utc || undefined} className={`text-xl font-bold tabular-nums ${expired ? "text-slate-500" : ""}`}>{date ? date.toLocaleDateString(language) : "TBD"}</time>
+          {date && <span data-no-localize className="text-[10px] text-slate-500">{date.toLocaleTimeString(language, { hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</span>}
           {hasData && <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} aria-controls={id}
             className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-500">
             <span>{expanded ? "Hide timeline" : "View timeline"}</span><ChevronDown size={13} className={expanded ? "rotate-180" : ""} />
           </button>}
         </div>
       </div>
-      {expanded && <div id={id}><DeadlineTimeline deadline={deadline} now={now} /></div>}
+      {expanded && <div id={id}><DeadlineTimeline deadline={deadline} now={now} language={language} /></div>}
     </article>
   );
 }

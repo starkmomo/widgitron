@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { CheckSquare, ListChecks, Search, Undo2, X } from "lucide-react";
 import type { PaperConfig, PaperDeadlineInfo } from "../types/config";
+import type { UiLanguage } from "../utils/localization";
 import { conferenceHasExpired, conferenceManagementRows, conferencePreferenceIds, deadlineConferenceKey, isConferenceFollowed, isConferenceIgnored, matchesDeadlineSearch, resolveConferencePreferences, type ConferencePreference } from "../utils/deadlineKeys";
 import { DeadlineConferenceCard } from "./DeadlineConferenceCard";
 import { SectionEmptyState } from "./SectionEmptyState";
 
 type View = "all" | "followed" | "ignored";
 
-export function DeadlineConferenceBrowser({ deadlines, config, now, isLight, onPreference, onAdjustFilters, canUndo, onUndo }: {
-  deadlines: PaperDeadlineInfo[]; config: PaperConfig; now: number; isLight: boolean;
+export function DeadlineConferenceBrowser({ deadlines, config, now, language, isLight, onPreference, onAdjustFilters, canUndo, onUndo }: {
+  deadlines: PaperDeadlineInfo[]; config: PaperConfig; now: number; language: UiLanguage; isLight: boolean;
   onPreference: (ids: string[], action: ConferencePreference, undoable?: boolean) => void;
   onAdjustFilters: () => void; canUndo: boolean; onUndo: () => void;
 }) {
@@ -93,7 +94,7 @@ export function DeadlineConferenceBrowser({ deadlines, config, now, isLight, onP
       <div id="conference-list" role="tabpanel" aria-labelledby={`conference-tab-${view}`} className="space-y-4">
         {visible.length ? visible.map(item => {
           const id = deadlineConferenceKey(item);
-          return <DeadlineConferenceCard key={id} deadline={item} now={now} isLight={isLight}
+          return <DeadlineConferenceCard key={id} deadline={item} now={now} language={language} isLight={isLight}
             selecting={batch} selected={selected.has(id)} onSelect={() => setSelected(previous => {
               const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next;
             })}

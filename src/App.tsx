@@ -439,6 +439,33 @@ function App() {
   const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const windowLabel = appWindow.label;
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    let queue = Promise.resolve();
+    const consumeNavigation = () => {
+      // Serialize reads so an older IPC response cannot replace a newer click.
+      queue = queue.then(async () => {
+        if (!active) return;
+        try {
+          const destination = await tauriInvoke("take_pending_main_navigation");
+          if (active && destination) {
+            setInlineSettingsSection(null);
+            setActiveTab(destination);
+          }
+        } catch (error) {
+          console.error("Widget navigation failed", error);
+        }
+      });
+    };
+    tauriListen("main_navigation_pending", consumeNavigation).then(stop => {
+      if (!active) { stop(); return; }
+      unlisten = stop;
+      consumeNavigation();
+    }).catch(error => console.error("Widget navigation listener failed", error));
+    return () => { active = false; unlisten?.(); };
+  }, [windowLabel]);
   const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
   const [isLocked, setIsLocked] = useState(!isMacOS);
   const [isPinned, setIsPinned] = useState(false);
@@ -1696,7 +1723,7 @@ function App() {
         key: "deadlines",
         title: "Deadlines",
         accentColor: sidebarTheme.deadlines,
-        content: <DeadlineWidgetContent hideHeader={hideSidebarWidgetHeaders} />,
+        content: <DeadlineWidgetContent hideHeader={hideSidebarWidgetHeaders} language={resolveLanguage(appConfig.language)} />,
       },
       {
         key: "arxiv",
@@ -2258,7 +2285,7 @@ function App() {
           data-tauri-drag-region={!isLocked ? "true" : "false"}
         >
           {isGpu && <GPUWidgetContent />}
-          {isDeadline && <DeadlineWidgetContent />}
+          {isDeadline && <DeadlineWidgetContent language={resolveLanguage(appConfig.language)} />}
           {windowLabel.includes("arxiv") && <ArxivWidgetContent />}
           {isQuota && <QuotaWidgetContent />}
         </div>
@@ -2869,6 +2896,7 @@ function App() {
                 {renderInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
                 {paperSaveError && <p role="alert" className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-xs text-red-500">Could not save conference preferences. Please try again.</p>}
                 <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
+                  language={resolveLanguage(appConfig.language)}
                   isLight={appConfig.theme === "light"} onPreference={setConferencePreference}
                   canUndo={Boolean(paperPreferenceUndo)} onUndo={undoConferencePreference}
                   onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} />
