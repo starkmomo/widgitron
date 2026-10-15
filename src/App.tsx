@@ -75,6 +75,8 @@ import { SectionEmptyState } from "./components/SectionEmptyState";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
 import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
+import { ResearchPageHeader, ResearchTabs } from "./components/ResearchPageHeader";
+import { ConferenceUndoNotice } from "./components/ConferenceUndoNotice";
 import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
 import { updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
@@ -481,7 +483,8 @@ function App() {
   const paperSaveRevision = useRef(0);
   const [paperSaveError, setPaperSaveError] = useState(false);
   const paperPendingWrites = useRef(0);
-  const [paperPreferenceUndo, setPaperPreferenceUndo] = useState<PaperConfig | null>(null);
+  const [paperPreferenceUndo, setPaperPreferenceUndo] = useState<{ config: PaperConfig; id: number } | null>(null);
+  const paperUndoId = useRef(0);
   useEffect(() => {
     if (windowLabel !== "main") return;
     const sync = startWindowSnapshotSync<PaperConfig>({
@@ -1240,13 +1243,13 @@ function App() {
 
   const setConferencePreference = (ids: string[], action: ConferencePreference, undoable = false) => {
     const previous = paperConfigRef.current;
-    setPaperPreferenceUndo(undoable ? previous : null);
+    setPaperPreferenceUndo(undoable ? { config: previous, id: ++paperUndoId.current } : null);
     void savePaperConfig(updateConferencePreferences(previous, ids, action));
   };
 
   const undoConferencePreference = () => {
     if (!paperPreferenceUndo) return;
-    const { followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids } = paperPreferenceUndo;
+    const { followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids } = paperPreferenceUndo.config;
     setPaperPreferenceUndo(null);
     void savePaperConfig({ ...paperConfigRef.current, followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids });
   };
@@ -2352,7 +2355,7 @@ function App() {
       </section>
     );
 
-  const sectionActionClass = `inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${appConfig.theme === "light" ? "border-slate-200 bg-white text-slate-700 hover:bg-blue-50" : "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"}`;
+  const sectionActionClass = `inline-flex min-h-9 whitespace-nowrap items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${appConfig.theme === "light" ? "border-slate-200 bg-white text-slate-700 hover:bg-blue-50" : "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"}`;
 
   // --- MAIN CONTROL PANEL VIEW ---
   return (
@@ -2839,44 +2842,27 @@ function App() {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
-                  <h2
-                    className={`text-2xl font-bold tracking-tight ${
-                      appConfig.theme === "light" ? "text-slate-900" : "text-white"
-                    }`}
-                  >
-                    Paper Deadlines
-                  </h2>
-                  <div className="flex items-center gap-3">
+                <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
+                  language={resolveLanguage(appConfig.language)} isLight={appConfig.theme === "light"}
+                  onPreference={setConferencePreference} onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
+                  headerActions={<>
                     <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES} className={sectionActionClass}>
                       {inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Deadline settings</>}
                     </button>
                     {appConfig.deadline_enabled !== false && (
-                      <button
-                        onClick={handleRefreshDeadlines}
-                        disabled={isRefreshingDeadlines}
-                        className={`p-2 rounded-xl border transition-all ${
-                          appConfig.theme === "light"
-                            ? "border-slate-200 hover:bg-slate-100 text-slate-600"
-                            : "border-white/10 hover:bg-white/5 text-slate-400"
-                        }`}
-                        title="Refresh Deadlines"
-                      >
+                      <button type="button" onClick={handleRefreshDeadlines} disabled={isRefreshingDeadlines}
+                        className={`flex size-9 items-center justify-center rounded-xl border border-[var(--dashboard-border)] transition-colors disabled:opacity-50 ${appConfig.theme === "light" ? "bg-white text-slate-600 hover:bg-slate-50" : "bg-white/5 text-slate-300 hover:bg-white/10"}`}
+                        title="Refresh Deadlines" aria-label="Refresh Deadlines">
                         <RefreshCw size={14} className={isRefreshingDeadlines ? "animate-spin" : ""} />
                       </button>
                     )}
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    <span className="research-service-label text-[10px] font-semibold whitespace-nowrap text-slate-500">
                       {appConfig.deadline_enabled !== false ? "Service Enabled" : "Service Disabled"}
                     </span>
-                    <MasterSwitch
-                      label="Deadline monitoring"
-                      enabled={appConfig.deadline_enabled !== false}
-                      loading={checkServiceToggleBusy("deadline_enabled")}
-                      disabled={checkServiceToggleBusy("deadline_enabled")}
-                      onToggle={(val) => handleMasterServiceToggle("deadline_enabled", val)}
-                    />
-                  </div>
-                </div>
+                    <MasterSwitch label="Deadline monitoring" enabled={appConfig.deadline_enabled !== false}
+                      loading={checkServiceToggleBusy("deadline_enabled")} disabled={checkServiceToggleBusy("deadline_enabled")}
+                      onToggle={val => handleMasterServiceToggle("deadline_enabled", val)} />
+                  </>}>
                 <ServiceErrorBanners
                   backendError={paperError}
                   refreshError={paperRefreshError}
@@ -2895,11 +2881,7 @@ function App() {
                 />
                 {renderInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
                 {paperSaveError && <p role="alert" className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-xs text-red-500">Could not save conference preferences. Please try again.</p>}
-                <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
-                  language={resolveLanguage(appConfig.language)}
-                  isLight={appConfig.theme === "light"} onPreference={setConferencePreference}
-                  canUndo={Boolean(paperPreferenceUndo)} onUndo={undoConferencePreference}
-                  onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} />
+                </DeadlineConferenceBrowser>
               </motion.div>
             )}
 
@@ -2910,111 +2892,36 @@ function App() {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
               >
-                <div ref={arxivHeaderRef} className="arxiv-header relative z-20 mb-6 space-y-4 scroll-mt-8">
-                  <div className="arxiv-header-main">
-                    <h2
-                      className={`text-2xl font-bold tracking-tight ${
-                        appConfig.theme === "light" ? "text-slate-900" : "text-white"
-                      }`}
-                    >
-                      Arxiv Radar
-                    </h2>
-                    <div
-                      className={`arxiv-view-tabs p-1 rounded-xl ${
-                        appConfig.theme === "light" ? "bg-slate-100" : "bg-white/5"
-                      }`}
-                    >
-                      <button
-                        onClick={() => setArxivView("all")}
-                        aria-pressed={arxivView === "all"}
-                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
-                          arxivView === "all"
-                            ? appConfig.theme === "light"
-                              ? "bg-white text-slate-900 shadow-sm"
-                              : "bg-white/10 text-white shadow-lg"
-                            : "text-slate-500 hover:text-slate-400"
-                        }`}
-                      >
-                        {arxivView === "all" && pagedArxiv.loaded ? `All (${pagedArxiv.total})` : "All"}
+                <ResearchPageHeader title="Arxiv Radar" headerRef={arxivHeaderRef}
+                  tabs={<ResearchTabs value={arxivView} onChange={setArxivView} label="Paper views" idPrefix="arxiv" panelId="arxiv-results" isLight={appConfig.theme === "light"}
+                    items={[
+                      { value: "all", label: "All", count: arxivView === "all" && pagedArxiv.loaded ? pagedArxiv.total : undefined },
+                      { value: "new", label: "Latest", count: arxivDate ? arxivView === "new" && pagedArxiv.loaded ? pagedArxiv.total : undefined : arxivPapers.length },
+                      { value: "saved", label: "Saved", count: arxivSavedPapers.length },
+                      { value: "discarded", label: "Discarded", count: arxivDiscardedPapers.length },
+                    ]} />}
+                  filter={(arxivView === "all" || arxivView === "new") && (
+                    <ArxivDateFilter date={arxivDate} onChange={setArxivDate} buttonClass={`${sectionActionClass} w-full min-h-10`} isLight={appConfig.theme === "light"} language={resolveLanguage(appConfig.language)} />
+                  )}
+                  actions={<>
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.ARXIV)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.ARXIV} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Edit keywords</>}
+                    </button>
+                    {appConfig.arxiv_enabled !== false && (
+                      <button type="button" onClick={pagedArxivView ? pagedArxiv.refresh : handleRefreshArxiv} disabled={refreshingArxivView}
+                        className={`flex size-9 items-center justify-center rounded-xl border border-[var(--dashboard-border)] transition-colors disabled:opacity-50 ${appConfig.theme === "light" ? "bg-white text-slate-600 hover:bg-slate-50" : "bg-white/5 text-slate-300 hover:bg-white/10"}`}
+                        title="Refresh papers" aria-label="Refresh papers">
+                        <RefreshCw size={14} className={refreshingArxivView ? "animate-spin" : ""} />
                       </button>
-                      <button
-                        onClick={() => setArxivView("new")}
-                        aria-pressed={arxivView === "new"}
-                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
-                          arxivView === "new"
-                            ? appConfig.theme === "light"
-                              ? "bg-white text-slate-900 shadow-sm"
-                              : "bg-white/10 text-white shadow-lg"
-                            : "text-slate-500 hover:text-slate-400"
-                        }`}
-                      >
-                        {arxivDate ? arxivView === "new" && pagedArxiv.loaded ? `Latest (${pagedArxiv.total})` : "Latest" : `Latest (${arxivPapers.length})`}
-                      </button>
-                      <button
-                        onClick={() => setArxivView("saved")}
-                        aria-pressed={arxivView === "saved"}
-                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
-                          arxivView === "saved"
-                            ? appConfig.theme === "light"
-                              ? "bg-white text-slate-900 shadow-sm"
-                              : "bg-white/10 text-white shadow-lg"
-                            : "text-slate-500 hover:text-slate-400"
-                        }`}
-                      >
-                        {`Saved (${arxivSavedPapers.length})`}
-                      </button>
-                      <button
-                        onClick={() => setArxivView("discarded")}
-                        aria-pressed={arxivView === "discarded"}
-                        className={`px-2 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
-                          arxivView === "discarded"
-                            ? appConfig.theme === "light"
-                              ? "bg-white text-slate-900 shadow-sm"
-                              : "bg-white/10 text-white shadow-lg"
-                            : "text-slate-500 hover:text-slate-400"
-                        }`}
-                      >
-                        {`Discarded (${arxivDiscardedPapers.length})`}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="arxiv-header-actions flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-h-9">
-                      {(arxivView === "all" || arxivView === "new") && (
-                        <ArxivDateFilter date={arxivDate} onChange={setArxivDate} buttonClass={sectionActionClass} isLight={appConfig.theme === "light"} language={resolveLanguage(appConfig.language)} />
-                      )}
-                      <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.ARXIV)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.ARXIV} className={sectionActionClass}>
-                        {inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Edit keywords</>}
-                      </button>
-                    </div>
-                    <div className="arxiv-service-actions flex shrink-0 items-center gap-3">
-                      {appConfig.arxiv_enabled !== false && (
-                        <button
-                          onClick={pagedArxivView ? pagedArxiv.refresh : handleRefreshArxiv}
-                          disabled={refreshingArxivView}
-                          className={`p-2 rounded-xl border border-[var(--dashboard-border)] ${
-                            appConfig.theme === "light"
-                              ? "bg-white hover:bg-slate-50 text-slate-700 shadow-sm"
-                              : "bg-white/5 hover:bg-white/10 text-white/80 hover:text-white"
-                          } disabled:opacity-50 transition-all flex items-center justify-center`}
-                          title="Refresh papers"
-                        >
-                          <RefreshCw size={14} className={refreshingArxivView ? "animate-spin" : ""} />
-                        </button>
-                      )}
-                      <span className="arxiv-service-label text-[10px] font-semibold whitespace-nowrap text-slate-500">
-                        {appConfig.arxiv_enabled !== false ? "Service Enabled" : "Service Disabled"}
-                      </span>
-                      <MasterSwitch
-                        label="Arxiv monitoring"
-                        enabled={appConfig.arxiv_enabled !== false}
-                        loading={checkServiceToggleBusy("arxiv_enabled")}
-                        disabled={checkServiceToggleBusy("arxiv_enabled")}
-                        onToggle={(val) => handleMasterServiceToggle("arxiv_enabled", val)}
-                      />
-                    </div>
-                  </div>
-                </div>
+                    )}
+                    <span className="research-service-label text-[10px] font-semibold whitespace-nowrap text-slate-500">
+                      {appConfig.arxiv_enabled !== false ? "Service Enabled" : "Service Disabled"}
+                    </span>
+                    <MasterSwitch label="Arxiv monitoring" enabled={appConfig.arxiv_enabled !== false}
+                      loading={checkServiceToggleBusy("arxiv_enabled")} disabled={checkServiceToggleBusy("arxiv_enabled")}
+                      onToggle={val => handleMasterServiceToggle("arxiv_enabled", val)} />
+                  </>} />
+                <div id="arxiv-results" role="tabpanel" aria-labelledby={`arxiv-tab-${arxivView}`}>
                 <ServiceErrorBanners
                   backendError={pagedArxivView ? null : arxivError}
                   refreshError={pagedArxivView ? pagedArxiv.error : arxivRefreshError}
@@ -3119,6 +3026,7 @@ function App() {
                 {pagedArxivView && pagedArxiv.total > 0 && (
                   <ArxivPagination page={pagedArxiv.page} pageSize={pagedArxiv.page_size} total={pagedArxiv.total} loading={pagedArxiv.loading} onPrevious={pagedArxiv.previousPage} onNext={pagedArxiv.nextPage} isLight={appConfig.theme === "light"} />
                 )}
+                </div>
               </motion.div>
             )}
 
@@ -3396,6 +3304,8 @@ function App() {
           </AnimatePresence>
         </div>
       </main>
+      {paperPreferenceUndo && <ConferenceUndoNotice key={paperPreferenceUndo.id} isLight={appConfig.theme === "light"}
+        onUndo={undoConferencePreference} onDismiss={() => setPaperPreferenceUndo(null)} />}
     </div>
   );
 }

@@ -1,8 +1,9 @@
 # Changelog
 
-## [Unreleased] - 2026-10-15
+## [Unreleased] - 2026-10-16
 
 ### 中文
+- **研究页面布局**：论文截止日期与 arXiv 共用页头和紧凑页签，统一标题、设置、刷新、服务开关及搜索/日期筛选的位置和窄窗口排列。批量管理入口紧随会议页签，搜索保留右侧、窄窗口时换行；批量操作及清理选项按需展开。撤销改为可关闭的短暂提示，8 秒后自动消失，鼠标悬停或键盘聚焦时暂停计时，不再常驻工具栏。
 - **macOS 小组件跳转**：点击额度、GPU 或截止日期小组件时打开对应模块页面；应用尚未启动时保留跳转请求，界面就绪后执行。
 - **截止日期语言**：时间线和会议卡片中的日期格式跟随界面语言切换，英文界面不再沿用系统的中文日期格式；保持本地时区显示。
 - **页面内设置与摘要阅读**：页面展开的设置使用淡蓝色底、强调边线和标题分隔；主题与样式仅保留在完整设置页。侧边栏和浮窗中的完整摘要使用更紧凑的字号、行距和内边距，并保留滚动阅读。
@@ -23,6 +24,7 @@
 - **arXiv**：不设置关键词时显示所选分类的近期论文，并改进空状态提示。
 
 ### English
+- **Research page layout**: Share the header and compact tabs across deadlines and arXiv, aligning titles, settings, refresh, service controls, and search/date filters. Place bulk management beside conference tabs, keep search on the right until the window narrows, and reveal bulk actions and cleanup controls only when needed. Replace the persistent Undo control with a dismissible notice that expires after eight seconds and pauses while hovered or focused.
 - **macOS widget navigation**: Open the matching quota, GPU, or deadline page when a widget is clicked, retaining the destination until the main interface is ready on a cold launch.
 - **Deadline date language**: Format timeline and conference card dates using the selected interface language instead of the system language, while preserving the local time zone.
 - **Inline settings and abstract reading**: Distinguish expanded page settings with a tinted surface, accent border, and separated header. Keep theme styling in the full Settings page. Use denser type, line spacing, and padding for full abstracts in sidebars and floating widgets while preserving scrolling.
