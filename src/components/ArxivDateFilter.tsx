@@ -102,7 +102,7 @@ export function ArxivDateFilter({ date, onChange, buttonClass, isLight, language
         <ChevronDown size={12} className={open ? "rotate-180" : ""} />
       </button>
       {open && (
-        <div id="arxiv-date-filter" role="dialog" aria-labelledby="arxiv-calendar-title" className={`absolute left-0 top-full mt-2 z-30 w-[19rem] max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--dashboard-border)] p-4 shadow-xl ${isLight ? "bg-white text-slate-900 shadow-slate-900/10" : "bg-slate-900 text-white shadow-black/30"}`}>
+        <div id="arxiv-date-filter" role="dialog" aria-labelledby="arxiv-calendar-title" className={`arxiv-date-popover absolute left-0 top-full mt-2 z-30 w-[19rem] max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--dashboard-border)] p-4 shadow-xl ${isLight ? "bg-white text-slate-900 shadow-slate-900/10" : "bg-slate-900 text-white shadow-black/30"}`}>
           <div className="flex items-center justify-between mb-3">
             <span id="arxiv-calendar-title" className="text-xs font-semibold">{chinese ? "提交日期" : "Submission date"}</span>
             <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${isLight ? "bg-slate-100 text-slate-500" : "bg-white/10 text-slate-400"}`}>UTC</span>

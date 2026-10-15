@@ -113,12 +113,24 @@ body {
   background: rgba(0, 0, 0, 0.2);
 }
 
-/* Reserve two header rows so counts and dates cannot move the action controls. */
-.arxiv-header { container-type: inline-size; }
-.arxiv-header-main { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.arxiv-view-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(100%, 28rem); flex-shrink: 0; }
-@container (max-width: 640px) {
-  .arxiv-header-main { flex-direction: column; align-items: flex-start; }
-  .arxiv-view-tabs { width: 100%; }
-  .arxiv-service-label { display: none; }
+/* Both research pages share the same header rows and width breakpoints. */
+.research-page-header { container-type: inline-size; }
+.research-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.research-page-actions { display: flex; align-items: center; gap: .75rem; flex-shrink: 0; }
+.research-page-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; }
+.research-page-views { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.research-page-views > button { flex-shrink: 0; white-space: nowrap; }
+.research-page-filter { min-width: 0; width: 12.5rem; }
+.research-page-filter .arxiv-date-popover { left: auto; right: 0; }
+.research-view-tabs { display: inline-flex; gap: .25rem; width: fit-content; flex-shrink: 0; }
+@container (max-width: 700px) {
+  .research-service-label { display: none; }
+}
+@container (max-width: 660px) {
+  .research-page-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .research-page-filter .arxiv-date-popover { left: 0; right: auto; }
+}
+@container (max-width: 480px) {
+  .research-page-heading { flex-direction: column; align-items: stretch; }
+  .research-page-actions { justify-content: flex-end; }
 }
