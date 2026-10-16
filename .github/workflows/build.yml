@@ -2,7 +2,21 @@ name: Build Windows and macOS
 
 on:
   push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
+      - 'docs/**'
+      - 'website/**'
+      - 'site/**'
   pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
+      - 'docs/**'
+      - 'website/**'
+      - 'site/**'
   workflow_dispatch:
 
 permissions:
