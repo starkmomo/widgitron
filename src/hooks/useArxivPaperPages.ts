@@ -44,6 +44,16 @@ export function useArxivPaperPages(active: boolean, categories: string[] | undef
 
   useEffect(() => {
     if (active) void load(visited.current.get(key)?.page ?? 1, false);
+    else {
+      // Read existing cache metadata for inactive tabs without making API calls.
+      const request = ++revision.current;
+      const args = JSON.parse(key) as { categories: string[]; keywords: string[]; date: string | null };
+      void tauriInvoke("get_arxiv_paper_page", { ...args, page: 1 }).then(cache => {
+        if (request === revision.current && cache) {
+          setSnapshot({ key, result: cache, loading: false, loaded: true, error: null });
+        }
+      }).catch(() => {});
+    }
     return () => { revision.current++; };
   }, [active, key, load]);
 

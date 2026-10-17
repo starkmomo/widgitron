@@ -22,8 +22,8 @@ export type SettingsSection = "general" | "sidebar" | "about" | LiveDataSection;
 
 export const LIVE_DATA_SECTION_LABELS: Record<LiveDataSection, string> = {
   gpu: "GPU Monitor",
-  deadlines: "Paper Deadlines",
-  arxiv: "Arxiv Radar",
+  deadlines: "Conference DDL",
+  arxiv: "arXiv Radar",
   quota: "Quota Monitor",
 };
 

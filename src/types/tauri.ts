@@ -16,6 +16,13 @@ export interface ToggleWidgetResponse {
   visible: boolean;
 }
 
+export interface SshConfigHostEntry {
+  alias: string;
+  user: string | null;
+  port: number | null;
+  key_file: string | null;
+}
+
 export interface SidebarDockState {
   edge: "left" | "top" | "right" | "bottom";
   pinned: boolean;
@@ -71,6 +78,15 @@ export type LiveDataCommandResult = {
   refresh_quota: QuotaItem[];
 };
 
+export interface ArxivReadingState {
+  revision: number;
+  batch: string;
+  saved: ArxivPaper[];
+  skipped: ArxivPaper[];
+}
+
+export type ArxivPaperAction = "save" | "unsave" | "skip" | "restore";
+
 export interface ArxivPaperPage {
   papers: ArxivPaper[];
   data_date: string | null;
@@ -81,11 +97,16 @@ export interface ArxivPaperPage {
 }
 
 export interface TauriCommandMap {
+  get_arxiv_reading_state: ArxivReadingState;
+  set_arxiv_paper_status: ArxivReadingState;
+  set_arxiv_papers_status: ArxivReadingState;
   get_arxiv_paper_page: ArxivPaperPage | null;
   refresh_arxiv_paper_page: ArxivPaperPage;
   get_app_config: AppConfig;
   get_gpu_config: GpuConfig;
   ssh_config_has_host: boolean;
+  list_ssh_config_hosts: string[];
+  get_ssh_config_host: SshConfigHostEntry;
   get_paper_config: PaperConfig;
   get_arxiv_config: ArxivConfig;
   get_quota_config: QuotaConfig;
@@ -107,7 +128,7 @@ export interface TauriCommandMap {
   toggle_widget: ToggleWidgetResponse;
   save_gpu_config: void;
   save_paper_config: void;
-  save_arxiv_config: void;
+  save_arxiv_config: boolean;
   save_quota_config: void;
   save_app_config: void;
   save_sidebar_tile_layout: AppConfig;
@@ -147,11 +168,16 @@ export type TauriCommand = keyof TauriCommandMap;
 
 /** All frontend/backend command names — useful for grep and runtime checks. */
 export const TAURI_COMMAND_NAMES = [
+  "get_arxiv_reading_state",
+  "set_arxiv_paper_status",
+  "set_arxiv_papers_status",
   "get_arxiv_paper_page",
   "refresh_arxiv_paper_page",
   "get_app_config",
   "get_gpu_config",
   "ssh_config_has_host",
+  "list_ssh_config_hosts",
+  "get_ssh_config_host",
   "get_paper_config",
   "get_arxiv_config",
   "get_quota_config",
@@ -218,12 +244,17 @@ void _allCommandsListed;
 export type TauriInvokeResult<C extends TauriCommand> = TauriCommandMap[C];
 
 export interface TauriCommandArgs {
+  get_arxiv_reading_state: undefined;
+  set_arxiv_paper_status: { paper: ArxivPaper; action: ArxivPaperAction };
+  set_arxiv_papers_status: { papers: ArxivPaper[]; action: ArxivPaperAction };
   get_arxiv_paper_page: { categories: string[]; keywords: string[]; date: string | null; page: number };
   refresh_arxiv_paper_page: { categories: string[]; keywords: string[]; date: string | null; page: number; force: boolean };
   log_sidebar_sync: { phase: string; details: string };
   get_app_config: undefined;
   get_gpu_config: undefined;
   ssh_config_has_host: { host: string };
+  list_ssh_config_hosts: undefined;
+  get_ssh_config_host: { alias: string };
   get_paper_config: undefined;
   get_arxiv_config: undefined;
   get_quota_config: undefined;

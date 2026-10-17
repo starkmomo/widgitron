@@ -11,6 +11,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const initialFocusRef = useRef<HTMLHeadingElement>(null);
   const previewBoxRef = useRef<HTMLDivElement>(null);
   const previewTextRef = useRef<HTMLParagraphElement>(null);
   const [previewLines, setPreviewLines] = useState(6);
@@ -35,7 +36,10 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
 
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (reading) dialog?.showModal();
+    if (reading) {
+      dialog?.showModal();
+      initialFocusRef.current?.focus({ preventScroll: true });
+    }
     return () => dialog?.close();
   }, [reading]);
 
@@ -72,7 +76,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
           ref={dialogRef}
           aria-labelledby={titleId}
           data-no-drag="true"
-          className={`m-auto w-[calc(100%_-_2rem)] max-w-2xl max-h-[calc(100dvh_-_2rem)] overflow-hidden rounded-2xl border p-0 shadow-2xl backdrop:bg-slate-950/40 ${isLight ? "border-slate-200 bg-white text-slate-900" : "border-slate-700 bg-slate-900 text-slate-100"}`}
+          className={`reading-dialog m-auto w-[calc(100%_-_2rem)] max-w-2xl max-h-[calc(100dvh_-_2rem)] overflow-hidden rounded-2xl border p-0 shadow-2xl backdrop:bg-slate-950/40 ${isLight ? "border-slate-200 bg-white text-slate-900" : "border-slate-700 bg-slate-900 text-slate-100"}`}
           onPointerDownCapture={(event) => event.stopPropagation()}
           onKeyDownCapture={(event) => {
             // Let the dialog handle Escape without hiding the sidebar window.
@@ -93,12 +97,12 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
         >
           <div className="flex max-h-[calc(100dvh_-_2rem)] flex-col">
             <header className={`flex shrink-0 items-start ${compact ? "gap-2 p-3 pb-2" : "gap-4 p-5 pb-4"}`}>
-              <h2 id={titleId} data-no-localize className={`min-w-0 flex-1 max-h-[30dvh] overflow-y-auto font-bold break-words ${compact ? "text-sm leading-snug" : "text-base leading-relaxed"}`}>
+              <h2 ref={initialFocusRef} tabIndex={-1} id={titleId} data-no-localize className={`outline-none min-w-0 flex-1 max-h-[30dvh] overflow-y-auto font-bold break-words ${compact ? "text-sm leading-snug" : "text-base leading-relaxed"}`}>
                 {paper.title}
               </h2>
               <button
                 type="button"
-                autoFocus
+                data-dialog-close
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-red-500 hover:bg-red-500/10 focus-visible:outline-2 focus-visible:outline-red-500"
                 title="Close abstract"
                 aria-label="Close abstract"

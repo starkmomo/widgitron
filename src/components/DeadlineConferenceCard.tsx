@@ -26,9 +26,9 @@ export function DeadlineConferenceCard({ deadline, now, language, isLight, isFol
       <div className="flex flex-wrap items-center justify-between gap-5">
         <div className="flex min-w-0 flex-1 items-start gap-4">
           {selecting && <input type="checkbox" checked={selected} onChange={onSelect} aria-label={`${deadline.title} ${deadline.year}`} className="mt-5 size-5 shrink-0 cursor-pointer accent-blue-600" />}
-          <div className={`flex size-16 shrink-0 flex-col items-center justify-center rounded-2xl ${isLight ? "bg-purple-100 text-purple-600" : "bg-purple-500/15 text-purple-400"}`}>
-            <span className="text-[10px] font-bold opacity-70">{deadline.sub}</span>
-            <Trophy size={20} />
+          <div className={`flex size-16 shrink-0 flex-col items-center justify-center gap-1 rounded-2xl ${isLight ? "bg-purple-100 text-purple-700" : "bg-purple-500/15 text-purple-200"}`}>
+            <span data-no-localize className="text-xs font-extrabold leading-none tracking-wide">{deadline.sub}</span>
+            <Trophy size={18} className="opacity-60" />
           </div>
           <div className="min-w-0">
             <h3 className="flex flex-wrap items-center gap-2 text-lg font-bold">

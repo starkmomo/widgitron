@@ -116,6 +116,7 @@ const MIGRATE_CONFIG_FILES: &[&str] = &[
     "arxiv_cache.json",
     "arxiv_seen.json",
     "arxiv_saved.json",
+    "arxiv_reading_state.json",
     "gpu_data_cache.json",
     "paper_deadlines_cache.json",
 ];

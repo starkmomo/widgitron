@@ -264,7 +264,7 @@ export function ThemeManagementSection({
 
         {activeTheme.is_default ? (
           <div className={`p-4 rounded-xl border ${isLight ? "bg-blue-50/50 border-blue-100/50 text-blue-800" : "bg-blue-500/5 border-blue-500/10 text-blue-300"} text-xs font-medium flex flex-col sm:flex-row items-center justify-between gap-3`}>
-            <span>This theme is a read-only system preset. Click <strong>Duplicate Theme</strong> to customize colors for this widget.</span>
+            <span>Duplicate to customize colors.</span>
             <button
               onClick={() => copyTheme(activeTheme, widgetId)}
               className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-md shadow-blue-600/10"

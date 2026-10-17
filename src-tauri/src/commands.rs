@@ -121,6 +121,18 @@ pub fn ssh_config_has_host(host: String) -> bool {
 }
 
 #[tauri::command]
+pub async fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(crate::gpu::list_ssh_config_hosts)
+        .await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_ssh_config_host(alias: String) -> Result<crate::gpu::SshConfigHostEntry, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::gpu::get_ssh_config_host(&alias))
+        .await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn get_gpu_config(app: AppHandle) -> Result<GpuConfig, String> {
     let mut config = crate::gpu::read_gpu_config(&app);
     if config.compact_mode.is_none() {
@@ -676,8 +688,9 @@ pub async fn save_arxiv_config(
     app: AppHandle,
     state: tauri::State<'_, GlobalState>,
     config: ArxivConfig,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     config_store::write_config(&app, "arxiv_config.json", &config)?;
+    crate::arxiv_library::sync_config(&app, state.inner())?;
     let _ = app.emit("arxiv_config_update", &config);
 
     let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
@@ -685,9 +698,10 @@ pub async fn save_arxiv_config(
         if let Err(e) = crate::arxiv::perform_arxiv_fetch(&app, state.inner()).await {
             log::warn!("Arxiv immediate fetch after config save failed: {}", e);
             let _ = app.emit("arxiv_error", e);
+            return Ok(false);
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 #[tauri::command]
@@ -703,20 +717,8 @@ pub async fn get_arxiv_papers(
     app: AppHandle,
     state: tauri::State<'_, GlobalState>,
 ) -> Result<Vec<ArxivPaper>, String> {
-    let mut papers = state
-        .arxiv_papers
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    if papers.is_empty() {
-        let cached_papers = config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_cache.json");
-        if !cached_papers.is_empty() {
-            if let Ok(mut state_papers) = state.arxiv_papers.lock() {
-                *state_papers = cached_papers.clone();
-            }
-            papers = cached_papers;
-        }
-    }
+    let papers = crate::arxiv_library::visible_papers(&app)?;
+    if let Ok(mut current) = state.arxiv_papers.lock() { *current = papers.clone(); }
     Ok(papers)
 }
 
@@ -727,52 +729,9 @@ pub async fn mark_arxiv_seen(
     id: String,
     saved: bool,
 ) -> Result<(), String> {
-    let mut seen = config_store::read_config::<Vec<String>>(&app, "arxiv_seen.json");
-    if !seen.contains(&id) {
-        seen.push(id.clone());
-        let _ = config_store::write_config(&app, "arxiv_seen.json", &seen);
-    }
-
-    if saved {
-        let mut paper_to_save = None;
-        if let Ok(mut papers) = state.arxiv_papers.lock() {
-            if let Some(idx) = papers.iter().position(|p| p.id == id) {
-                paper_to_save = Some(papers[idx].clone());
-                papers.remove(idx);
-            }
-        }
-
-        if let Some(p) = paper_to_save {
-            let mut saved_papers =
-                config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_saved.json");
-            saved_papers.push(p);
-            let _ = config_store::write_config(&app, "arxiv_saved.json", &saved_papers);
-        }
-    } else {
-        let mut paper_to_discard = None;
-        if let Ok(mut papers) = state.arxiv_papers.lock() {
-            if let Some(idx) = papers.iter().position(|p| p.id == id) {
-                paper_to_discard = Some(papers[idx].clone());
-                papers.remove(idx);
-            }
-        }
-
-        if let Some(p) = paper_to_discard {
-            let mut discarded =
-                config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_discarded.json");
-            discarded.push(p);
-            let _ = config_store::write_config(&app, "arxiv_discarded.json", &discarded);
-        }
-    }
-
-    // Save updated papers list to cache and emit update
-    if let Ok(papers) = state.arxiv_papers.lock() {
-        let _ = config_store::write_config(&app, "arxiv_cache.json", &*papers);
-        let _ = app.emit("arxiv_update", &*papers);
-    }
-
-    let _ = app.emit("arxiv_saved_update", ());
-    let _ = app.emit("arxiv_discarded_update", ());
+    let paper = crate::arxiv_library::find_paper(&app, &id)?;
+    let action = if saved { crate::arxiv_library::PaperAction::Save } else { crate::arxiv_library::PaperAction::Skip };
+    crate::arxiv_library::update(&app, state.inner(), paper, action)?;
     Ok(())
 }
 
@@ -801,10 +760,7 @@ pub async fn refresh_arxiv_paper_page(
 
 #[tauri::command]
 pub async fn get_arxiv_saved_papers(app: AppHandle) -> Result<Vec<ArxivPaper>, String> {
-    Ok(config_store::read_config::<Vec<ArxivPaper>>(
-        &app,
-        "arxiv_saved.json",
-    ))
+    Ok(crate::arxiv_library::get_arxiv_reading_state(app)?.saved)
 }
 
 #[tauri::command]
@@ -819,28 +775,21 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn remove_arxiv_saved_paper(app: AppHandle, id: String) -> Result<(), String> {
-    let mut saved_papers = config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_saved.json");
-    saved_papers.retain(|p| p.id != id);
-    config_store::write_config(&app, "arxiv_saved.json", &saved_papers)?;
-    let _ = app.emit("arxiv_saved_update", ());
+pub async fn remove_arxiv_saved_paper(app: AppHandle, state: tauri::State<'_, GlobalState>, id: String) -> Result<(), String> {
+    let paper = crate::arxiv_library::find_paper(&app, &id)?;
+    crate::arxiv_library::update(&app, state.inner(), paper, crate::arxiv_library::PaperAction::Unsave)?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_arxiv_discarded_papers(app: AppHandle) -> Result<Vec<ArxivPaper>, String> {
-    Ok(config_store::read_config::<Vec<ArxivPaper>>(
-        &app,
-        "arxiv_discarded.json",
-    ))
+    Ok(crate::arxiv_library::get_arxiv_reading_state(app)?.skipped)
 }
 
 #[tauri::command]
-pub async fn remove_arxiv_discarded_paper(app: AppHandle, id: String) -> Result<(), String> {
-    let mut papers = config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_discarded.json");
-    papers.retain(|p| p.id != id);
-    config_store::write_config(&app, "arxiv_discarded.json", &papers)?;
-    let _ = app.emit("arxiv_discarded_update", ());
+pub async fn remove_arxiv_discarded_paper(app: AppHandle, state: tauri::State<'_, GlobalState>, id: String) -> Result<(), String> {
+    let paper = crate::arxiv_library::find_paper(&app, &id)?;
+    crate::arxiv_library::update(&app, state.inner(), paper, crate::arxiv_library::PaperAction::Restore)?;
     Ok(())
 }
 

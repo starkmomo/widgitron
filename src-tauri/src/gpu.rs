@@ -383,6 +383,244 @@ struct SshConfigHost {
     proxy_command: Option<String>,
 }
 
+#[derive(serde::Serialize)]
+pub struct SshConfigHostEntry {
+    alias: String,
+    user: Option<String>,
+    port: Option<u16>,
+    key_file: Option<String>,
+}
+
+#[derive(Default)]
+struct SshReadBudget {
+    files: usize,
+    bytes: usize,
+    exceeded: bool,
+}
+
+fn read_ssh_source(path: &Path, budget: &mut SshReadBudget) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    if budget.files >= 256
+        || metadata.len() > 1_048_576
+        || budget.bytes + metadata.len() as usize > 4_194_304
+    {
+        budget.exceeded = true;
+        return None;
+    }
+    budget.files += 1;
+    let mut content = String::new();
+    file.take(1_048_577).read_to_string(&mut content).ok()?;
+    budget.bytes += content.len();
+    if content.len() > 1_048_576 || budget.bytes > 4_194_304 {
+        budget.exceeded = true;
+        return None;
+    }
+    Some(content)
+}
+
+// Tokenize configuration, never shell commands. Quoted #/spaces and Windows
+// path separators must survive; '=' is only a directive/value separator.
+fn ssh_directive(line: &str) -> Option<(String, Vec<String>)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let split = line.find(|c: char| c.is_whitespace() || c == '=')?;
+    let key = line[..split].to_ascii_lowercase();
+    let rest = line[split..].trim_start();
+    let rest = rest.strip_prefix('=').unwrap_or(rest).trim_start();
+    let mut chars = rest.chars().peekable();
+    let mut quote = None;
+    let mut current = String::new();
+    let mut started = false;
+    let mut args = Vec::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '#' if quote.is_none() => break,
+            '"' | '\'' if quote.is_none() => {
+                quote = Some(c);
+                started = true;
+            }
+            c if Some(c) == quote => quote = None,
+            '\\' if chars.peek().is_some_and(|next| {
+                *next == '"'
+                    || *next == '\\'
+                    || (quote.is_none() && (next.is_whitespace() || *next == '#'))
+            }) =>
+            {
+                current.push(chars.next()?);
+                started = true;
+            }
+            c if c.is_whitespace() && quote.is_none() => {
+                if started {
+                    args.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            _ => {
+                current.push(c);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        args.push(current);
+    }
+    (!key.is_empty() && !args.is_empty()).then_some((key, args))
+}
+
+fn ssh_include_paths(pattern: &str, ssh_dir: &Path, budget: &mut SshReadBudget) -> Vec<PathBuf> {
+    let home = ssh_dir.parent().unwrap_or(ssh_dir);
+    let pattern = pattern.replace("%d", &home.to_string_lossy());
+    let expanded = if let Some(rest) = pattern.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        let expanded = match shellexpand::env(&pattern) {
+            Ok(value) => value.into_owned(),
+            Err(_) => return Vec::new(),
+        };
+        let path = PathBuf::from(expanded);
+        if path.is_absolute() {
+            path
+        } else {
+            ssh_dir.join(path)
+        }
+    };
+    let mut paths = glob::glob(&expanded.to_string_lossy())
+        .map(|paths| {
+            paths
+                .flatten()
+                .filter(|p| p.is_file())
+                .take(257)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if paths.len() > 256 {
+        budget.exceeded = true;
+        return Vec::new();
+    }
+    paths.sort();
+    paths
+}
+
+fn collect_ssh_aliases(
+    path: &Path,
+    ssh_dir: &Path,
+    visited: &mut HashSet<PathBuf>,
+    aliases: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    budget: &mut SshReadBudget,
+    depth: usize,
+) {
+    if depth >= 16 {
+        budget.exceeded = true;
+        return;
+    }
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(canonical) {
+        return;
+    }
+    let Some(content) = read_ssh_source(path, budget) else {
+        return;
+    };
+    for line in content.lines() {
+        let Some((key, args)) = ssh_directive(line) else {
+            continue;
+        };
+        if key == "include" {
+            // Discover aliases in all branches. Evaluating Match exec here
+            // would execute user commands merely by opening a dropdown.
+            for arg in args {
+                for included in ssh_include_paths(&arg, ssh_dir, budget) {
+                    collect_ssh_aliases(
+                        &included,
+                        ssh_dir,
+                        visited,
+                        aliases,
+                        seen,
+                        budget,
+                        depth + 1,
+                    );
+                }
+            }
+        } else if key == "host" {
+            for alias in args {
+                if alias.is_empty()
+                    || alias.starts_with(['!', '-'])
+                    || alias.contains(['*', '?', '[', ']'])
+                    || alias.chars().any(char::is_whitespace)
+                {
+                    continue;
+                }
+                if seen.insert(alias.to_lowercase()) {
+                    if aliases.len() >= 1024 {
+                        budget.exceeded = true;
+                        return;
+                    }
+                    aliases.push(alias);
+                }
+            }
+        }
+        if budget.exceeded {
+            return;
+        }
+    }
+}
+
+fn ssh_aliases_in(ssh_dir: &Path) -> Result<Vec<String>, String> {
+    let root = ssh_dir.join("config");
+    if root.exists() {
+        std::fs::File::open(&root).map_err(|error| error.to_string())?;
+    }
+    let mut aliases = Vec::new();
+    let mut budget = SshReadBudget::default();
+    collect_ssh_aliases(
+        &root,
+        ssh_dir,
+        &mut HashSet::new(),
+        &mut aliases,
+        &mut HashSet::new(),
+        &mut budget,
+        0,
+    );
+    if budget.exceeded {
+        return Err("SSH configuration exceeds safe discovery limits".into());
+    }
+    aliases.sort_by_key(|alias| alias.to_lowercase());
+    Ok(aliases)
+}
+
+pub fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
+    user_home_dir()
+        .map(|home| ssh_aliases_in(&home.join(".ssh")))
+        .unwrap_or_else(|| Ok(Vec::new()))
+}
+
+pub fn get_ssh_config_host(alias: &str) -> Result<SshConfigHostEntry, String> {
+    if !list_ssh_config_hosts()?.iter().any(|host| host == alias) {
+        return Err("SSH host is no longer in the configuration".into());
+    }
+    let config = read_ssh_config_file_for_host(alias)
+        .map(|state| state.config)
+        .unwrap_or_default();
+    Ok(SshConfigHostEntry {
+        alias: alias.to_string(),
+        user: config.user,
+        port: config.port,
+        key_file: config
+            .identity_files
+            .into_iter()
+            .find(|path| path != "none"),
+    })
+}
+
 fn user_home_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -438,31 +676,26 @@ fn parse_ssh_config_file(
     state: &mut SshConfigParseState,
     active_files: &mut HashSet<PathBuf>,
     depth: usize,
+    budget: &mut SshReadBudget,
 ) {
     if depth >= 16 {
+        budget.exceeded = true;
         return;
     }
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if !active_files.insert(canonical_path.clone()) {
         return;
     }
-    let Ok(content) = std::fs::read_to_string(path) else {
+    let Some(content) = read_ssh_source(path, budget) else {
         active_files.remove(&canonical_path);
         return;
     };
 
     for raw_line in content.lines() {
-        let line = raw_line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let mut parts = line.split_whitespace();
-        let Some(key) = parts.next() else {
-            continue;
-        };
-        let value = parts.collect::<Vec<_>>().join(" ");
+        let Some((key, args)) = ssh_directive(raw_line) else { continue; };
+        let value = args.join(" ");
         if key.eq_ignore_ascii_case("Host") {
-            let patterns: Vec<&str> = value.split_whitespace().collect();
+            let patterns = &args;
             let positive_match = patterns.iter().any(|pattern| {
                 !pattern.starts_with('!') && ssh_pattern_matches(pattern, host)
             });
@@ -476,7 +709,7 @@ fn parse_ssh_config_file(
             state.matched_alias |= state.current_matches
                 && patterns
                     .iter()
-                    .any(|pattern| !pattern.starts_with('!') && *pattern != "*");
+                    .any(|pattern| !pattern.starts_with('!') && pattern != "*");
             continue;
         }
         if key.eq_ignore_ascii_case("Match") {
@@ -488,16 +721,8 @@ fn parse_ssh_config_file(
             continue;
         }
         if key.eq_ignore_ascii_case("Include") {
-            for pattern in value.split_whitespace() {
-                let expanded = shellexpand::tilde(pattern).to_string();
-                let include_path = PathBuf::from(expanded);
-                let include_path = if include_path.is_absolute() {
-                    include_path
-                } else {
-                    ssh_dir.join(include_path)
-                };
-                if let Ok(paths) = glob::glob(&include_path.to_string_lossy()) {
-                    for path in paths.flatten() {
+            for pattern in &args {
+                    for path in ssh_include_paths(pattern, ssh_dir, budget) {
                         parse_ssh_config_file(
                             &path,
                             ssh_dir,
@@ -505,9 +730,9 @@ fn parse_ssh_config_file(
                             state,
                             active_files,
                             depth + 1,
+                            budget,
                         );
                     }
-                }
             }
             continue;
         }
@@ -528,6 +753,7 @@ fn parse_ssh_config_file(
 fn read_ssh_config_file_for_host(host: &str) -> Option<SshConfigParseState> {
     let ssh_dir = user_home_dir()?.join(".ssh");
     let mut state = SshConfigParseState::default();
+    let mut budget = SshReadBudget::default();
     parse_ssh_config_file(
         &ssh_dir.join("config"),
         &ssh_dir,
@@ -535,8 +761,9 @@ fn read_ssh_config_file_for_host(host: &str) -> Option<SshConfigParseState> {
         &mut state,
         &mut HashSet::new(),
         0,
+        &mut budget,
     );
-    state.found_host.then_some(state)
+    (state.found_host && !budget.exceeded).then_some(state)
 }
 
 pub fn ssh_config_has_host(host: &str) -> bool {
@@ -547,13 +774,153 @@ pub fn ssh_config_has_host(host: &str) -> bool {
 mod ssh_config_tests {
     use super::*;
 
+    struct TestConfig(PathBuf);
+    impl TestConfig {
+        fn new() -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "widgitron-ssh-discovery-{}-{unique}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(root.join("parts with spaces")).unwrap();
+            Self(root)
+        }
+        fn write(&self, path: &str, content: &str) {
+            std::fs::write(self.0.join(path), content).unwrap();
+        }
+    }
+    impl Drop for TestConfig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn discovery_handles_quoted_nested_globs_and_duplicates_without_running_match() {
+        let files = TestConfig::new();
+        files.write("config", "Include \"parts with spaces/*.conf\" missing.conf\nHost Alpha another !excluded gpu-*\nMatch exec \"this-command-must-never-run\"\nInclude nested.conf\n");
+        files.write(
+            "parts with spaces/02.conf",
+            "Host ALPHA zeta\nInclude config\n",
+        );
+        files.write(
+            "parts with spaces/01.conf",
+            "Include \"with # hash.conf\"\nHost=beta\n",
+        );
+        files.write("with # hash.conf", "Host 138332\n");
+        files.write(
+            "nested.conf",
+            "Host gamma * ? !no [ab] \"invalid alias\"\nInclude config\n",
+        );
+        assert_eq!(
+            ssh_aliases_in(&files.0).unwrap(),
+            vec!["138332", "ALPHA", "another", "beta", "gamma", "zeta"]
+        );
+    }
+
+    #[test]
+    fn quoted_values_and_equals_keep_first_matching_configuration() {
+        let files = TestConfig::new();
+        files.write(
+            "config",
+            "Include \"parts with spaces/*.conf\"\nHost=target\nUser=ignored\nPort = 99\n",
+        );
+        files.write("parts with spaces/01.conf", "Host=target\nUser = \"first # user\" # comment\nIdentityFile=\"C:\\Users\\test\\key file\"\nInclude nested.conf\n");
+        files.write(
+            "parts with spaces/02.conf",
+            "Host target\nUser second\nPort 44\n",
+        );
+        files.write("nested.conf", "Port=2222\nInclude config\n");
+        let mut state = SshConfigParseState::default();
+        let mut budget = SshReadBudget::default();
+        parse_ssh_config_file(
+            &files.0.join("config"),
+            &files.0,
+            "target",
+            &mut state,
+            &mut HashSet::new(),
+            0,
+            &mut budget,
+        );
+        assert!(!budget.exceeded);
+        assert!(state.matched_alias);
+        assert_eq!(state.config.user.as_deref(), Some("first # user"));
+        assert_eq!(state.config.port, Some(2222));
+        assert_eq!(
+            state.config.identity_files,
+            vec!["C:\\Users\\test\\key file"]
+        );
+    }
+
+    #[test]
+    fn unmatched_conditional_include_does_not_apply_its_values() {
+        let files = TestConfig::new();
+        files.write(
+            "config",
+            "Host other\nInclude nested.conf\nHost target\nUser correct\n",
+        );
+        files.write("nested.conf", "Host target\nUser incorrect\n");
+        let mut state = SshConfigParseState::default();
+        parse_ssh_config_file(
+            &files.0.join("config"),
+            &files.0,
+            "target",
+            &mut state,
+            &mut HashSet::new(),
+            0,
+            &mut SshReadBudget::default(),
+        );
+        assert_eq!(state.config.user.as_deref(), Some("correct"));
+    }
+
+    #[test]
+    fn discovery_stops_at_depth_and_size_limits_and_accepts_missing_config() {
+        let files = TestConfig::new();
+        assert!(ssh_aliases_in(&files.0).unwrap().is_empty());
+        files.write("config", "Include level0\n");
+        for level in 0..20 {
+            files.write(
+                &format!("level{level}"),
+                &format!("Include level{}\nHost host{level}\n", level + 1),
+            );
+        }
+        assert!(ssh_aliases_in(&files.0).is_err());
+        files.write("config", &"#".repeat(1_048_577));
+        assert!(ssh_aliases_in(&files.0).is_err());
+    }
+
+    #[test]
+    fn discovery_bounds_wildcard_expansion() {
+        let files = TestConfig::new();
+        files.write("config", "Include \"parts with spaces/*.conf\"\n");
+        for index in 0..257 {
+            files.write(&format!("parts with spaces/{index}.conf"), "Host example\n");
+        }
+        assert!(ssh_aliases_in(&files.0).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_breaks_symlink_include_cycles() {
+        let files = TestConfig::new();
+        files.write("config", "Host first\nInclude loop.conf\n");
+        std::os::unix::fs::symlink(files.0.join("config"), files.0.join("loop.conf")).unwrap();
+        assert_eq!(ssh_aliases_in(&files.0).unwrap(), vec!["first"]);
+    }
+
     #[test]
     fn follows_absolute_and_nested_includes_for_aliases() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let ssh_dir = std::env::temp_dir().join(format!("widgitron-ssh-config-{}-{unique}", std::process::id()));
+        let ssh_dir = std::env::temp_dir().join(format!(
+            "widgitron-ssh-config-{}-{unique}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(ssh_dir.join("parts")).unwrap();
         std::fs::write(
             ssh_dir.join("config"),
@@ -575,6 +942,7 @@ mod ssh_config_tests {
             &mut state,
             &mut HashSet::new(),
             0,
+            &mut SshReadBudget::default(),
         );
         assert!(state.matched_alias);
         assert_eq!(state.config.host_name.as_deref(), Some("gpu.example.test"));
@@ -590,7 +958,10 @@ mod ssh_config_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let ssh_dir = std::env::temp_dir().join(format!("widgitron-ssh-pattern-{}-{unique}", std::process::id()));
+        let ssh_dir = std::env::temp_dir().join(format!(
+            "widgitron-ssh-pattern-{}-{unique}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&ssh_dir).unwrap();
         std::fs::write(
             ssh_dir.join("config"),
@@ -606,6 +977,7 @@ mod ssh_config_tests {
             &mut state,
             &mut HashSet::new(),
             0,
+            &mut SshReadBudget::default(),
         );
         assert!(!state.matched_alias);
         assert_eq!(state.config.port, None);

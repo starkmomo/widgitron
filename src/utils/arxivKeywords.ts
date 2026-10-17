@@ -29,6 +29,10 @@ export function getArxivKeywords(keywords?: string[]): string[] {
   });
 }
 
+export function hasArxivKeywords(keywords?: string[]): boolean {
+  return getArxivKeywords(keywords).some(keyword => /[\p{L}\p{N}]/u.test(keyword));
+}
+
 export function paperMatchesArxivKeyword(paper: ArxivPaper, keyword: string): boolean {
   const normalized = normalizeArxivKeyword(keyword);
   if (!normalized) return false;

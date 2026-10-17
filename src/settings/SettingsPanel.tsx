@@ -16,8 +16,13 @@ import type {
   ServerGpuData,
   SidebarThemeDefinition,
 } from "../types/config";
-import type { UpdateInfo } from "../types/tauri";
-import { APP_VERSION } from "../constants";
+import type { UpdateInfo, SshConfigHostEntry } from "../types/tauri";
+import { FilterStatus, type FilterSaveResult, type FilterStatusState } from "../components/FilterStatus";
+import { FilterChoice } from "../components/FilterChoice";
+import { InlineHelp } from "../components/InlineHelp";
+import { hasArxivKeywords } from "../utils/arxivKeywords";
+import { MODULE_NAVIGATION } from "../utils/moduleNavigation";
+import { APP_VERSION, APP_NAME, IS_TEST_BUILD } from "../constants";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { MasterSwitch } from "../components/MasterSwitch";
@@ -674,7 +679,7 @@ const sanitizeGpuConfig = (config: GpuConfig): GpuConfig => {
 };
 
 function GpuServerCard({
-  s, idx, appConfig, removeServer, updateServer, localGpu, onSaveGpu
+  s, idx, appConfig, removeServer, updateServer, localGpu, onSaveGpu, applySshHost
 }: {
   s: ServerConfig;
   idx: number;
@@ -683,20 +688,72 @@ function GpuServerCard({
   updateServer: (idx: number, field: keyof ServerConfig, val: ServerConfig[keyof ServerConfig], shouldSave?: boolean) => void;
   localGpu: GpuConfig;
   onSaveGpu: (config: GpuConfig) => void;
+  applySshHost: (serverId: string, entry: SshConfigHostEntry) => void;
 }) {
   const controls = useDragControls();
+  const cardRef = useRef({ idx, updateServer, localGpu, onSaveGpu });
+  cardRef.current = { idx, updateServer, localGpu, onSaveGpu };
+  const [sshHosts, setSshHosts] = useState<string[]>([]);
+  const [hostsLoading, setHostsLoading] = useState(false);
+  const [hostLoading, setHostLoading] = useState(false);
+  const [sshError, setSshError] = useState(false);
+  const [hostsRevision, setHostsRevision] = useState(0);
+  const serverRef = useRef(s);
+  serverRef.current = s;
+  const mounted = useRef(false);
+  const selectionRequest = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; selectionRequest.current++; };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    selectionRequest.current++;
+    setHostLoading(false);
+    setSshError(false);
+    if (!s.use_ssh_config) return;
+    setHostsLoading(true);
+    void tauriInvoke("list_ssh_config_hosts").then(hosts => {
+      if (active) setSshHosts(hosts);
+    }).catch(() => {
+      if (active) { setSshHosts([]); setSshError(true); }
+    }).finally(() => { if (active) setHostsLoading(false); });
+    return () => { active = false; };
+  }, [s.use_ssh_config, hostsRevision]);
+  const selectSshHost = async (alias: string) => {
+    if (!alias) return;
+    const request = ++selectionRequest.current;
+    const expectedServer = serverRef.current;
+    setHostLoading(true);
+    setSshError(false);
+    try {
+      const entry = await tauriInvoke("get_ssh_config_host", { alias });
+      if (!mounted.current || request !== selectionRequest.current || serverRef.current !== expectedServer) return;
+      if (expectedServer.id) applySshHost(expectedServer.id, entry);
+    } catch {
+      if (mounted.current && request === selectionRequest.current) setSshError(true);
+    } finally {
+      if (mounted.current && request === selectionRequest.current) setHostLoading(false);
+    }
+  };
   const saveHost = async (host: string) => {
+    const expectedServer = serverRef.current;
     if (host.trim() && s.use_ssh_config === undefined) {
       try {
         if (await tauriInvoke("ssh_config_has_host", { host: host.trim() })) {
-          updateServer(idx, "use_ssh_config", true, true);
+          if (!mounted.current || serverRef.current !== expectedServer) return;
+          const current = cardRef.current;
+          current.updateServer(current.idx, "use_ssh_config", true, true);
           return;
         }
       } catch (error) {
         console.warn("Could not check SSH config host", error);
       }
     }
-    onSaveGpu(localGpu);
+    if (mounted.current && serverRef.current === expectedServer) {
+      const current = cardRef.current;
+      current.onSaveGpu(current.localGpu);
+    }
   };
   return (
     <Reorder.Item
@@ -791,7 +848,9 @@ function GpuServerCard({
             }`}
           />
         </div>
-        <div className="col-span-4 flex flex-wrap items-center gap-4 pt-2">
+        <div className="col-span-4 space-y-3 pt-2">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+          <div className="inline-flex items-center gap-1">
           <button
             onClick={() => updateServer(idx, "use_ssh_config", !s.use_ssh_config, true)}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
@@ -803,11 +862,11 @@ function GpuServerCard({
             <div className={`w-2 h-2 rounded-full ${s.use_ssh_config ? "bg-blue-400 animate-pulse" : "bg-slate-600"}`} />
             Use ~/.ssh/config
           </button>
-          {s.use_ssh_config && (
-            <span className="text-[9px] text-blue-500/60 font-medium italic">
+          <InlineHelp label="SSH config help">
               Host can be an SSH config alias; OpenSSH resolved HostName, User, Port and IdentityFile are applied.
-            </span>
-          )}
+          </InlineHelp>
+          </div>
+          <div className="inline-flex items-center gap-1">
           <button
             onClick={() => updateServer(idx, "use_slurm", !s.use_slurm, true)}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
@@ -819,13 +878,30 @@ function GpuServerCard({
             <div className={`w-2 h-2 rounded-full ${s.use_slurm ? "bg-amber-400 animate-pulse" : "bg-slate-600"}`} />
             Slurm Cluster Mode
           </button>
-          {s.use_slurm && (
-            <span className="text-[9px] text-amber-500/60 font-medium italic">
+          <InlineHelp label="Slurm help">
               Enables job-based monitoring via squeue & srun
-            </span>
-          )}
+          </InlineHelp>
+          </div>
+          </div>
+          {s.use_ssh_config && <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <select aria-label="SSH host" disabled={hostsLoading || hostLoading}
+                value={sshHosts.includes(s.host) ? s.host : ""}
+                onChange={event => void selectSshHost(event.target.value)}
+                className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-xs ${appConfig.theme === "light" ? "border-slate-200 bg-slate-50 text-slate-900" : "border-white/10 bg-slate-900 text-white"}`}>
+                <option value="">{hostsLoading ? "Reading SSH config…" : hostLoading ? "Filling SSH host…" : sshHosts.length ? "Select SSH host…" : "No SSH hosts found"}</option>
+                {sshHosts.map(alias => <option key={alias} value={alias} data-no-localize>{alias}</option>)}
+              </select>
+              <button type="button" title="Reload SSH hosts" aria-label="Reload SSH hosts" disabled={hostsLoading || hostLoading}
+                onClick={() => setHostsRevision(value => value + 1)}
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--dashboard-border)] text-slate-500 hover:text-blue-500 disabled:opacity-40">
+                <RefreshCw size={14} className={hostsLoading ? "animate-spin" : ""} />
+              </button>
+            </div>
+            {sshError && <p role="status" className="text-xs text-amber-600">Could not read SSH config. You can still enter an alias manually.</p>}
+          </div>}
           {s.use_slurm && (
-            <>
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => updateServer(idx, "show_squeue_list", !s.show_squeue_list, true)}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
@@ -861,7 +937,7 @@ function GpuServerCard({
                   </button>
                 </>
               )}
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -877,8 +953,9 @@ interface SettingsPanelProps {
   quotaConfig: QuotaConfig;
   themeConfig: WidgetThemeConfig;
   onSaveGpu: (config: GpuConfig) => void;
-  onSavePaper: (config: PaperConfig) => void;
-  onSaveArxiv: (config: ArxivConfig) => void;
+  onSavePaper: (config: PaperConfig) => Promise<boolean>;
+  onSaveArxiv: (changes: Partial<ArxivConfig>) => Promise<FilterSaveResult>;
+  arxivFilterState: FilterStatusState;
   onSaveQuota: (config: QuotaConfig) => void;
   onSaveApp: (config: AppConfig) => void;
   onToggleSidebarWidget: (key: "quota" | "gpu" | "deadlines" | "arxiv", enabled: boolean) => void;
@@ -904,6 +981,8 @@ const parseArxivKeywordsInput = (value: string) =>
     .map((keyword) => keyword.trim())
     .filter(Boolean);
 
+const paperFilterKey = (config: PaperConfig) => JSON.stringify([config.filter_by_rank ?? [], config.filter_by_core ?? [], config.filter_by_sub ?? []]);
+
 export function SettingsPanel({
   gpuConfig,
   paperConfig,
@@ -914,6 +993,7 @@ export function SettingsPanel({
   onSaveGpu,
   onSavePaper,
   onSaveArxiv,
+  arxivFilterState,
   onSaveQuota,
   onSaveApp,
   onToggleSidebarWidget,
@@ -931,8 +1011,34 @@ export function SettingsPanel({
   embeddedSection,
 }: SettingsPanelProps) {
   const [localGpu, setLocalGpu] = useState<GpuConfig>(() => sanitizeGpuConfig(gpuConfig));
+  const localGpuRef = useRef(localGpu);
+  localGpuRef.current = localGpu;
   const [localPaper, setLocalPaper] = useState<PaperConfig>(paperConfig);
   const [localArxiv, setLocalArxiv] = useState<ArxivConfig>(arxivConfig);
+  const [paperApplyState, setPaperApplyState] = useState<FilterStatusState>("idle");
+  useEffect(() => {
+    if (paperApplyState !== "applied") return;
+    const timer = window.setTimeout(() => setPaperApplyState("idle"), 4000);
+    return () => window.clearTimeout(timer);
+  }, [paperApplyState]);
+  const filterMounted = useRef(false);
+  const paperApplyRevision = useRef(0);
+  const paperUpdates = useRef(0);
+  const paperApplyError = useRef<string | null>(null);
+  const previousPaperConfig = useRef(paperConfig);
+  const pendingArxivKeywords = useRef<string[] | null>(null);
+  const saveArxivRef = useRef(onSaveArxiv);
+  saveArxivRef.current = onSaveArxiv;
+  const commitArxivKeywords = () => {
+    const keywords = pendingArxivKeywords.current;
+    if (keywords === null) return;
+    pendingArxivKeywords.current = null;
+    // Commit only the edited field; category and other settings may have changed
+    // while this draft was being edited or another save was in flight.
+    void saveArxivRef.current({ keywords });
+  };
+  useEffect(() => () => { commitArxivKeywords(); }, []);
+  useEffect(() => { filterMounted.current = true; return () => { filterMounted.current = false; }; }, []);
   const [arxivProxyInput, setArxivProxyInput] = useState(appConfig.arxiv_proxy || "");
   const [isRecordingSidebarHotkey, setIsRecordingSidebarHotkey] = useState(false);
   const [sidebarHotkeyCaptureError, setSidebarHotkeyCaptureError] = useState<string | null>(null);
@@ -973,6 +1079,7 @@ export function SettingsPanel({
   useEffect(() => {
     const prevSection = prevActiveSectionRef.current;
     if (prevSection !== activeSection) {
+      if (prevSection === LIVE_DATA_SECTION.ARXIV) commitArxivKeywords();
       if (isLiveDataSection(prevSection)) {
         clearLiveDataSectionErrors(prevSection, {
           gpu: { clearRefresh: () => setGpuRefreshError(null) },
@@ -1034,7 +1141,12 @@ export function SettingsPanel({
         },
         {
           gpuSetter: setLiveGpuData,
-          paperSetter: setLiveDeadlines,
+          onPaperUpdate: items => {
+            paperUpdates.current += 1;
+            paperApplyError.current = null;
+            setLiveDeadlines(items);
+            setPaperApplyState(previous => previous === "updating" ? "applied" : previous);
+          },
           arxivSetter: setLiveArxivPapers,
         }
       );
@@ -1042,7 +1154,11 @@ export function SettingsPanel({
 
       const u1e = await listenBackendServiceError(
         "paper_error",
-        setPaperBackendError,
+        error => {
+          paperApplyError.current = error;
+          setPaperBackendError(error);
+          if (error) setPaperApplyState(previous => previous === "updating" ? "refresh-error" : previous);
+        },
         () => active
       );
       unsubs.push(u1e);
@@ -1132,10 +1248,7 @@ export function SettingsPanel({
   const tabs: { id: SettingsSection; label: string; icon: typeof Settings }[] = [
     { id: "general", label: SETTINGS_SECTION_LABELS.general, icon: Settings },
     { id: "sidebar", label: SETTINGS_SECTION_LABELS.sidebar, icon: PanelRight },
-    { id: LIVE_DATA_SECTION.QUOTA, label: LIVE_DATA_SECTION_LABELS.quota, icon: Coins },
-    { id: LIVE_DATA_SECTION.GPU, label: LIVE_DATA_SECTION_LABELS.gpu, icon: Cpu },
-    { id: LIVE_DATA_SECTION.DEADLINES, label: LIVE_DATA_SECTION_LABELS.deadlines, icon: Calendar },
-    { id: LIVE_DATA_SECTION.ARXIV, label: LIVE_DATA_SECTION_LABELS.arxiv, icon: BookOpen },
+    ...MODULE_NAVIGATION.map(({ section, label, Icon }) => ({ id: section, label, icon: Icon })),
     { id: "about", label: SETTINGS_SECTION_LABELS.about, icon: Info },
   ];
 
@@ -1154,12 +1267,16 @@ export function SettingsPanel({
   }, [gpuConfig]);
 
   useEffect(() => {
-    setLocalPaper(paperConfig);
+    const previous = previousPaperConfig.current;
+    setLocalPaper(draft => paperFilterKey(draft) === paperFilterKey(previous) ? paperConfig : {
+      ...paperConfig, filter_by_rank: draft.filter_by_rank, filter_by_core: draft.filter_by_core, filter_by_sub: draft.filter_by_sub,
+    });
+    previousPaperConfig.current = paperConfig;
   }, [paperConfig]);
 
   useEffect(() => {
-    setLocalArxiv(arxivConfig);
-    setArxivKeywordsInput(formatArxivKeywordsInput(arxivConfig.keywords));
+    setLocalArxiv({ ...arxivConfig, keywords: pendingArxivKeywords.current ?? arxivConfig.keywords });
+    setArxivKeywordsInput(input => pendingArxivKeywords.current === null ? formatArxivKeywordsInput(arxivConfig.keywords) : input);
   }, [arxivConfig]);
 
   // Only sync quotaConfig once on first real load to prevent race conditions
@@ -1253,6 +1370,20 @@ export function SettingsPanel({
         onSaveGpu(next);
       }
     }
+  };
+
+  const applySshHost = (serverId: string, entry: SshConfigHostEntry) => {
+    const current = localGpuRef.current;
+    if (!current.servers?.some(server => server.id === serverId && server.use_ssh_config)) return;
+    const next = { ...current, servers: current.servers.map(server => server.id !== serverId ? server : {
+      ...server,
+      // Preserve the alias so OpenSSH can apply ProxyJump/Match at connection time.
+      host: entry.alias, user: entry.user ?? "", port: entry.port ?? 22,
+      key_file: entry.key_file ?? undefined, use_ssh_config: true,
+    }) };
+    localGpuRef.current = next;
+    setLocalGpu(next);
+    onSaveGpu(next);
   };
 
   const addQuotaItem = (provider: string) => {
@@ -2181,6 +2312,7 @@ export function SettingsPanel({
 
     return (
     <section className="space-y-6">
+      {!embeddedSection && <>
       <div className="flex items-center justify-between">
         <h2 className={`text-xs font-black uppercase tracking-wider ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
           {LIVE_DATA_SECTION_LABELS.gpu}
@@ -2214,8 +2346,9 @@ export function SettingsPanel({
         theme={appConfig.theme}
         refreshCachedLabel={gpuRefreshCachedLabel(hasCachedGpuData)}
       />
+      </>}
       <div className="space-y-4">
-        <div
+        {!embeddedSection && <div
           className={`p-6 border border-[var(--dashboard-border)] rounded-2xl flex items-center justify-between ${
             appConfig.theme === "light" ? "bg-white" : "bg-white/5"
           }`}
@@ -2243,7 +2376,7 @@ export function SettingsPanel({
           >
             {localGpu?.compact_mode !== false ? "Enabled" : "Disabled"}
           </button>
-        </div>
+        </div>}
 
         <Reorder.Group
           axis="y"
@@ -2264,6 +2397,7 @@ export function SettingsPanel({
               removeServer={removeServer}
               updateServer={updateServer}
               localGpu={localGpu}
+              applySshHost={applySshHost}
               onSaveGpu={onSaveGpu}
             />
           ))}
@@ -2290,8 +2424,23 @@ export function SettingsPanel({
     );
   };
 
+  const applyPaperFilters = async (filters: PaperConfig) => {
+    const revision = ++paperApplyRevision.current;
+    paperApplyError.current = null;
+    setPaperBackendError(null);
+    setPaperApplyState("applying");
+    const updates = paperUpdates.current;
+    try {
+      const saved = await onSavePaper({ ...paperConfig, filter_by_rank: filters.filter_by_rank,
+        filter_by_core: filters.filter_by_core, filter_by_sub: filters.filter_by_sub });
+      if (filterMounted.current && revision === paperApplyRevision.current) setPaperApplyState(!saved ? "save-error" : paperApplyError.current ? "refresh-error"
+        : appConfig.deadline_enabled !== false && paperUpdates.current === updates ? "updating" : "applied");
+    } catch { if (filterMounted.current && revision === paperApplyRevision.current) setPaperApplyState("save-error"); }
+  };
+
   const renderDeadlinesSection = () => (
     <section className="space-y-6">
+      {!embeddedSection && <>
       <div className="flex items-center justify-between">
         <h2 className={`text-xs font-black uppercase tracking-wider ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
           {LIVE_DATA_SECTION_LABELS.deadlines}
@@ -2334,53 +2483,46 @@ export function SettingsPanel({
           CACHED_LABELS.deadlines.refresh
         )}
       />
+      </>}
+      <fieldset className="min-w-0">
       <div
-        className={`p-6 border border-[var(--dashboard-border)] rounded-2xl space-y-6 ${
+        className={`filter-settings-card p-6 border border-[var(--dashboard-border)] rounded-2xl space-y-6 ${
           appConfig.theme === "light" ? "bg-white" : "bg-white/5"
         }`}
       >
-        <div className="grid grid-cols-2 gap-8">
-          {/* Left Column: Target CCF Ranks */}
-          <div className="space-y-3">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-              Target CCF Ranks
-            </label>
-            <div className="flex flex-wrap gap-2">
+        <div className="space-y-3">
+          <div className="filter-choice-row" role="group" aria-label="Target CCF Ranks">
+            <span className="text-xs font-semibold text-slate-500">CCF</span>
+            <div className="grid grid-cols-5 gap-2">
               {[
                 { value: "A", label: "CCF A" },
                 { value: "B", label: "CCF B" },
                 { value: "C", label: "CCF C" },
                 { value: "N", label: "Non CCF" }
               ].map((r) => (
-                <button
+                <FilterChoice
                   key={r.value}
+                  className={r.value === "N" ? "col-start-5" : ""}
+                  compact
+                  selected={localPaper.filter_by_rank?.includes(r.value) ?? false}
+                  isLight={appConfig.theme === "light"}
                   onClick={() => {
                     const ranks = localPaper.filter_by_rank || [];
                     const next = ranks.includes(r.value) ? ranks.filter((i: string) => i !== r.value) : [...ranks, r.value];
                     const nextConfig = { ...localPaper, filter_by_rank: next };
                     setLocalPaper(nextConfig);
-                    onSavePaper(nextConfig);
+                    void applyPaperFilters(nextConfig);
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
-                    localPaper.filter_by_rank?.includes(r.value)
-                      ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
-                      : appConfig.theme === "light"
-                      ? "bg-slate-100 text-slate-500 border border-slate-200"
-                      : "bg-black/40 text-slate-500 border border-white/5 hover:border-white/20"
-                  }`}
                 >
                   {r.label}
-                </button>
+                </FilterChoice>
               ))}
             </div>
           </div>
 
-          {/* Right Column: Target CORE Ranks */}
-          <div className="space-y-3">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-              Target CORE Ranks
-            </label>
-            <div className="flex flex-wrap gap-2">
+          <div className="filter-choice-row" role="group" aria-label="Target CORE Ranks">
+            <span className="text-xs font-semibold text-slate-500">CORE</span>
+            <div className="grid grid-cols-5 gap-2">
               {[
                 { value: "A*", label: "CORE A*" },
                 { value: "A", label: "CORE A" },
@@ -2388,25 +2530,21 @@ export function SettingsPanel({
                 { value: "C", label: "CORE C" },
                 { value: "N", label: "Non CORE" }
               ].map((r) => (
-                <button
+                <FilterChoice
                   key={r.value}
+                  compact
+                  selected={localPaper.filter_by_core?.includes(r.value) ?? false}
+                  isLight={appConfig.theme === "light"}
                   onClick={() => {
                     const ranks = localPaper.filter_by_core || [];
                     const next = ranks.includes(r.value) ? ranks.filter((i: string) => i !== r.value) : [...ranks, r.value];
                     const nextConfig = { ...localPaper, filter_by_core: next };
                     setLocalPaper(nextConfig);
-                    onSavePaper(nextConfig);
+                    void applyPaperFilters(nextConfig);
                   }}
-                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
-                    localPaper.filter_by_core?.includes(r.value)
-                      ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
-                      : appConfig.theme === "light"
-                      ? "bg-slate-100 text-slate-500 border border-slate-200"
-                      : "bg-black/40 text-slate-500 border border-white/5 hover:border-white/20"
-                  }`}
                 >
                   {r.label}
-                </button>
+                </FilterChoice>
               ))}
             </div>
           </div>
@@ -2417,27 +2555,23 @@ export function SettingsPanel({
           <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
             Categories
           </label>
-          <div className="flex flex-wrap gap-2">
+          <div className="research-area-choices" role="group" aria-label="Categories">
             {["AI", "CV", "NLP", "HCI", "DB", "Graphics", "Security", "Network", "Systems"].map((cat) => (
-              <button
+              <FilterChoice
                 key={cat}
+                compact
+                selected={localPaper.filter_by_sub?.includes(cat) ?? false}
+                isLight={appConfig.theme === "light"}
                 onClick={() => {
                   const subs = localPaper.filter_by_sub || [];
                   const next = subs.includes(cat) ? subs.filter((i: string) => i !== cat) : [...subs, cat];
                   const nextConfig = { ...localPaper, filter_by_sub: next };
                   setLocalPaper(nextConfig);
-                  onSavePaper(nextConfig);
+                  void applyPaperFilters(nextConfig);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${
-                  localPaper.filter_by_sub?.includes(cat)
-                    ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
-                    : appConfig.theme === "light"
-                    ? "bg-slate-100 text-slate-500 border border-slate-200"
-                    : "bg-black/40 text-slate-500 border border-white/5 hover:border-white/20"
-                }`}
               >
                 {cat}
-              </button>
+              </FilterChoice>
             ))}
           </div>
         </div>
@@ -2454,6 +2588,9 @@ export function SettingsPanel({
           </div>
         </div>}
       </div>
+      </fieldset>
+      <FilterStatus state={paperApplyState}
+        progress="Applying conference filters…" applied="Conference filters applied." error={paperBackendError} />
       {!embeddedSection && <ThemeManagementSection
         themeConfig={themeConfig}
         onSaveThemes={onSaveThemes}
@@ -2466,6 +2603,7 @@ export function SettingsPanel({
 
   const renderArxivSection = () => (
     <section className="space-y-6">
+      {!embeddedSection && <>
       <div className="flex items-center justify-between">
         <h2 className={`text-xs font-black uppercase tracking-wider ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
           {LIVE_DATA_SECTION_LABELS.arxiv}
@@ -2508,36 +2646,33 @@ export function SettingsPanel({
           CACHED_LABELS.arxiv.refresh
         )}
       />
+      </>}
+      <fieldset className="min-w-0">
       <div
-        className={`p-6 border border-[var(--dashboard-border)] rounded-2xl space-y-6 ${
+        className={`filter-settings-card p-6 border border-[var(--dashboard-border)] rounded-2xl space-y-6 ${
           appConfig.theme === "light" ? "bg-white" : "bg-white/5"
         }`}
       >
-        <div className="grid grid-cols-2 gap-8">
-          <div className="space-y-4">
+        <div className="space-y-6">
+          <div className="space-y-5">
             <div className="space-y-3">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
                 Research Category
               </label>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-4 gap-2" role="group" aria-label="Research Category">
                 {["cs", "stat", "math", "eess"].map((c) => (
-                  <button
+                  <FilterChoice
                     key={c}
+                    selected={(localArxiv.categories?.[0] || "cs") === c}
+                    isLight={appConfig.theme === "light"}
                     onClick={() => {
-                      const next = { ...localArxiv, categories: [c] };
-                      setLocalArxiv(next);
-                      onSaveArxiv(next);
+                      if ((localArxiv.categories?.[0] || "cs") === c) return;
+                      setLocalArxiv({ ...localArxiv, categories: [c] });
+                      void onSaveArxiv({ categories: [c] });
                     }}
-                    className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
-                      (localArxiv.categories?.[0] || "cs") === c
-                        ? "bg-pink-500 text-white shadow-lg shadow-pink-500/20"
-                        : appConfig.theme === "light"
-                        ? "bg-slate-100 text-slate-500 border border-slate-200"
-                        : "bg-black/40 text-slate-500 border border-white/5 hover:border-white/20"
-                    }`}
                   >
                     {c.toUpperCase()}
-                  </button>
+                  </FilterChoice>
                 ))}
               </div>
             </div>
@@ -2553,14 +2688,9 @@ export function SettingsPanel({
                   const next = { ...localArxiv, keywords: parseArxivKeywordsInput(input) };
                   setArxivKeywordsInput(input);
                   setLocalArxiv(next);
+                  pendingArxivKeywords.current = JSON.stringify(next.keywords) === JSON.stringify(arxivConfig.keywords ?? [])
+                    ? null : next.keywords ?? [];
                 }}
-                onBlur={() => {
-                  const next = { ...localArxiv, keywords: parseArxivKeywordsInput(arxivKeywordsInput) };
-                  setLocalArxiv(next);
-                  setArxivKeywordsInput(formatArxivKeywordsInput(next.keywords));
-                  onSaveArxiv(next);
-                }}
-                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                 className={`w-full px-4 py-2.5 rounded-xl text-xs font-bold border transition-all ${
                   appConfig.theme === "light"
                     ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
@@ -2568,10 +2698,17 @@ export function SettingsPanel({
                 }`}
                 placeholder="Optional keywords"
               />
-              <p className="text-[10px] text-slate-500">Leave keywords empty to show recent papers from the selected arXiv category.</p>
+              <p className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                <span>Keywords only affect To read.</span>
+                <span tabIndex={0} role="img" className="inline-flex cursor-help rounded focus-visible:outline-2 focus-visible:outline-blue-500"
+                  title="Without keywords, To read stays empty. All ignores keywords."
+                  aria-label="Without keywords, To read stays empty. All ignores keywords.">
+                  <Info size={12} aria-hidden="true" />
+                </span>
+              </p>
             </div>
           </div>
-          <div className="space-y-6">
+          {!embeddedSection && <div className="filter-display-options border-t border-[var(--dashboard-border)] pt-5">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
@@ -2589,33 +2726,31 @@ export function SettingsPanel({
                 value={localArxiv.update_interval || 3600}
                 onChange={(e) => {
                   const nextVal = parseInt(e.target.value);
-                  const next = { ...localArxiv, update_interval: nextVal };
-                  setLocalArxiv(next);
-                  onSaveArxiv(next);
+                  setLocalArxiv({ ...localArxiv, update_interval: nextVal });
+                  void onSaveArxiv({ update_interval: nextVal });
                 }}
                 className="w-full h-1.5 bg-pink-600/20 rounded-lg appearance-none cursor-pointer accent-pink-600"
               />
             </div>
-            <div className="flex items-center justify-between p-4 rounded-2xl bg-white/5 border border-white/5 gap-4">
+            <div className="flex items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
-                  Show Interaction Hints
+                  Swipe hints
                 </div>
-                <div className="text-[10px] text-slate-500">Display swipe instructions at the bottom of cards</div>
+                <div className="text-[10px] text-slate-500">Show swipe hints on cards</div>
               </div>
               <MasterSwitch
                 label="Show Interaction Hints"
                 enabled={localArxiv.show_card_hints !== false}
                 onToggle={(val) => {
-                  const next = { ...localArxiv, show_card_hints: val };
-                  setLocalArxiv(next);
-                  onSaveArxiv(next);
+                  setLocalArxiv({ ...localArxiv, show_card_hints: val });
+                  void onSaveArxiv({ show_card_hints: val });
                 }}
               />
             </div>
-          </div>
+          </div>}
         </div>
-        <div className="space-y-2 rounded-2xl border border-white/5 bg-white/5 p-4">
+        {!embeddedSection && <div className="space-y-2 rounded-2xl border border-white/5 bg-white/5 p-4">
           <div className="space-y-1">
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
               Arxiv Proxy
@@ -2641,8 +2776,16 @@ export function SettingsPanel({
             }`}
             placeholder="http://127.0.0.1:7890"
           />
-        </div>
+        </div>}
       </div>
+      </fieldset>
+      <FilterStatus state={arxivFilterState}
+        draftMessage={pendingArxivKeywords.current === null ? undefined
+          : embeddedSection ? "Keywords update when you close filters." : "Keywords update when you leave this settings tab."}
+        progress="Saving filters and updating To read…"
+        applied={!hasArxivKeywords(localArxiv.keywords) ? "To read is empty. Browse All without keywords."
+          : appConfig.arxiv_enabled === false ? "Filters saved. Enable monitoring to update To read." : "To read updated."}
+        error={arxivBackendError} />
       {!embeddedSection && <ThemeManagementSection
         themeConfig={themeConfig}
         onSaveThemes={onSaveThemes}
@@ -2673,7 +2816,7 @@ export function SettingsPanel({
 
     return (
     <section className="space-y-6">
-      <div className="flex items-center justify-between">
+      {!embeddedSection && <div className="flex items-center justify-between">
         <h2 className={`text-xs font-black uppercase tracking-wider ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
           {LIVE_DATA_SECTION_LABELS.quota}
         </h2>
@@ -2687,8 +2830,9 @@ export function SettingsPanel({
         >
           <RotateCcw size={12} /> Restore Position
         </button>
-      </div>
+      </div>}
       <div className="space-y-6">
+        {!embeddedSection && <>
         <div className={`p-4 border border-[var(--dashboard-border)] rounded-2xl flex items-center justify-between ${
           appConfig.theme === "light" ? "bg-white" : "bg-white/5"
         }`}>
@@ -2732,6 +2876,7 @@ export function SettingsPanel({
             }}
           />
         </div>
+        </>}
 
         <Reorder.Group
           axis="y"
@@ -2832,11 +2977,11 @@ export function SettingsPanel({
               appConfig.theme === "light" ? "text-slate-900" : "text-white"
             }`}
           >
-            Widgitron
+            {APP_NAME}
           </h3>
           <div className="flex items-center justify-center gap-2">
             <span className="px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 text-[10px] font-black uppercase tracking-widest border border-blue-500/10">
-              {APP_VERSION} Stable
+              {APP_VERSION} {IS_TEST_BUILD ? "Test build" : "Stable"}
             </span>
             <span className="px-3 py-1 rounded-full bg-purple-500/10 text-purple-500 text-[10px] font-black uppercase tracking-widest border border-purple-500/10">
               Research Edition

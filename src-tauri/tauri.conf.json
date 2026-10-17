@@ -14,9 +14,9 @@
       {
         "label": "main",
         "title": "Widgitron",
-        "width": 1000,
+        "width": 1080,
         "height": 740,
-        "minWidth": 900,
+        "minWidth": 1040,
         "minHeight": 680,
         "resizable": true,
         "fullscreen": false,

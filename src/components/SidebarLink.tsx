@@ -16,6 +16,7 @@ export function SidebarLink({ icon, label, active, onClick, theme = "dark", badg
     <button
       data-no-drag="true"
       onClick={onClick}
+      title={label}
       className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all duration-300 group ${
         active
           ? isLight
@@ -27,7 +28,7 @@ export function SidebarLink({ icon, label, active, onClick, theme = "dark", badg
       }`}
     >
       <span
-        className={`${
+        className={`shrink-0 ${
           active
             ? isLight
               ? "text-white"
@@ -39,12 +40,12 @@ export function SidebarLink({ icon, label, active, onClick, theme = "dark", badg
       >
         {icon}
       </span>
-      <span className={`font-bold text-sm ${active ? (isLight ? "text-white" : "text-white") : ""}`}>{label}</span>
+      <span className={`min-w-0 flex-1 truncate whitespace-nowrap text-left font-bold text-sm ${active ? (isLight ? "text-white" : "text-white") : ""}`}>{label}</span>
       {badge && <div className="ml-auto flex items-center">{badge}</div>}
       {active && !badge && (
         <motion.div
           layoutId="active-indicator"
-          className={`ml-auto w-1.5 h-1.5 rounded-full ${isLight ? "bg-white" : "bg-blue-400"}`}
+          className={`ml-auto shrink-0 w-1.5 h-1.5 rounded-full ${isLight ? "bg-white" : "bg-blue-400"}`}
         />
       )}
     </button>
