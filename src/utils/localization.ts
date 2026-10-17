@@ -10,6 +10,10 @@ export function resolveLanguage(language?: string): UiLanguage {
 // The existing interface contains labels in many independent widgets. Keep the
 // source copy intact so the language can be changed live in every Tauri window.
 const ZH: Record<string, string> = {
+  "Keywords": "关键词", "Type a keyword, then Enter": "输入关键词，回车添加",
+  "Add keyword": "添加关键词", "Remove keyword": "删除关键词",
+  "Keyword filtering help": "关键词筛选说明",
+  "Search SSH hosts": "搜索 SSH 主机", "SSH hosts": "SSH 主机列表", "No matching SSH hosts": "没有匹配的 SSH 主机",
   "SSH config help": "SSH 配置说明", "Slurm help": "Slurm 模式说明",
   "SSH host": "SSH 主机", "Reload SSH hosts": "重新读取 SSH 主机",
   "Reading SSH config…": "正在读取 SSH 配置…", "Filling SSH host…": "正在填入 SSH 主机…",

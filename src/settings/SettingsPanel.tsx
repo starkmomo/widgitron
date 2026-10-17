@@ -20,7 +20,9 @@ import type { UpdateInfo, SshConfigHostEntry } from "../types/tauri";
 import { FilterStatus, type FilterSaveResult, type FilterStatusState } from "../components/FilterStatus";
 import { FilterChoice } from "../components/FilterChoice";
 import { InlineHelp } from "../components/InlineHelp";
-import { hasArxivKeywords } from "../utils/arxivKeywords";
+import { KeywordTagsInput } from "../components/KeywordTagsInput";
+import { SshHostPicker } from "../components/SshHostPicker";
+import { appendArxivKeywords, hasArxivKeywords } from "../utils/arxivKeywords";
 import { MODULE_NAVIGATION } from "../utils/moduleNavigation";
 import { APP_VERSION, APP_NAME, IS_TEST_BUILD } from "../constants";
 import { tauriInvoke } from "../utils/tauriInvoke";
@@ -885,13 +887,10 @@ function GpuServerCard({
           </div>
           {s.use_ssh_config && <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <select aria-label="SSH host" disabled={hostsLoading || hostLoading}
+              <SshHostPicker aliases={sshHosts} loading={hostsLoading || hostLoading} isLight={appConfig.theme === "light"}
                 value={sshHosts.includes(s.host) ? s.host : ""}
-                onChange={event => void selectSshHost(event.target.value)}
-                className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-xs ${appConfig.theme === "light" ? "border-slate-200 bg-slate-50 text-slate-900" : "border-white/10 bg-slate-900 text-white"}`}>
-                <option value="">{hostsLoading ? "Reading SSH config…" : hostLoading ? "Filling SSH host…" : sshHosts.length ? "Select SSH host…" : "No SSH hosts found"}</option>
-                {sshHosts.map(alias => <option key={alias} value={alias} data-no-localize>{alias}</option>)}
-              </select>
+                placeholder={hostsLoading ? "Reading SSH config…" : hostLoading ? "Filling SSH host…" : sshHosts.length ? "Select SSH host…" : "No SSH hosts found"}
+                onSelect={alias => void selectSshHost(alias)} />
               <button type="button" title="Reload SSH hosts" aria-label="Reload SSH hosts" disabled={hostsLoading || hostLoading}
                 onClick={() => setHostsRevision(value => value + 1)}
                 className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--dashboard-border)] text-slate-500 hover:text-blue-500 disabled:opacity-40">
@@ -973,14 +972,6 @@ interface SettingsPanelProps {
   embeddedSection?: SettingsSection;
 }
 
-const formatArxivKeywordsInput = (keywords?: string[]) => (keywords || []).join(", ");
-
-const parseArxivKeywordsInput = (value: string) =>
-  value
-    .split(",")
-    .map((keyword) => keyword.trim())
-    .filter(Boolean);
-
 const paperFilterKey = (config: PaperConfig) => JSON.stringify([config.filter_by_rank ?? [], config.filter_by_core ?? [], config.filter_by_sub ?? []]);
 
 export function SettingsPanel({
@@ -1014,7 +1005,9 @@ export function SettingsPanel({
   const localGpuRef = useRef(localGpu);
   localGpuRef.current = localGpu;
   const [localPaper, setLocalPaper] = useState<PaperConfig>(paperConfig);
-  const [localArxiv, setLocalArxiv] = useState<ArxivConfig>(arxivConfig);
+  const [localArxiv, setLocalArxiv] = useState<ArxivConfig>(() => ({
+    ...arxivConfig, keywords: appendArxivKeywords(arxivConfig.keywords ?? [], ""),
+  }));
   const [paperApplyState, setPaperApplyState] = useState<FilterStatusState>("idle");
   useEffect(() => {
     if (paperApplyState !== "applied") return;
@@ -1026,18 +1019,47 @@ export function SettingsPanel({
   const paperUpdates = useRef(0);
   const paperApplyError = useRef<string | null>(null);
   const previousPaperConfig = useRef(paperConfig);
-  const pendingArxivKeywords = useRef<string[] | null>(null);
+  const pendingArxivKeywords = useRef<string[] | null>(
+    JSON.stringify(localArxiv.keywords) === JSON.stringify(arxivConfig.keywords ?? []) ? null : localArxiv.keywords ?? []
+  );
+  const arxivKeywordValues = useRef(localArxiv.keywords ?? []);
+  const savedArxivKeywords = useRef(arxivConfig.keywords ?? []);
+  savedArxivKeywords.current = arxivConfig.keywords ?? [];
+  const arxivKeywordDraftRef = useRef("");
+  const [arxivKeywordDraft, setArxivKeywordDraft] = useState("");
+  const changeArxivKeywordDraft = (value: string) => {
+    arxivKeywordDraftRef.current = value;
+    setArxivKeywordDraft(value);
+  };
+  const changeArxivKeywords = (keywords: string[]) => {
+    arxivKeywordValues.current = keywords;
+    pendingArxivKeywords.current = JSON.stringify(keywords) === JSON.stringify(savedArxivKeywords.current) ? null : keywords;
+    setLocalArxiv(previous => ({ ...previous, keywords }));
+  };
   const saveArxivRef = useRef(onSaveArxiv);
   saveArxivRef.current = onSaveArxiv;
-  const commitArxivKeywords = () => {
-    const keywords = pendingArxivKeywords.current;
-    if (keywords === null) return;
+  const commitArxivKeywords = (resetInput = true) => {
+    if (pendingArxivKeywords.current === null && !arxivKeywordDraftRef.current.trim()) {
+      arxivKeywordDraftRef.current = "";
+      if (resetInput) setArxivKeywordDraft("");
+      return;
+    }
+    // Include unfinished text when leaving, even if a programmatic navigation
+    // unmounts the field without a blur event. Enter only edits the local tags.
+    const keywords = appendArxivKeywords(arxivKeywordValues.current, arxivKeywordDraftRef.current);
+    arxivKeywordValues.current = keywords;
+    arxivKeywordDraftRef.current = "";
     pendingArxivKeywords.current = null;
+    if (resetInput) {
+      setArxivKeywordDraft("");
+      setLocalArxiv(previous => ({ ...previous, keywords }));
+    }
+    if (JSON.stringify(keywords) === JSON.stringify(savedArxivKeywords.current)) return;
     // Commit only the edited field; category and other settings may have changed
     // while this draft was being edited or another save was in flight.
     void saveArxivRef.current({ keywords });
   };
-  useEffect(() => () => { commitArxivKeywords(); }, []);
+  useEffect(() => () => { commitArxivKeywords(false); }, []);
   useEffect(() => { filterMounted.current = true; return () => { filterMounted.current = false; }; }, []);
   const [arxivProxyInput, setArxivProxyInput] = useState(appConfig.arxiv_proxy || "");
   const [isRecordingSidebarHotkey, setIsRecordingSidebarHotkey] = useState(false);
@@ -1046,9 +1068,6 @@ export function SettingsPanel({
     globalScalePercent(appConfig.global_scale)
   );
   const committedGlobalScaleRef = useRef(normalizeGlobalScale(appConfig.global_scale));
-  const [arxivKeywordsInput, setArxivKeywordsInput] = useState(() =>
-    formatArxivKeywordsInput(arxivConfig.keywords)
-  );
   const [localQuota, setLocalQuota] = useState<QuotaConfig>(() =>
     stripUnsupportedQuotaProviders(quotaConfig)
   );
@@ -1275,8 +1294,10 @@ export function SettingsPanel({
   }, [paperConfig]);
 
   useEffect(() => {
-    setLocalArxiv({ ...arxivConfig, keywords: pendingArxivKeywords.current ?? arxivConfig.keywords });
-    setArxivKeywordsInput(input => pendingArxivKeywords.current === null ? formatArxivKeywordsInput(arxivConfig.keywords) : input);
+    const keywords = pendingArxivKeywords.current ?? appendArxivKeywords(arxivConfig.keywords ?? [], "");
+    arxivKeywordValues.current = keywords;
+    pendingArxivKeywords.current = JSON.stringify(keywords) === JSON.stringify(arxivConfig.keywords ?? []) ? null : keywords;
+    setLocalArxiv({ ...arxivConfig, keywords });
   }, [arxivConfig]);
 
   // Only sync quotaConfig once on first real load to prevent race conditions
@@ -2677,34 +2698,14 @@ export function SettingsPanel({
               </div>
             </div>
             <div className="space-y-3">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                Keywords (Comma separated)
-              </label>
-              <input
-                type="text"
-                value={arxivKeywordsInput}
-                onChange={(e) => {
-                  const input = e.target.value;
-                  const next = { ...localArxiv, keywords: parseArxivKeywordsInput(input) };
-                  setArxivKeywordsInput(input);
-                  setLocalArxiv(next);
-                  pendingArxivKeywords.current = JSON.stringify(next.keywords) === JSON.stringify(arxivConfig.keywords ?? [])
-                    ? null : next.keywords ?? [];
-                }}
-                className={`w-full px-4 py-2.5 rounded-xl text-xs font-bold border transition-all ${
-                  appConfig.theme === "light"
-                    ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
-                    : "bg-black/40 border-white/10 text-white focus:bg-black/60"
-                }`}
-                placeholder="Optional keywords"
-              />
+              <KeywordTagsInput keywords={localArxiv.keywords ?? []} draft={arxivKeywordDraft}
+                onDraftChange={changeArxivKeywordDraft} onKeywordsChange={changeArxivKeywords}
+                isLight={appConfig.theme === "light"} />
               <p className="flex items-center gap-1.5 text-[10px] text-slate-500">
                 <span>Keywords only affect To read.</span>
-                <span tabIndex={0} role="img" className="inline-flex cursor-help rounded focus-visible:outline-2 focus-visible:outline-blue-500"
-                  title="Without keywords, To read stays empty. All ignores keywords."
-                  aria-label="Without keywords, To read stays empty. All ignores keywords.">
-                  <Info size={12} aria-hidden="true" />
-                </span>
+                <InlineHelp label="Keyword filtering help">
+                  Without keywords, To read stays empty. All ignores keywords.
+                </InlineHelp>
               </p>
             </div>
           </div>
@@ -2780,7 +2781,7 @@ export function SettingsPanel({
       </div>
       </fieldset>
       <FilterStatus state={arxivFilterState}
-        draftMessage={pendingArxivKeywords.current === null ? undefined
+        draftMessage={pendingArxivKeywords.current === null && !arxivKeywordDraft.trim() ? undefined
           : embeddedSection ? "Keywords update when you close filters." : "Keywords update when you leave this settings tab."}
         progress="Saving filters and updating To read…"
         applied={!hasArxivKeywords(localArxiv.keywords) ? "To read is empty. Browse All without keywords."

@@ -3,6 +3,8 @@
 ## [Unreleased] - 2026-10-18
 
 ### 中文
+- **SSH 主机选择器**：统一应用内下拉样式，适配浅色和深色主题，支持搜索别名、键盘选择及空结果提示。
+- **关键词标签**：arXiv 关键词改为标签输入，回车添加、叉号删除；支持粘贴中英文逗号、分号及换行分隔的多个词，保留短语空格并自动去重。兼容旧配置，仍在收起筛选或离开设置栏目后统一更新论文；筛选说明统一使用与 GPU 设置相同的即时问号浮层。
 - **额度卡片**：按内容区宽度排列卡片，为周期名称、剩余额度和重置时间分行留出空间，避免窄卡片截断周期文字或挤压百分比；同步中英文。
 - **服务器配置与筛选布局**：SSH 和 Slurm 说明收进问号提示；可从 SSH 配置中选择主机别名并填入已有连接字段，支持嵌套 Include、通配符和带空格的路径，并限制循环与过深递归。CCF 与 CORE 使用相同按钮宽度，研究领域在最小窗口宽度下仍完整显示为一行，无局部滚动。
 - **筛选布局与总览**：CCF、CORE 分行排列，等级、研究领域及 arXiv 分类使用等高等宽选项，明确选中状态；会议图标内的研究领域文字加大、加粗并提高对比度。关键词、滑动提示和预设说明精简，中英文同步。总览有会议关注时显示当前未过期的关注数量，无关注时显示可浏览会议总数；arXiv 有关键词时显示待看数量，无关键词时显示所选分类最近批次的论文总数，并支持直接进入对应论文列表；统计文案简化为“已关注 / 待看 / 近期”，无关注的会议只显示数字，英文同步。
@@ -33,6 +35,8 @@
 - **arXiv 空状态**：未设置关键词时，待看保持为空，可通过“全部”浏览所选分类的近期论文。
 
 ### English
+- **SSH host picker**: Use a consistent in-app dropdown in light and dark themes, with alias search, keyboard selection, and empty-result feedback.
+- **Keyword tags**: Enter adds an arXiv keyword and each tag has a remove action. Paste multiple entries separated by English/Chinese commas, semicolons, or newlines, preserving phrase spaces and removing duplicates. Retain existing configurations and update papers when filters close or the settings section is left. Use the same immediate question-mark help as GPU settings.
 - **Quota cards**: Size the grid to the available content width and separate period names, remaining percentages, and reset times to prevent truncation and collisions in narrow cards, in both languages.
 - **Server setup and filter layout**: Move SSH and Slurm explanations into question-mark help. Select local SSH aliases to fill connection fields, with nested Includes, globs, quoted paths, and cycle/depth limits. Give CCF and CORE equal button widths and fit research areas on one row at the minimum window width, without local scrolling.
 - **Filters and overview**: Arrange CCF and CORE on separate rows with consistently sized rank, research-area, and arXiv category choices and accessible selection states. Enlarge and strengthen research-area codes inside conference icons. Shorten keyword, swipe-hint, and preset copy in both languages. Overview shows upcoming followed conferences when any are followed, otherwise browsable conferences; arXiv shows To read with keywords or the selected categories’ latest paper total without them, and opens the corresponding paper view. Use concise followed / to read / recent metrics in both languages and omit the unit for the unfollowed conference total.
