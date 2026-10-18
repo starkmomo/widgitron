@@ -1,18 +1,20 @@
 import { useState, type ReactNode } from "react";
-import { CheckSquare, ListChecks, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import type { PaperConfig, PaperDeadlineInfo } from "../types/config";
 import type { UiLanguage } from "../utils/localization";
 import { conferenceHasExpired, conferenceManagementRows, conferencePreferenceIds, deadlineConferenceKey, isConferenceFollowed, isConferenceIgnored, matchesDeadlineSearch, resolveConferencePreferences, type ConferencePreference } from "../utils/deadlineKeys";
 import { DeadlineConferenceCard } from "./DeadlineConferenceCard";
+import { IgnoredConferencesDialog } from "./IgnoredConferencesDialog";
+import { ResearchBulkControls, ResearchBulkToggle, researchButton } from "./ResearchBulkControls";
 import { SectionEmptyState } from "./SectionEmptyState";
 import { ResearchPageHeader, ResearchTabs } from "./ResearchPageHeader";
 
-type View = "all" | "followed" | "ignored";
+type View = "all" | "followed";
 
-export function DeadlineConferenceBrowser({ deadlines, config, now, language, isLight, onPreference, onAdjustFilters, headerActions, children }: {
+export function DeadlineConferenceBrowser({ deadlines, config, now, language, isLight, onPreference, onAdjustFilters, headerActions, saveError, children }: {
   deadlines: PaperDeadlineInfo[]; config: PaperConfig; now: number; language: UiLanguage; isLight: boolean;
   onPreference: (ids: string[], action: ConferencePreference, undoable?: boolean) => void;
-  onAdjustFilters: () => void; headerActions: ReactNode; children?: ReactNode;
+  onAdjustFilters: () => void; headerActions: ReactNode; saveError?: boolean; children?: ReactNode;
 }) {
   const [view, setView] = useState<View>("all");
   const [query, setQuery] = useState("");
@@ -29,7 +31,7 @@ export function DeadlineConferenceBrowser({ deadlines, config, now, language, is
   const ids = visible.map(deadlineConferenceKey);
   const checked = ids.filter(id => selected.has(id));
   const expired = lists[view].filter(item => conferenceHasExpired(item, now)).map(deadlineConferenceKey);
-  const button = `inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isLight ? "border-slate-200 bg-white text-slate-600 hover:bg-slate-100" : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"}`;
+  const button = researchButton(isLight);
   const changeView = (next: View) => { setView(next); setSelected(new Set()); };
   const apply = (keys: string[], action: ConferencePreference) => {
     if (!keys.length) return;
@@ -38,16 +40,16 @@ export function DeadlineConferenceBrowser({ deadlines, config, now, language, is
   };
   const emptyMessage = query.trim() ? "No conferences found."
     : view === "followed" ? "No followed conferences."
-    : view === "ignored" ? "No ignored conferences." : "No deadlines match your current filters.";
+    : "No deadlines match your current filters.";
   return (
     <div>
       <ResearchPageHeader title="Paper Deadlines" actions={headerActions}
         tabs={<ResearchTabs<View> value={view} onChange={changeView} label="Conference lists" idPrefix="conference" panelId="conference-list" isLight={isLight}
-          items={[{ value: "all", label: "All", count: lists.all.length }, { value: "followed", label: "Followed", count: lists.followed.length }, { value: "ignored", label: "Ignored", count: lists.ignored.length }]} />}
-        toolbarActions={<button type="button" onClick={() => { setBatch(value => !value); setSelected(new Set()); }} className={button}
-          aria-pressed={batch} aria-expanded={batch} aria-controls="conference-bulk-actions">
-          <ListChecks size={14} /><span>{batch ? "Finish selecting" : "Bulk manage"}</span>
-        </button>}
+          items={[{ value: "all", label: "All", count: lists.all.length }, { value: "followed", label: "Followed", count: lists.followed.length }]} />}
+        toolbarActions={<>
+          <ResearchBulkToggle enabled={batch} onToggle={() => { setBatch(value => !value); setSelected(new Set()); }} isLight={isLight} />
+          <IgnoredConferencesDialog conferences={lists.ignored} now={now} isLight={isLight} saveError={saveError} onPreference={onPreference} />
+        </>}
         filter={<label className={`flex min-h-10 w-full items-center gap-2 rounded-xl border border-[var(--dashboard-border)] px-3 ${isLight ? "bg-white" : "bg-white/5"}`}>
           <Search aria-hidden="true" size={15} className="shrink-0 text-slate-400" />
           <input type="search" aria-label="Search conferences" placeholder="Search conferences" title="Search acronym or full name" value={query}
@@ -57,27 +59,17 @@ export function DeadlineConferenceBrowser({ deadlines, config, now, language, is
             className="rounded-md p-1 text-slate-500 hover:bg-slate-500/10"><X size={13} /></button>}
         </label>} />
       {children}
-      {batch && <div id="conference-bulk-actions" className={`mb-4 rounded-xl border p-3 ${isLight ? "border-blue-200 bg-blue-50" : "border-blue-500/25 bg-blue-500/10"}`}>
-        <div className="flex flex-wrap items-center gap-2">
-        <button type="button" disabled={!ids.length} className={button} onClick={() => setSelected(new Set(checked.length === ids.length ? [] : ids))}>
-          <CheckSquare size={14} /><span>{checked.length && checked.length === ids.length ? "Deselect all" : "Select current results"}</span>
-        </button>
-        <span className="mr-auto text-xs text-slate-500"><span>Selected</span> {checked.length}</span>
-        <button type="button" className={button} disabled={!checked.length} onClick={() => apply(checked, "follow")}>Follow selected</button>
-        {view === "followed" && <button type="button" className={button} disabled={!checked.length} onClick={() => apply(checked, "unfollow")}>Unfollow selected</button>}
-        <button type="button" className={button} disabled={!checked.length} onClick={() => apply(checked, view === "ignored" ? "restore" : "ignore")}>
-          {view === "ignored" ? "Restore selected" : "Ignore selected"}
-        </button>
-        </div>
-        {view !== "all" && <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-blue-400/15 pt-3">
-          <button type="button" disabled={!expired.length} onClick={() => apply(expired, view === "followed" ? "unfollow" : "restore")} className={button}>
-            <span>Clear expired</span>{expired.length > 0 && <span className="opacity-60">{expired.length}</span>}
-          </button>
-          <button type="button" disabled={!lists[view].length} onClick={() => apply(conferencePreferenceIds(preferences, view), view === "followed" ? "unfollow" : "restore")} className={button}>
-            {view === "followed" ? "Unfollow all" : "Restore all ignored"}
-          </button>
+      {batch && <>
+        <ResearchBulkControls total={ids.length} selected={checked.length} onToggleAll={() => setSelected(new Set(checked.length === ids.length ? [] : ids))} isLight={isLight}>
+          <button type="button" className={button} disabled={!checked.length} onClick={() => apply(checked, "follow")}>Follow selected</button>
+          {view === "followed" && <button type="button" className={button} disabled={!checked.length} onClick={() => apply(checked, "unfollow")}>Unfollow selected</button>}
+          <button type="button" className={button} disabled={!checked.length} onClick={() => apply(checked, "ignore")}>Ignore selected</button>
+        </ResearchBulkControls>
+        {view === "followed" && <div className="mb-4 flex flex-wrap gap-2">
+          <button type="button" disabled={!expired.length} onClick={() => apply(expired, "unfollow")} className={button}><span>Clear expired</span>{expired.length > 0 && <span className="opacity-60">{expired.length}</span>}</button>
+          <button type="button" disabled={!lists.followed.length} onClick={() => apply(conferencePreferenceIds(preferences, "followed"), "unfollow")} className={button}>Unfollow all</button>
         </div>}
-      </div>}
+      </>}
       <div id="conference-list" role="tabpanel" aria-labelledby={`conference-tab-${view}`} className="space-y-4">
         {visible.length ? visible.map(item => {
           const id = deadlineConferenceKey(item);

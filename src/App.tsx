@@ -3,8 +3,8 @@ import { flushSync } from "react-dom";
 import {
   LayoutDashboard,
   Settings,
+  SlidersHorizontal,
   Cpu,
-  Calendar,
   X,
   Minus,
   Square,
@@ -15,9 +15,7 @@ import {
   PinOff,
   Monitor,
   Copy,
-  Trash2,
   RefreshCw,
-  Gauge,
   GripVertical,
   Maximize2,
   Globe,
@@ -26,9 +24,8 @@ import {
   ChevronDown,
   EyeOff
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { APP_VERSION } from "./constants";
+import { APP_VERSION, APP_NAME } from "./constants";
 import { isStaleQuotaWarning, quotaHasDisplayValue, orderQuotaByConfig } from "./utils/quotaDisplay";
 import { orderGpuServersByConfig, sortGpuJobGroups } from "./utils/gpuDisplay";
 import {
@@ -47,23 +44,29 @@ import { startWindowSnapshotSync } from "./utils/windowSnapshotSync";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { WidgetTheme, WidgetThemeConfig } from "./types/theme";
+import { WidgetThemeConfig } from "./types/theme";
 import { hexToRgba, isLightColor } from "./utils/color";
 import { providerLogoToneClass } from "./utils/providerLogo";
 import { listenBackendServiceError } from "./utils/backendServiceError";
 import { listenQuotaMonitorStatus, type QuotaMonitorStatus } from "./utils/quotaMonitorStatus";
 import { listenServiceUpdateEvents } from "./utils/serviceUpdateEvents";
 import { listenGpuDataSync } from "./utils/gpuDataSync";
-import { isLiveDataSection, LIVE_DATA_SECTION, refetchSectionLiveDataForSection, appTabLabel, LIVE_DATA_SECTION_LABELS, type AppTab, type SettingsSection } from "./utils/sectionLiveData";
-import { fetchArxivSavedPapers, fetchArxivDiscardedPapers, loadArxivArchiveLists } from "./utils/arxivArchive";
+import { isLiveDataSection, LIVE_DATA_SECTION, refetchSectionLiveDataForSection, LIVE_DATA_SECTION_LABELS, type AppTab, type SettingsSection } from "./utils/sectionLiveData";
+import { ResearchBulkControls, ResearchBulkToggle } from "./components/ResearchBulkControls";
+import { ArxivBulkActions } from "./components/ArxivBulkActions";
+import { useResearchSelection } from "./hooks/useResearchSelection";
+import { arxivPaperKey, useArxivLibrary } from "./hooks/useArxivLibrary";
+import { ArxivReadingActions } from "./components/ArxivReadingActions";
+import { ArxivSkippedDialog } from "./components/ArxivSkippedDialog";
 import { formatCpuPercent, formatSystemMemory } from "./utils/systemMetrics";
-import { formatArxivKeywordLabel, groupArxivPapersByKeyword } from "./utils/arxivKeywords";
+import { formatArxivKeywordLabel, groupArxivPapersByKeyword, hasArxivKeywords } from "./utils/arxivKeywords";
 import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaBarDisplay, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
 import type { SidebarDockState, UpdateInfo } from "./types/tauri";
 import { resolveWidgetTheme } from "./utils/widgetTheme";
 import { isMacOS } from "./utils/platform";
 import { resolveLanguage, useUiLocalization } from "./utils/localization";
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel, messageShowsCached } from "./utils/cachedLabels";
+import { MODULE_NAVIGATION } from "./utils/moduleNavigation";
 import { SidebarLink } from "./components/SidebarLink";
 import { WindowButton } from "./components/WindowButton";
 import { MasterSwitch } from "./components/MasterSwitch";
@@ -78,7 +81,7 @@ import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowse
 import { ResearchPageHeader, ResearchTabs } from "./components/ResearchPageHeader";
 import { ConferenceUndoNotice } from "./components/ConferenceUndoNotice";
 import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
-import { updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
+import { conferencePreferenceIds, isConferenceFollowed, isConferenceIgnored, resolveConferencePreferences, updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
 import {
   compactSidebarTileLayout,
@@ -104,6 +107,7 @@ import { DeadlineWidgetContent } from "./widgets/DeadlineWidgetContent";
 import { ArxivWidgetContent } from "./widgets/ArxivWidgetContent";
 import { QuotaWidgetContent } from "./widgets/QuotaWidgetContent";
 import { SettingsPanel } from "./settings/SettingsPanel";
+import { FilterStatus, type FilterSaveResult, type FilterStatusState } from "./components/FilterStatus";
 import {
   applyServiceDisableClears,
   buildServiceDisableHandlers,
@@ -134,27 +138,6 @@ const WIDGET_DESKTOP_STAGGER_MS: Record<string, number> = {
 
 const appWindow = getCurrentWindow();
 
-const QUICK_LAUNCH_WIDGETS: {
-  field: ServiceField;
-  detail: string;
-}[] = [
-  {
-    field: "gpu_enabled",
-    detail: "Monitor GPUs and cluster jobs",
-  },
-  {
-    field: "deadline_enabled",
-    detail: "Track conference submission deadlines",
-  },
-  {
-    field: "arxiv_enabled",
-    detail: "Discover recent research papers",
-  },
-  {
-    field: "quota_enabled",
-    detail: "Track AI agent and API limits",
-  },
-];
 
 const PROVIDER_LOGOS: Record<string, string> = {
   antigravity: "/icons/antigravity.svg",
@@ -496,10 +479,38 @@ function App() {
     return () => sync.stop();
   }, [windowLabel]);
   const [arxivConfig, setArxivConfig] = useState<ArxivConfig>({});
+  const [arxivConfigLoaded, setArxivConfigLoaded] = useState(false);
+  const arxivConfigRef = useRef(arxivConfig);
+  const arxivSaveQueue = useRef<Promise<boolean>>(Promise.resolve(true));
+  const arxivSaveRevision = useRef(0);
+  const arxivPendingWrites = useRef(0);
+  const [arxivFilterState, setArxivFilterState] = useState<FilterStatusState>("idle");
+  useEffect(() => {
+    if (arxivFilterState !== "applied") return;
+    const timer = window.setTimeout(() => setArxivFilterState("idle"), 4000);
+    return () => window.clearTimeout(timer);
+  }, [arxivFilterState]);
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    const sync = startWindowSnapshotSync<ArxivConfig>({
+      listen: handler => tauriListen("arxiv_config_update", event => handler(event.payload)),
+      read: () => tauriInvoke("get_arxiv_config"),
+      apply: config => {
+        setArxivConfigLoaded(true);
+        if (!arxivPendingWrites.current) {
+          arxivConfigRef.current = config;
+          setArxivConfig(config);
+        }
+      },
+      onError: error => console.error("arXiv filter sync failed", error),
+    });
+    return () => sync.stop();
+  }, [windowLabel]);
+  const hasReadingKeywords = hasArxivKeywords(arxivConfig.keywords);
   const [arxivPapers, setArxivPapers] = useState<ArxivPaper[]>([]);
-  const [arxivSavedPapers, setArxivSavedPapers] = useState<ArxivPaper[]>([]);
-  const [arxivDiscardedPapers, setArxivDiscardedPapers] = useState<ArxivPaper[]>([]);
-  const [arxivView, setArxivView] = useState<"all" | "new" | "saved" | "discarded">("new");
+  const arxivLibrary = useArxivLibrary(windowLabel === "main");
+  const arxivSavedPapers = arxivLibrary.saved;
+  const [arxivView, setArxivView] = useState<"all" | "unread" | "saved">("unread");
   const [arxivDate, setArxivDate] = useState("");
   const arxivHeaderRef = useRef<HTMLDivElement>(null);
   const [collapsedArxivKeywords, setCollapsedArxivKeywords] = useState<Set<string>>(new Set());
@@ -568,8 +579,6 @@ function App() {
     arxivError,
     arxivPapers.length > 0
   );
-  const arxivStatHint = arxivStat.hint;
-  const arxivStatHintTone = arxivStat.tone;
 
   const paperStat = serviceUpdateStatHint(
     paperRefreshError,
@@ -633,19 +642,30 @@ function App() {
   });
   const appConfigSync = useRef<ReturnType<typeof startWindowSnapshotSync<AppConfig>> | null>(null);
   useUiLocalization(resolveLanguage(appConfig.language));
-  const pagedArxivView = arxivView === "all" || (arxivView === "new" && arxivDate !== "");
-  const pagedArxiv = useArxivPaperPages(
-    windowLabel === "main" && activeTab === "arxiv" && pagedArxivView && appConfig.arxiv_enabled !== false,
-    arxivConfig.categories, arxivView === "new" ? arxivConfig.keywords : [], arxivDate || null,
-  );
+  const pagedArxivView = arxivView === "all" || (arxivView === "unread" && hasReadingKeywords && arxivDate !== "");
+  const arxivPageEnabled = windowLabel === "main" && activeTab === "arxiv" && appConfig.arxiv_enabled !== false;
+  const overviewNeedsArxivTotal = windowLabel === "main" && activeTab === "dashboard" && arxivConfigLoaded && !hasReadingKeywords && appConfig.arxiv_enabled !== false;
+  const allArxiv = useArxivPaperPages((arxivPageEnabled && arxivView === "all") || overviewNeedsArxivTotal,
+    arxivConfig.categories, [], activeTab === "dashboard" ? null : arxivDate || null);
+  const matchedArxiv = useArxivPaperPages(arxivPageEnabled && arxivView === "unread" && hasReadingKeywords && Boolean(arxivDate), arxivConfig.categories, arxivConfig.keywords, arxivDate || null);
+  const pagedArxiv = arxivView === "all" ? allArxiv : matchedArxiv;
   const refreshingArxivView = pagedArxivView ? pagedArxiv.loading : isRefreshingArxiv;
+  const overviewConferencePreferences = resolveConferencePreferences(paperConfig, deadlines, deadlineNow);
+  const overviewShowsFollowed = conferencePreferenceIds(overviewConferencePreferences, "followed").length > 0;
+  const overviewConferenceCount = deadlineConferences.filter(conference => overviewShowsFollowed
+    ? isConferenceFollowed(conference, overviewConferencePreferences)
+    : !isConferenceIgnored(conference, overviewConferencePreferences)).length;
+  const overviewArxivHint = hasReadingKeywords ? arxivStat : serviceUpdateStatHint(null, allArxiv.error, allArxiv.loaded);
   useEffect(() => {
     if (pagedArxivView && pagedArxiv.loaded) arxivHeaderRef.current?.scrollIntoView({ block: "start" });
   }, [pagedArxivView, pagedArxiv.page, pagedArxiv.data_date, pagedArxiv.loaded]);
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
-  const [currentTheme, setCurrentTheme] = useState<WidgetTheme | null>(null);
+  const currentTheme = resolveWidgetTheme(themeConfig, windowLabel, undefined, { dashboardTheme: appConfig.theme });
+  const themePendingWrites = useRef(0);
+  const themeSaveRevision = useRef(0);
+  const themeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [pendingToggles, setPendingToggles] = useState<Set<string>>(new Set());
   const [toggleWidgetError, setToggleWidgetError] = useState<string | null>(null);
   const [serviceToggleBusy, setServiceToggleBusy] = useState<Partial<Record<ServiceField, boolean>>>({});
@@ -914,7 +934,6 @@ function App() {
           if (!active) return;
 
           setThemeConfig(tc);
-          setCurrentTheme(resolveWidgetTheme(tc, label));
 
           const pinned = ac.always_on_top?.[label] ?? false;
           setIsPinned(pinned);
@@ -938,7 +957,6 @@ function App() {
             if (!active) return;
             const config = event.payload;
             setThemeConfig(config);
-            setCurrentTheme(resolveWidgetTheme(config, label));
           });
           unlisteners.push(() => uTheme());
           return;
@@ -948,9 +966,8 @@ function App() {
           if (active) setIsAutostart(enabled);
         }).catch((error) => console.error("Autostart status unavailable", error));
 
-        const [gc, arc, qc, tc] = await Promise.all([
+        const [gc, qc, tc] = await Promise.all([
           tauriInvoke("get_gpu_config"),
-          tauriInvoke("get_arxiv_config"),
           tauriInvoke("get_quota_config"),
           tauriInvoke("get_theme_config"),
         ]);
@@ -958,7 +975,6 @@ function App() {
         if (!active) return;
 
         setGpuConfig(gc);
-        setArxivConfig(arc);
         setQuotaConfig(qc);
         setThemeConfig(tc);
 
@@ -1065,10 +1081,7 @@ function App() {
         const u5 = await tauriListen("theme_update", (event) => {
           if (!active) return;
           const config = event.payload;
-          setThemeConfig(config);
-          if (win.label.startsWith("widget-")) {
-            setCurrentTheme(resolveWidgetTheme(config, win.label));
-          }
+          if (!themePendingWrites.current) setThemeConfig(config);
         });
         if (!active) {
           u5();
@@ -1087,37 +1100,6 @@ function App() {
           unlisteners.push(() => u6b());
         }
 
-        const u8 = await tauriListen("arxiv_saved_update", async () => {
-          try {
-            const saved = await fetchArxivSavedPapers();
-            if (!active) return;
-            setArxivSavedPapers(saved);
-          } catch (e) {
-            console.error(e);
-          }
-        });
-        if (!active) {
-          u8();
-        } else {
-          unlisteners.push(() => u8());
-        }
-
-        const u9 = await tauriListen("arxiv_discarded_update", async () => {
-          try {
-            const discarded = await fetchArxivDiscardedPapers();
-            if (!active) return;
-            setArxivDiscardedPapers(discarded);
-          } catch (e) {
-            console.error(e);
-          }
-        });
-        if (!active) {
-          u9();
-        } else {
-          unlisteners.push(() => u9());
-        }
-
-
         const u10b = await listenQuotaMonitorStatus(
           setQuotaMonitorStatus,
           setQuotaBackendError,
@@ -1129,7 +1111,7 @@ function App() {
           unlisteners.push(() => u10b());
         }
 
-        loadArxivArchiveLists(() => active, setArxivSavedPapers, setArxivDiscardedPapers);
+
 
         if (win.label === "main") {
           // Check for updates on startup & every 12 hours in background.
@@ -1216,9 +1198,10 @@ function App() {
     paperSaveQueue.current = save;
     try {
       await save;
+      return true;
     } catch (e) {
       console.error("Save failed", e);
-      if (revision !== paperSaveRevision.current) return;
+      if (revision !== paperSaveRevision.current) return false;
       let saved = previous;
       try { saved = await tauriInvoke("get_paper_config"); } catch { /* Keep the last known config if reading also fails. */ }
       if (revision === paperSaveRevision.current) {
@@ -1227,6 +1210,7 @@ function App() {
         setPaperSaveError(true);
         setPaperPreferenceUndo(null);
       }
+      return false;
     } finally {
       paperPendingWrites.current -= 1;
       if (!paperPendingWrites.current && revision === paperSaveRevision.current) {
@@ -1307,18 +1291,48 @@ function App() {
     onClearGeneralError: () => setGeneralServiceRefreshError(null),
   });
 
-  const saveArxivConfig = async (newConfig: ArxivConfig) => {
+  const saveArxivConfig = async (changes: Partial<ArxivConfig>): Promise<FilterSaveResult> => {
+    const newConfig = { ...arxivConfigRef.current, ...changes };
+    const revision = ++arxivSaveRevision.current;
+    arxivConfigRef.current = newConfig;
+    arxivPendingWrites.current += 1;
+    setArxivConfig(newConfig);
+    setIsRefreshingArxiv(true);
+    setArxivFilterState("applying");
+    setArxivError(null);
+    setArxivRefreshError(null);
+    // A keyword draft can be committed while a category or preference save is
+    // still running. Keep their writes ordered and merge from the latest intent.
+    const save = arxivSaveQueue.current.catch(() => false).then(() => tauriInvoke("save_arxiv_config", { config: newConfig }));
+    arxivSaveQueue.current = save;
     try {
-      await tauriInvoke("save_arxiv_config", { config: newConfig });
-      setArxivConfig(newConfig);
-    } catch (e) {
-      console.error("Save Arxiv config failed", e);
+      const updated = await save;
+      const result = updated ? "applied" : "refresh-error";
+      if (revision === arxivSaveRevision.current) setArxivFilterState(result);
+      return result;
+    } catch (error) {
+      console.error("Save arXiv filters failed", error);
+      if (revision === arxivSaveRevision.current) setArxivFilterState("save-error");
+      return "save-error";
+    } finally {
+      arxivPendingWrites.current -= 1;
+      if (!arxivPendingWrites.current && revision === arxivSaveRevision.current) {
+        setIsRefreshingArxiv(false);
+        try {
+          const saved = await tauriInvoke("get_arxiv_config");
+          if (!arxivPendingWrites.current && revision === arxivSaveRevision.current) {
+            arxivConfigRef.current = saved;
+            setArxivConfig(saved);
+          }
+        } catch (error) { console.error("Could not reload arXiv filters", error); }
+      }
     }
   };
 
 
-  const activeArxivPapers = pagedArxivView ? pagedArxiv.papers : arxivView === "new" ? arxivPapers : arxivView === "saved" ? arxivSavedPapers : arxivDiscardedPapers;
-  const arxivKeywordGroups = groupArxivPapersByKeyword(arxivView === "new" && arxivDate ? pagedArxiv.papers : arxivPapers, arxivConfig.keywords);
+  const activeArxivPapers = arxivView === "unread" && !hasReadingKeywords ? [] : pagedArxivView ? pagedArxiv.papers : arxivView === "unread" ? arxivPapers : arxivSavedPapers;
+  const arxivSelection = useResearchSelection(activeArxivPapers, arxivPaperKey, JSON.stringify([activeTab, arxivView, arxivDate, pagedArxivView ? pagedArxiv.page : null, arxivConfig.categories, arxivConfig.keywords]));
+  const arxivKeywordGroups = groupArxivPapersByKeyword(arxivView === "unread" && arxivDate ? pagedArxiv.papers : arxivPapers, arxivConfig.keywords);
   const toggleArxivKeywordGroup = (keyword: string) => {
     setCollapsedArxivKeywords((prev) => {
       const next = new Set(prev);
@@ -1339,49 +1353,26 @@ function App() {
       }`}
     >
       <div className="flex flex-1 min-w-0 min-h-0 flex-col">
-        <h3
-          className={`shrink-0 text-sm font-bold leading-relaxed break-words mb-2 ${
+        <div className="flex items-start gap-2">
+        {arxivSelection.enabled && <input type="checkbox" checked={arxivSelection.has(paper)} disabled={arxivLibrary.busy} onChange={() => arxivSelection.toggle(paper)} aria-label={paper.title} className="mt-1 size-4 shrink-0 accent-blue-600" />}
+        <h3 data-no-localize
+          className={`min-w-0 flex-1 shrink-0 text-sm font-bold leading-relaxed break-words mb-2 ${
             appConfig.theme === "light" ? "text-slate-900" : "text-white"
           }`}
         >
           {paper.title}
         </h3>
+        </div>
         <ArxivAbstractPreview paper={paper} isLight={appConfig.theme === "light"} />
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5">
-        <div className="flex flex-wrap gap-1 min-w-0">
-          <span className="text-[9px] font-medium text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full">
-            {paper.authors.length > 0 ? (
-              <>
-                {paper.authors[0]}
-                {paper.authors.length > 1 ? " et al." : ""}
-              </>
-            ) : (
-              "Unknown Author"
-            )}
-          </span>
-        </div>
-        <div className="flex items-start gap-1">
-          {arxivView === "saved" && (
-            <button
-              onClick={() => tauriInvoke("remove_arxiv_saved_paper", { id: paper.id })}
-              className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-50 hover:text-white transition-all"
-              title="Remove from saved"
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
-          {arxivView === "discarded" && (
-            <button
-              onClick={() => tauriInvoke("remove_arxiv_discarded_paper", { id: paper.id })}
-              className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-50 hover:text-white transition-all"
-              title="Delete permanently"
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
-          <ArxivPaperActions paper={paper} />
-        </div>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span data-no-localize className="min-w-0 break-words text-[10px] text-slate-500">
+          {paper.authors.length > 0 ? `${paper.authors[0]}${paper.authors.length > 1 ? " et al." : ""}` : "Unknown Author"}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--dashboard-border)] pt-2">
+        <ArxivReadingActions paper={paper} library={arxivLibrary} allowSkip={arxivView === "unread" && !arxivDate} />
+        <ArxivPaperActions paper={paper} />
       </div>
     </div>
   );
@@ -1396,8 +1387,22 @@ function App() {
   };
 
   const onSaveThemes = async (config: WidgetThemeConfig) => {
+    const revision = ++themeSaveRevision.current;
+    themePendingWrites.current += 1;
     setThemeConfig(config);
-    await tauriInvoke("save_theme_config", { config });
+    const save = themeSaveQueue.current.catch(() => {}).then(() => tauriInvoke("save_theme_config", { config }));
+    themeSaveQueue.current = save;
+    try {
+      await save;
+    } finally {
+      themePendingWrites.current -= 1;
+      if (!themePendingWrites.current && revision === themeSaveRevision.current) {
+        try {
+          const saved = await tauriInvoke("get_theme_config");
+          if (!themePendingWrites.current && revision === themeSaveRevision.current) setThemeConfig(saved);
+        } catch (error) { console.error("Could not reload floating appearance", error); }
+      }
+    }
   };
 
   const toggleMaximize = async () => {
@@ -1607,7 +1612,7 @@ function App() {
             size={14}
             className="text-slate-500 group-hover:text-cyan-600 transition-colors"
           />
-          <span className="text-[11px] font-bold">{sidebarDockState.expanded ? "Close Sidebar" : "Open Sidebar"}</span>
+          <span className="text-[11px] font-bold">{sidebarDockState.expanded ? "Hide Sidebar" : "Open Sidebar"}</span>
         </button>
         <button
           onClick={() => tauriInvoke("show_main")}
@@ -1640,6 +1645,7 @@ function App() {
 
   // --- SUMMONABLE SIDEBAR HUB VIEW ---
   if (windowLabel === "sidebar") {
+    if (appConfig.sidebar_enabled === false) return null;
     const openDashboard = async () => {
       await tauriInvoke("show_main");
     };
@@ -2067,8 +2073,8 @@ function App() {
             </button>
             <button
               type="button"
-              aria-label="Close sidebar"
-              title="Close sidebar"
+              aria-label="Hide sidebar"
+              title="Hide sidebar"
               onClick={() => tauriInvoke("hide_sidebar").catch(console.error)}
               className="flex h-7 w-7 items-center justify-center rounded-md bg-red-500/15 text-red-500 hover:bg-red-500/25 transition-colors focus-visible:outline-2 focus-visible:outline-red-400"
             >
@@ -2324,6 +2330,7 @@ function App() {
       onSaveGpu={saveGpuConfig}
       onSavePaper={savePaperConfig}
       onSaveArxiv={saveArxivConfig}
+      arxivFilterState={arxivFilterState}
       onSaveQuota={saveQuotaConfig}
       onSaveApp={onSaveApp}
       onToggleSidebarWidget={saveSidebarWidgetVisibility}
@@ -2336,7 +2343,6 @@ function App() {
         else await enable();
         setIsAutostart(await isEnabled());
       }}
-      activeWidgets={activeWidgets}
       updateInfo={updateInfo}
       setUpdateInfo={setUpdateInfo}
       updateCheckError={updateCheckError}
@@ -2344,16 +2350,24 @@ function App() {
     />
   );
 
-  const renderInlineSettings = (section: SettingsSection) =>
-    inlineSettingsSection === section && (
-      <section aria-label="Page settings" className={`mb-8 rounded-2xl border border-l-[3px] p-5 shadow-sm ${appConfig.theme === "light" ? "border-blue-200 border-l-blue-500 bg-blue-50/70" : "border-blue-400/25 border-l-blue-400 bg-blue-500/5"}`}>
+  const renderInlineSettings = (section: SettingsSection) => {
+    if (inlineSettingsSection !== section) return null;
+    const filterTitle = section === LIVE_DATA_SECTION.DEADLINES ? "Conference filters"
+      : section === LIVE_DATA_SECTION.ARXIV ? "Paper filters" : null;
+    const closeLabel = filterTitle ? "Close filters" : "Close settings";
+    return (
+      <section id={`page-options-${section}`} aria-label={filterTitle ?? "Page settings"} className={`mb-8 rounded-2xl border border-l-[3px] p-5 shadow-sm ${appConfig.theme === "light" ? "border-blue-200 border-l-blue-500 bg-blue-50/70" : "border-blue-400/25 border-l-blue-400 bg-blue-500/5"}`}>
         <div className="mb-5 flex items-center justify-between gap-3 border-b border-blue-400/15 pb-4">
-          <h3 className="flex items-center gap-2 text-sm font-bold text-blue-500"><Settings size={16} /><span>{LIVE_DATA_SECTION_LABELS[section as keyof typeof LIVE_DATA_SECTION_LABELS]}</span><span>Settings</span></h3>
-          <button type="button" onClick={() => setInlineSettingsSection(null)} aria-label="Close settings" title="Close settings" className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--dashboard-border)] text-red-500 hover:bg-red-500/10 focus-visible:outline-2 focus-visible:outline-red-500"><X size={16} /></button>
+          <h3 className="flex items-center gap-2 text-sm font-bold text-blue-500">
+            {filterTitle ? <><SlidersHorizontal size={16} /><span>{filterTitle}</span></>
+              : <><Settings size={16} /><span>{LIVE_DATA_SECTION_LABELS[section as keyof typeof LIVE_DATA_SECTION_LABELS]}</span><span>Settings</span></>}
+          </h3>
+          <button type="button" onClick={() => setInlineSettingsSection(null)} aria-label={closeLabel} title={closeLabel} className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--dashboard-border)] text-red-500 hover:bg-red-500/10 focus-visible:outline-2 focus-visible:outline-red-500"><X size={16} /></button>
         </div>
         {renderSettingsPanel(section, true)}
       </section>
     );
+  };
 
   const sectionActionClass = `inline-flex min-h-9 whitespace-nowrap items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${appConfig.theme === "light" ? "border-slate-200 bg-white text-slate-700 hover:bg-blue-50" : "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"}`;
 
@@ -2374,7 +2388,7 @@ function App() {
             <img src="/logo.png" alt="Widgitron" className="w-full h-full object-cover" />
           </div>
           <div className="pointer-events-none flex flex-col justify-center space-y-1.5">
-            <h1 className="font-bold text-base tracking-tight leading-none">Widgitron</h1>
+            <h1 className="font-bold text-base tracking-tight leading-none">{APP_NAME}</h1>
             <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold leading-none">
               {APP_VERSION}
             </span>
@@ -2389,34 +2403,10 @@ function App() {
             onClick={() => setActiveTab("dashboard")}
             theme={appConfig.theme}
           />
-          <SidebarLink
-            icon={<Gauge size={20} />}
-            label={LIVE_DATA_SECTION_LABELS.quota}
-            active={activeTab === LIVE_DATA_SECTION.QUOTA}
-            onClick={() => setActiveTab(LIVE_DATA_SECTION.QUOTA)}
-            theme={appConfig.theme}
-          />
-          <SidebarLink
-            icon={<Cpu size={20} />}
-            label={LIVE_DATA_SECTION_LABELS.gpu}
-            active={activeTab === LIVE_DATA_SECTION.GPU}
-            onClick={() => setActiveTab(LIVE_DATA_SECTION.GPU)}
-            theme={appConfig.theme}
-          />
-          <SidebarLink
-            icon={<Calendar size={20} />}
-            label={LIVE_DATA_SECTION_LABELS.deadlines}
-            active={activeTab === LIVE_DATA_SECTION.DEADLINES}
-            onClick={() => setActiveTab(LIVE_DATA_SECTION.DEADLINES)}
-            theme={appConfig.theme}
-          />
-          <SidebarLink
-            icon={<Activity size={20} />}
-            label={LIVE_DATA_SECTION_LABELS.arxiv}
-            active={activeTab === LIVE_DATA_SECTION.ARXIV}
-            onClick={() => setActiveTab(LIVE_DATA_SECTION.ARXIV)}
-            theme={appConfig.theme}
-          />
+          {MODULE_NAVIGATION.map(({ section, label, Icon }) => (
+            <SidebarLink key={section} icon={<Icon size={20} />} label={label}
+              active={activeTab === section} onClick={() => setActiveTab(section)} theme={appConfig.theme} />
+          ))}
           <div
             className={`my-4 border-t ${appConfig.theme === "light" ? "border-slate-200" : "border-white/10"}`}
           />
@@ -2434,14 +2424,12 @@ function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 z-20">
+      <main className="flex-1 flex flex-col min-w-0 min-h-0 z-20">
+        {/* Keep a compact window drag area; the page below owns its title. */}
         <header
-          className={`h-14 flex items-center justify-between px-6 border-b border-[var(--dashboard-border)] relative bg-[var(--header-bg)] z-50 select-none pointer-events-auto`}
+          className={`${isMacOS ? "h-8" : "h-10"} shrink-0 flex items-center justify-end px-2 relative z-50 select-none pointer-events-auto ${appConfig.theme === "light" ? "bg-transparent" : "bg-black/5"}`}
           data-tauri-drag-region="true"
         >
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 pointer-events-none">
-            {appTabLabel(activeTab)}
-          </div>
           {!isMacOS && <div className="flex items-center gap-0.5 z-[60] pointer-events-auto">
             <WindowButton
               icon={<Minus size={16} />}
@@ -2462,8 +2450,10 @@ function App() {
           </div>}
         </header>
 
+        {/* Remount the scroll viewport on navigation so a new page starts at the top. */}
         <div
-          className={`flex-1 overflow-y-auto p-8 custom-scrollbar relative z-0 ${
+          key={activeTab}
+          className={`flex-1 overflow-y-auto px-8 pb-8 ${isMacOS ? "pt-3" : "pt-2"} custom-scrollbar relative z-0 ${
             appConfig.theme === "light" ? "bg-transparent" : "bg-black/5"
           }`}
           data-no-drag="true"
@@ -2475,13 +2465,10 @@ function App() {
             dismissed={serviceToggleErrorDismissed}
             onDismiss={() => setServiceToggleErrorDismissed(true)}
           />
-          <AnimatePresence>
+          <>
             {activeTab === "dashboard" && (
-              <motion.div
+              <div
                 key="dashboard"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
                 className="space-y-6"
               >
                 <ToggleErrorBanner
@@ -2489,43 +2476,25 @@ function App() {
                   onDismiss={() => setToggleWidgetError(null)}
                   theme={appConfig.theme}
                 />
+                <h2 className="text-2xl font-bold tracking-tight text-[var(--dashboard-text)]">Overview</h2>
                 <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
-                  <StatCard
-                    label="Total GPUs"
-                    value={totalGpus.toString()}
-                    icon={<Cpu className="text-purple-400" />}
-                    theme={appConfig.theme}
-                    hint={gpuStatHint}
-                    hintTone={gpuStatHintTone}
-                    onClick={() => setActiveTab(LIVE_DATA_SECTION.GPU)}
-                  />
-                  <StatCard
-                    label="Active Deadlines"
-                    value={deadlineConferences.length.toString()}
-                    icon={<Calendar className="text-emerald-400" />}
-                    theme={appConfig.theme}
-                    hint={paperStatHint}
-                    hintTone={paperStatHintTone}
-                    onClick={() => setActiveTab(LIVE_DATA_SECTION.DEADLINES)}
-                  />
-                  <StatCard
-                    label="Arxiv Radar"
-                    value={arxivPapers.length.toString()}
-                    icon={<Activity className="text-pink-400" />}
-                    theme={appConfig.theme}
-                    hint={arxivStatHint}
-                    hintTone={arxivStatHintTone}
-                    onClick={() => setActiveTab(LIVE_DATA_SECTION.ARXIV)}
-                  />
-                  <StatCard
-                    label="Monitored Agents"
-                    value={monitoredAgentCount}
-                    icon={<Gauge className="text-cyan-400" />}
-                    theme={appConfig.theme}
-                    hint={quotaStatHint}
-                    hintTone={quotaStatHintTone}
-                    onClick={() => setActiveTab(LIVE_DATA_SECTION.QUOTA)}
-                  />
+                  {MODULE_NAVIGATION.map(({ section, label, Icon, accent }) => {
+                    const stat = {
+                      quota: { value: monitoredAgentCount, metric: "monitors", hint: quotaStatHint, hintTone: quotaStatHintTone },
+                      gpu: { value: totalGpus.toString(), metric: "GPUs", hint: gpuStatHint, hintTone: gpuStatHintTone },
+                      deadlines: { value: overviewConferenceCount.toString(), metric: overviewShowsFollowed ? "followed" : undefined, hint: paperStatHint, hintTone: paperStatHintTone },
+                      arxiv: { value: hasReadingKeywords ? arxivPapers.length.toString() : allArxiv.loaded ? allArxiv.total.toString() : allArxiv.loading ? "…" : "—",
+                        metric: hasReadingKeywords ? "to read" : "recent", hint: overviewArxivHint.hint, hintTone: overviewArxivHint.tone },
+                    }[section];
+                    return <StatCard key={section} label={label} {...stat} icon={<Icon className={accent} />}
+                      theme={appConfig.theme} onClick={() => {
+                        if (section === "arxiv") {
+                          setArxivDate("");
+                          setArxivView(hasReadingKeywords ? "unread" : "all");
+                        }
+                        setActiveTab(section);
+                      }} />;
+                  })}
                 </div>
 
                 <div>
@@ -2548,7 +2517,7 @@ function App() {
                       }`}
                     >
                       <Activity size={14} />
-                      {sidebarDockState.expanded ? "Close Sidebar" : "Open Sidebar"}
+                      {sidebarDockState.expanded ? "Hide Sidebar" : "Open Sidebar"}
                     </button>
                     {activeWidgets.length > 0 && <button
                       type="button"
@@ -2574,7 +2543,7 @@ function App() {
                     </p>
                   )}
                   <div className="grid grid-cols-2 gap-3">
-                    {QUICK_LAUNCH_WIDGETS.map(({ field, detail }) => {
+                    {MODULE_NAVIGATION.map(({ field, detail }) => {
                       const { id, title } = serviceWidgetMeta(field);
                       const section = SERVICE_FIELD_TO_TAB[field];
                       return (
@@ -2600,15 +2569,12 @@ function App() {
                     })}
                   </div>
                 </div>
-              </motion.div>
+              </div>
             )}
 
             {activeTab === LIVE_DATA_SECTION.GPU && (
-              <motion.div
+              <div
                 key="gpu"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
                   <h2
@@ -2832,22 +2798,19 @@ function App() {
                     })
                   )}
                 </div>
-              </motion.div>
+              </div>
             )}
 
             {activeTab === LIVE_DATA_SECTION.DEADLINES && (
-              <motion.div
+              <div
                 key="deadlines"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
               >
                 <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
-                  language={resolveLanguage(appConfig.language)} isLight={appConfig.theme === "light"}
+                  language={resolveLanguage(appConfig.language)} isLight={appConfig.theme === "light"} saveError={paperSaveError}
                   onPreference={setConferencePreference} onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
                   headerActions={<>
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES} className={sectionActionClass}>
-                      {inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Deadline settings</>}
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)} aria-controls={`page-options-${LIVE_DATA_SECTION.DEADLINES}`} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.DEADLINES ? <><ChevronDown size={14} className="rotate-180" /> Hide filters</> : <><SlidersHorizontal size={14} /> Filter conferences</>}
                     </button>
                     {appConfig.deadline_enabled !== false && (
                       <button type="button" onClick={handleRefreshDeadlines} disabled={isRefreshingDeadlines}
@@ -2882,32 +2845,32 @@ function App() {
                 {renderInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
                 {paperSaveError && <p role="alert" className="mb-4 rounded-xl bg-red-500/10 px-4 py-3 text-xs text-red-500">Could not save conference preferences. Please try again.</p>}
                 </DeadlineConferenceBrowser>
-              </motion.div>
+              </div>
             )}
 
             {activeTab === LIVE_DATA_SECTION.ARXIV && (
-              <motion.div
+              <div
                 key="arxiv"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
               >
-                <ResearchPageHeader title="Arxiv Radar" headerRef={arxivHeaderRef}
+                <ResearchPageHeader title="arXiv Radar" headerRef={arxivHeaderRef}
                   tabs={<ResearchTabs value={arxivView} onChange={setArxivView} label="Paper views" idPrefix="arxiv" panelId="arxiv-results" isLight={appConfig.theme === "light"}
                     items={[
-                      { value: "all", label: "All", count: arxivView === "all" && pagedArxiv.loaded ? pagedArxiv.total : undefined },
-                      { value: "new", label: "Latest", count: arxivDate ? arxivView === "new" && pagedArxiv.loaded ? pagedArxiv.total : undefined : arxivPapers.length },
+                      { value: "all", label: "All", count: allArxiv.loaded ? allArxiv.total : "…" },
+                      { value: "unread", label: "To read", count: !hasReadingKeywords ? 0 : arxivDate ? matchedArxiv.loaded ? matchedArxiv.total : "…" : arxivPapers.length },
                       { value: "saved", label: "Saved", count: arxivSavedPapers.length },
-                      { value: "discarded", label: "Discarded", count: arxivDiscardedPapers.length },
                     ]} />}
-                  filter={(arxivView === "all" || arxivView === "new") && (
+                  toolbarActions={<>
+                    <ResearchBulkToggle enabled={arxivSelection.enabled} onToggle={arxivSelection.toggleMode} isLight={appConfig.theme === "light"} disabled={arxivLibrary.busy} />
+                    <ArxivSkippedDialog library={arxivLibrary} isLight={appConfig.theme === "light"} />
+                  </>}
+                  filter={(arxivView === "all" || (arxivView === "unread" && hasReadingKeywords)) && (
                     <ArxivDateFilter date={arxivDate} onChange={setArxivDate} buttonClass={`${sectionActionClass} w-full min-h-10`} isLight={appConfig.theme === "light"} language={resolveLanguage(appConfig.language)} />
                   )}
                   actions={<>
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.ARXIV)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.ARXIV} className={sectionActionClass}>
-                      {inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Edit keywords</>}
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.ARXIV)} aria-controls={`page-options-${LIVE_DATA_SECTION.ARXIV}`} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.ARXIV} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? <><ChevronDown size={14} className="rotate-180" /> Hide filters</> : <><SlidersHorizontal size={14} /> Filter papers</>}
                     </button>
-                    {appConfig.arxiv_enabled !== false && (
+                    {appConfig.arxiv_enabled !== false && (arxivView !== "unread" || hasReadingKeywords) && (
                       <button type="button" onClick={pagedArxivView ? pagedArxiv.refresh : handleRefreshArxiv} disabled={refreshingArxivView}
                         className={`flex size-9 items-center justify-center rounded-xl border border-[var(--dashboard-border)] transition-colors disabled:opacity-50 ${appConfig.theme === "light" ? "bg-white text-slate-600 hover:bg-slate-50" : "bg-white/5 text-slate-300 hover:bg-white/10"}`}
                         title="Refresh papers" aria-label="Refresh papers">
@@ -2922,13 +2885,16 @@ function App() {
                       onToggle={val => handleMasterServiceToggle("arxiv_enabled", val)} />
                   </>} />
                 <div id="arxiv-results" role="tabpanel" aria-labelledby={`arxiv-tab-${arxivView}`}>
+                {arxivLibrary.error && <div role="alert" className="mb-4 flex items-center justify-between gap-2 rounded-xl bg-red-500/10 px-4 py-3 text-xs text-red-500" title={arxivLibrary.error}>
+                  <span>Could not update paper. Please try again.</span><button type="button" onClick={arxivLibrary.dismissError} aria-label="Dismiss error"><X size={14} /></button>
+                </div>}
                 <ServiceErrorBanners
                   backendError={pagedArxivView ? null : arxivError}
-                  refreshError={pagedArxivView ? pagedArxiv.error : arxivRefreshError}
+                  refreshError={arxivView === "unread" && !hasReadingKeywords ? null : pagedArxivView ? pagedArxiv.error : arxivRefreshError}
                   onDismissBackend={() => setArxivError(null)}
                   onDismissRefresh={pagedArxivView ? pagedArxiv.dismissError : () => setArxivRefreshError(null)}
                   theme={appConfig.theme}
-                  showBackend={appConfig.arxiv_enabled !== false}
+                  showBackend={appConfig.arxiv_enabled !== false && (arxivView !== "unread" || hasReadingKeywords)}
                   backendCachedLabel={cachedLabelWhen(
                     arxivPapers.length > 0,
                     CACHED_LABELS.arxiv.backend
@@ -2939,6 +2905,15 @@ function App() {
                   )}
                 />
                 {renderInlineSettings(LIVE_DATA_SECTION.ARXIV)}
+                {inlineSettingsSection !== LIVE_DATA_SECTION.ARXIV && arxivFilterState !== "idle" && <div className="mb-4">
+                  <FilterStatus state={arxivFilterState} progress="Saving filters and updating To read…"
+                    applied={!hasReadingKeywords ? "To read is empty. Browse All without keywords."
+                      : appConfig.arxiv_enabled === false ? "Filters saved. Enable monitoring to update To read." : "To read updated."}
+                    error={arxivError} />
+                </div>}
+                {arxivSelection.enabled && <ResearchBulkControls total={activeArxivPapers.length} selected={arxivSelection.chosen.length} onToggleAll={arxivSelection.toggleAll} isLight={appConfig.theme === "light"} busy={arxivLibrary.busy} paged={pagedArxivView}>
+                  <ArxivBulkActions chosen={arxivSelection.chosen} library={arxivLibrary} isLight={appConfig.theme === "light"} allowSkip={arxivView === "unread" && !arxivDate} onDone={arxivSelection.clear} />
+                </ResearchBulkControls>}
                 {pagedArxivView && (
                   <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                     {pagedArxiv.data_date && <span><span>Submission date (UTC)</span><span data-no-localize> · {pagedArxiv.data_date}</span></span>}
@@ -2959,22 +2934,20 @@ function App() {
                   <SectionEmptyState
                     message={pagedArxivView
                       ? pagedArxiv.error ? "Could not load papers. Please retry." : arxivDate
-                        ? arxivView === "new" && (arxivConfig.keywords?.length ?? 0) > 0 ? "No papers matched your keywords on this submission date." : "No papers in the selected categories on this submission date."
+                        ? arxivView === "unread" && (arxivConfig.keywords?.length ?? 0) > 0 ? "No papers matched your keywords on this submission date." : "No papers in the selected categories on this submission date."
                         : "No papers found in the selected categories."
-                      : arxivView === "new"
-                      ? (arxivConfig.keywords?.length ?? 0) === 0
-                        ? "No recent papers in the selected category. Try another category or refresh later."
-                        : "No new papers. Adjust keywords or wait for the next update."
-                      : arxivView === "saved"
-                      ? "No saved papers yet. Swipe right on a paper to save it."
-                      : "No discarded papers. Swipe left on a paper to discard it."}
-                    detail={pagedArxivView && arxivDate && !pagedArxiv.error ? "Choose another date or view recent papers. Submissions not yet announced may appear later." : undefined}
-                    action={pagedArxivView ? arxivDate && !pagedArxiv.error ? "Show recent papers" : "Refresh papers" : arxivView === "new" ? (arxivConfig.keywords?.length ? "Edit keywords" : "Choose category") : "Show latest"}
-                    onAction={pagedArxivView ? arxivDate && !pagedArxiv.error ? () => setArxivDate("") : pagedArxiv.refresh : arxivView === "new"
+                      : arxivView === "unread"
+                      ? !hasReadingKeywords
+                        ? "Add keywords to fill To read."
+                        : "No papers to read. Adjust keywords or check back later."
+                      : "No saved papers yet. Use Bookmark on a paper to keep it here."}
+                    detail={arxivView === "unread" && !hasReadingKeywords ? "Without keywords, To read stays empty. Browse All to explore papers." : pagedArxivView && arxivDate && !pagedArxiv.error ? "Choose another date or view recent papers. Submissions not yet announced may appear later." : undefined}
+                    action={pagedArxivView ? arxivDate && !pagedArxiv.error ? "Show recent papers" : "Refresh papers" : arxivView === "unread" ? (inlineSettingsSection === LIVE_DATA_SECTION.ARXIV ? "Hide filters" : "Filter papers") : "Show To read"}
+                    onAction={pagedArxivView ? arxivDate && !pagedArxiv.error ? () => setArxivDate("") : pagedArxiv.refresh : arxivView === "unread"
                       ? () => openInlineSettings(LIVE_DATA_SECTION.ARXIV)
-                      : () => setArxivView("new")}
+                      : () => setArxivView("unread")}
                   />
-                ) : arxivView === "new" ? (
+                ) : arxivView === "unread" ? (
                   <div className="space-y-5">
                     {arxivKeywordGroups.map((group) => {
                       const collapsed = collapsedArxivKeywords.has(group.keyword);
@@ -3027,15 +3000,12 @@ function App() {
                   <ArxivPagination page={pagedArxiv.page} pageSize={pagedArxiv.page_size} total={pagedArxiv.total} loading={pagedArxiv.loading} onPrevious={pagedArxiv.previousPage} onNext={pagedArxiv.nextPage} isLight={appConfig.theme === "light"} />
                 )}
                 </div>
-              </motion.div>
+              </div>
             )}
 
             {activeTab === LIVE_DATA_SECTION.QUOTA && (
-              <motion.div
+              <div
                 key="quota"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
                   <h2
@@ -3092,8 +3062,8 @@ function App() {
                   )}
                 />
                 {renderInlineSettings(LIVE_DATA_SECTION.QUOTA)}
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] items-start gap-6">
                   {visibleQuotaData.length === 0 ? (
                     <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} /></div>
                   ) : (
@@ -3103,7 +3073,7 @@ function App() {
                       const current = q.current_value ?? 0;
                       const max = q.max_quota ?? 100;
                       const percent = hasMax ? Math.min(100, Math.max(0, (current / max) * 100)) : 100;
-                      
+
                       let barColor = "bg-cyan-500";
                       let textColor = "text-cyan-400";
                       if (!hasValue) {
@@ -3214,18 +3184,16 @@ function App() {
                                     textClass = "text-amber-400";
                                   }
                                   return (
-                                    <div key={i} className="space-y-1">
-                                      <div className="flex justify-between items-center text-[11px] font-bold">
-                                        <span className="text-slate-400 flex items-center gap-1.5 min-w-0">
-                                          <span className="truncate">{bar.name}</span>
-                                          {showBarReset && bar.reset && (
-                                            <span className="text-[10px] opacity-50 font-normal whitespace-nowrap">
-                                              ({bar.reset})
-                                            </span>
-                                          )}
+                                    <div key={i} className="space-y-2">
+                                      <div className="flex items-baseline justify-between gap-3">
+                                        <span className={`min-w-0 break-words text-xs font-semibold ${appConfig.theme === "light" ? "text-slate-600" : "text-slate-300"}`}>
+                                          {bar.name}
                                         </span>
-                                        <span className={`tabular-nums font-black ${textClass}`}>
-                                          {pct.toFixed(0)}%
+                                        <span className="flex shrink-0 items-baseline gap-1.5">
+                                          <span className="text-[10px] font-medium text-slate-500">Remaining</span>
+                                          <span className={`tabular-nums text-base font-bold ${textClass}`}>
+                                            {pct.toFixed(0)}%
+                                          </span>
                                         </span>
                                       </div>
                                       <div className="w-full h-1.5 bg-black/20 rounded-full overflow-hidden border border-white/5">
@@ -3234,6 +3202,11 @@ function App() {
                                           style={{ width: `${pct}%` }}
                                         />
                                       </div>
+                                      {showBarReset && bar.reset && (
+                                        <div className="flex flex-wrap items-baseline gap-x-1 text-[11px] leading-4 text-slate-500">
+                                          <span>Reset:</span><span className="tabular-nums">{bar.reset}</span>
+                                        </div>
+                                      )}
                                     </div>
                                   );
                                 })}
@@ -3255,13 +3228,13 @@ function App() {
                               )
                             )}
 
-                            <div className="flex justify-between items-center text-[10px] text-slate-500/60 pt-2 border-t border-white/5 mt-1">
+                            <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-[10px] text-slate-500 pt-2 border-t border-[var(--dashboard-border)] mt-1">
                               <span>Last Update: {q.last_update ? q.last_update.split(" ")[1] || q.last_update : "Never"}</span>
                               {q.primary_reset && (q.provider === "cursor" || q.provider === "copilot" || !isMultiBar) && (
                                 <span>Reset: {q.primary_reset}</span>
                               )}
                             </div>
-                            
+
                             {q.error_msg && (
                               <div className={`mt-2 text-xs italic p-3 rounded-xl border ${
                                 isStaleQuotaWarning(q.error_msg) && quotaHasDisplayValue(q)
@@ -3297,11 +3270,11 @@ function App() {
                     })
                   )}
                 </div>
-              </motion.div>
+              </div>
             )}
 
             {activeTab === "settings" && renderSettingsPanel(settingsSection)}
-          </AnimatePresence>
+          </>
         </div>
       </main>
       {paperPreferenceUndo && <ConferenceUndoNotice key={paperPreferenceUndo.id} isLight={appConfig.theme === "light"}

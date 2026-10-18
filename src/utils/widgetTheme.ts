@@ -1,7 +1,9 @@
-import { WidgetTheme, WidgetThemeConfig } from "../types/theme";
+import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
+import type { DashboardTheme } from "../types/config";
 import { isMacOS } from "./platform";
 
 export type WidgetThemeKind = "gpu" | "deadline" | "arxiv" | "quota";
+export const FOLLOW_DASHBOARD_THEME_ID = "@follow-dashboard";
 
 export const DEFAULT_THEME_IDS: Record<WidgetThemeKind, string> = {
   gpu: isMacOS ? "theme-gpu-light" : "theme-gpu-transparent",
@@ -44,7 +46,7 @@ export function resolveWidgetTheme(
   config: WidgetThemeConfig,
   windowLabel: string,
   kind?: WidgetThemeKind,
-  options?: { sidebarLight?: boolean }
+  options?: { sidebarLight?: boolean; dashboardTheme?: DashboardTheme }
 ): WidgetTheme | null {
   if (windowLabel === "sidebar" && kind) {
     const base = config.themes.find((theme) => theme.id === SIDEBAR_THEME_IDS[kind]);
@@ -64,7 +66,10 @@ export function resolveWidgetTheme(
   const defaultId =
     kind ? DEFAULT_THEME_IDS[kind] : defaultThemeIdForWidgetLabel(windowLabel);
   const themeId = config.assignments?.[windowLabel];
+  const resolvedId = themeId === FOLLOW_DASHBOARD_THEME_ID
+    ? `theme-${kind ?? widgetThemeKindFromLabel(windowLabel)}-${options?.dashboardTheme === "light" ? "light" : "default"}`
+    : themeId;
   const theme =
-    config.themes.find((t) => t.id === themeId) || config.themes.find((t) => t.id === defaultId);
+    config.themes.find((t) => t.id === resolvedId) || config.themes.find((t) => t.id === defaultId);
   return theme || null;
 }

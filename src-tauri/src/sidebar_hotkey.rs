@@ -16,7 +16,7 @@ const SIDEBAR_HOTKEY_ID: i32 = 0x5754;
 static HOTKEY_SENDER: Lazy<Mutex<Option<Sender<HotkeyCommand>>>> = Lazy::new(|| Mutex::new(None));
 
 enum HotkeyCommand {
-    Register(Option<String>),
+    Register(Option<String>, bool),
 }
 
 #[derive(Clone)]
@@ -26,11 +26,11 @@ struct ParsedHotkey {
     key: u32,
 }
 
-pub fn start_global_sidebar_hotkey(app: AppHandle, hotkey: Option<String>) {
+pub fn start_global_sidebar_hotkey(app: AppHandle, hotkey: Option<String>, enabled: bool) {
     let (tx, rx) = mpsc::channel();
     if let Ok(mut sender) = HOTKEY_SENDER.lock() {
         if let Some(existing_sender) = sender.as_ref() {
-            let _ = existing_sender.send(HotkeyCommand::Register(hotkey));
+            let _ = existing_sender.send(HotkeyCommand::Register(hotkey, enabled));
             return;
         }
         *sender = Some(tx);
@@ -39,14 +39,14 @@ pub fn start_global_sidebar_hotkey(app: AppHandle, hotkey: Option<String>) {
     if let Err(err) = std::thread::Builder::new()
         .name("widgitron-sidebar-hotkey".into())
         .spawn(move || {
-            let mut current = register_sidebar_hotkey(hotkey);
+            let mut current = if enabled { register_sidebar_hotkey(hotkey) } else { None };
             loop {
                 drain_hotkey_messages(&app);
 
                 match rx.recv_timeout(Duration::from_millis(80)) {
-                    Ok(HotkeyCommand::Register(next_hotkey)) => {
+                    Ok(HotkeyCommand::Register(next_hotkey, enabled)) => {
                         unregister_sidebar_hotkey(current.take());
-                        current = register_sidebar_hotkey(next_hotkey);
+                        current = if enabled { register_sidebar_hotkey(next_hotkey) } else { None };
                     }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
@@ -61,10 +61,10 @@ pub fn start_global_sidebar_hotkey(app: AppHandle, hotkey: Option<String>) {
     }
 }
 
-pub fn update_global_sidebar_hotkey(hotkey: Option<String>) {
+pub fn update_global_sidebar_hotkey(hotkey: Option<String>, enabled: bool) {
     if let Ok(sender) = HOTKEY_SENDER.lock() {
         if let Some(sender) = sender.as_ref() {
-            let _ = sender.send(HotkeyCommand::Register(hotkey));
+            let _ = sender.send(HotkeyCommand::Register(hotkey, enabled));
         }
     }
 }

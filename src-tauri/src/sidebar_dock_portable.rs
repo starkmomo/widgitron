@@ -32,6 +32,7 @@ pub struct SidebarDockState {
 }
 
 struct DockRuntime {
+    enabled: bool,
     state: SidebarDockState,
     thickness: f64,
     length: Option<f64>,
@@ -58,10 +59,11 @@ struct MacHoverState {
 impl DockRuntime {
     fn from_config(config: &AppConfig) -> Self {
         Self {
+            enabled: config.sidebar_enabled.unwrap_or(true),
             state: SidebarDockState {
                 edge: parse_edge(config.sidebar_edge.as_deref()).into(),
                 pinned: config.sidebar_pinned.unwrap_or(false),
-                expanded: config.sidebar_pinned.unwrap_or(false),
+                expanded: config.sidebar_enabled.unwrap_or(true) && config.sidebar_pinned.unwrap_or(false),
                 dragging: false,
                 preview_edge: None,
             },
@@ -80,6 +82,22 @@ impl DockRuntime {
                 .clamp(1, 10),
             #[cfg(target_os = "macos")]
             hover: MacHoverState::default(),
+        }
+    }
+
+    fn apply_config(&mut self, config: &AppConfig) {
+        let expanded = self.state.expanded;
+        #[cfg(target_os = "macos")]
+        let hover = std::mem::take(&mut self.hover);
+        *self = Self::from_config(config);
+        self.state.expanded = self.enabled && (self.state.pinned || expanded);
+        #[cfg(target_os = "macos")]
+        {
+            self.hover = if self.enabled { hover } else { MacHoverState::default() };
+            if self.state.pinned {
+                self.hover.reveal_started = None;
+                self.hover.leave_started = None;
+            }
         }
     }
 }
@@ -202,19 +220,7 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
     let Ok(mut runtime) = lock_runtime() else {
         return;
     };
-    let expanded = runtime.state.expanded;
-    #[cfg(target_os = "macos")]
-    let hover = std::mem::take(&mut runtime.hover);
-    *runtime = DockRuntime::from_config(config);
-    runtime.state.expanded = runtime.state.pinned || expanded;
-    #[cfg(target_os = "macos")]
-    {
-        runtime.hover = hover;
-        if runtime.state.pinned {
-            runtime.hover.reveal_started = None;
-            runtime.hover.leave_started = None;
-        }
-    }
+    runtime.apply_config(config);
     let expanded = runtime.state.expanded;
     drop(runtime);
 
@@ -260,8 +266,11 @@ fn show_with_hover(
     #[cfg(not(target_os = "macos"))]
     let _ = wait_for_pointer_entry;
     require_started()?;
+    if !is_enabled() { return Ok(()); }
     let window = ensure_sidebar_window(app)?;
     position_sidebar(app, &window)?;
+    let mut runtime = lock_runtime()?;
+    if !runtime.enabled { return Ok(()); }
     #[cfg(target_os = "macos")]
     if focus {
         window.show().map_err(|err| err.to_string())?;
@@ -276,7 +285,6 @@ fn show_with_hover(
             window.set_focus().map_err(|err| err.to_string())?;
         }
     }
-    let mut runtime = lock_runtime()?;
     runtime.state.expanded = true;
     #[cfg(target_os = "macos")]
     {
@@ -316,6 +324,7 @@ pub fn set_pinned(app: &AppHandle, pinned: bool, focus: bool) -> Result<SidebarD
     require_started()?;
     {
         let mut runtime = lock_runtime()?;
+        if !runtime.enabled { return Ok(runtime.state.clone()); }
         runtime.state.pinned = pinned;
         #[cfg(target_os = "macos")]
         {
@@ -344,6 +353,7 @@ pub fn toggle_pinned(
 
 pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
     require_started()?;
+    if !is_enabled() { return get_state(app); }
     ensure_sidebar_window(app)?
         .start_dragging()
         .map_err(|err| err.to_string())?;
@@ -366,6 +376,10 @@ fn require_started() -> Result<(), String> {
         .ok_or_else(|| "Sidebar dock controller is not ready".into())
 }
 
+fn is_enabled() -> bool {
+    lock_runtime().map(|runtime| runtime.enabled).unwrap_or(false)
+}
+
 fn emit_state(app: &AppHandle) {
     if let Ok(runtime) = lock_runtime() {
         let state = runtime.state.clone();
@@ -386,7 +400,9 @@ fn persist_pinned(app: &AppHandle) {
     config.sidebar_pinned = Some(pinned);
     if let Err(err) = config_store::write_config(app, "app_config.json", &config) {
         log::warn!("Failed to persist sidebar pin state: {err}");
+        return;
     }
+    let _ = app.emit("app_config_update", config);
 }
 
 #[cfg(target_os = "macos")]
@@ -530,6 +546,10 @@ fn run_macos_hover_loop(app: AppHandle, window: WebviewWindow) {
     }
 
     loop {
+        if !is_enabled() {
+            std::thread::sleep(Duration::from_millis(250));
+            continue;
+        }
         let (Ok(position), Ok(Some(monitor)), Some(sidebar)) = (
             app.cursor_position(),
             app.primary_monitor(),
@@ -541,6 +561,7 @@ fn run_macos_hover_loop(app: AppHandle, window: WebviewWindow) {
         let now = Instant::now();
         let action = match lock_runtime() {
             Ok(mut runtime) => {
+                if !runtime.enabled { continue; }
                 let pinned = runtime.state.pinned;
                 let expanded = runtime.state.expanded;
                 let at_edge = mac_edge_hovered(
@@ -719,5 +740,51 @@ mod mac_hover_tests {
         assert!(!mac_edge_hovered(
             area, 1.0, "right", 1500.0, 450.0, sidebar
         ));
+    }
+}
+
+#[cfg(test)]
+mod sidebar_enable_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_sidebar_stays_hidden_even_when_pin_preference_is_preserved() {
+        let mut config = AppConfig { sidebar_enabled: Some(false), sidebar_pinned: Some(true), ..AppConfig::default() };
+        let mut runtime = DockRuntime::from_config(&config);
+        assert!(!runtime.enabled);
+        assert!(!runtime.state.expanded);
+        assert!(runtime.state.pinned);
+        config.sidebar_width = Some(420.0);
+        runtime.apply_config(&config);
+        assert!(!runtime.state.expanded);
+        assert_eq!(runtime.thickness, 420.0);
+        config.sidebar_enabled = Some(true);
+        runtime.apply_config(&config);
+        assert!(runtime.enabled && runtime.state.expanded);
+    }
+
+    #[test]
+    fn disabling_an_open_unpinned_sidebar_clears_reveal_intent() {
+        let mut config = AppConfig::default();
+        let mut runtime = DockRuntime::from_config(&config);
+        runtime.state.expanded = true;
+        #[cfg(target_os = "macos")]
+        { runtime.hover.reveal_started = Some(Instant::now()); }
+        config.sidebar_enabled = Some(false);
+        runtime.apply_config(&config);
+        assert!(!runtime.enabled && !runtime.state.expanded);
+        #[cfg(target_os = "macos")]
+        assert!(runtime.hover.reveal_started.is_none());
+        config.sidebar_enabled = Some(true);
+        runtime.apply_config(&config);
+        assert!(runtime.enabled);
+        assert!(!runtime.state.expanded);
+    }
+
+    #[test]
+    fn old_profiles_keep_sidebar_enabled_without_a_new_setting() {
+        let config: AppConfig = serde_json::from_str(r#"{"sidebar_pinned":true}"#).unwrap();
+        let runtime = DockRuntime::from_config(&config);
+        assert!(runtime.enabled && runtime.state.expanded);
     }
 }

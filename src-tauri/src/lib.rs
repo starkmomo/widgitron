@@ -26,6 +26,7 @@ use tauri::Manager;
 mod antigravity;
 mod arxiv;
 mod arxiv_download;
+mod arxiv_library;
 mod commands;
 mod config_store;
 mod deadlines;
@@ -91,6 +92,8 @@ pub fn run() {
             commands::save_paper_config,
             commands::get_gpu_config,
             commands::ssh_config_has_host,
+            commands::list_ssh_config_hosts,
+            commands::get_ssh_config_host,
             commands::get_paper_config,
             commands::get_app_config,
             commands::save_app_config,
@@ -98,6 +101,7 @@ pub fn run() {
             commands::set_widget_always_on_top,
             commands::set_widget_desktop_fixed,
             commands::get_deadlines,
+            commands::get_conference_catalog,
             commands::refresh_paper_deadlines,
             commands::get_gpu_data,
             commands::refresh_gpu_data,
@@ -117,6 +121,9 @@ pub fn run() {
             commands::get_arxiv_config,
             commands::get_arxiv_papers,
             commands::mark_arxiv_seen,
+            arxiv_library::get_arxiv_reading_state,
+            arxiv_library::set_arxiv_paper_status,
+            arxiv_library::set_arxiv_papers_status,
             commands::get_arxiv_saved_papers,
             commands::get_arxiv_discarded_papers,
             commands::open_link,
@@ -143,6 +150,9 @@ pub fn run() {
             ota::download_and_install_update
         ])
         .setup(|app| {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_title(app.config().product_name.as_deref().unwrap_or("Widgitron"));
+            }
             // Initialize Logger & Panic Hook
             let _ = logger::init(app.handle());
 
@@ -419,6 +429,7 @@ pub fn run() {
             sidebar_hotkey::start_global_sidebar_hotkey(
                 handle.clone(),
                 app_config.sidebar_hotkey.clone(),
+                app_config.sidebar_enabled.unwrap_or(true),
             );
             if let Err(err) = sidebar_dock::start(handle.clone(), &app_config) {
                 log::warn!("Failed to initialize sidebar docking: {}", err);
@@ -446,7 +457,7 @@ pub fn run() {
                     Some(main_win) => {
                         // Saved window state can restore a size from before the minimum
                         // changed. Reapply it after the plugin finishes restoring.
-                        let min_size = tauri::LogicalSize::new(900.0, 680.0);
+                        let min_size = tauri::LogicalSize::new(1040.0, 680.0);
                         let _ = main_win.set_min_size(Some(tauri::Size::Logical(min_size)));
                         if let (Ok(size), Ok(scale)) = (main_win.inner_size(), main_win.scale_factor()) {
                             let size = size.to_logical::<f64>(scale);
@@ -478,7 +489,7 @@ pub fn run() {
                                 let scale = monitor.scale_factor();
                                 let current_size = main_win.outer_size().unwrap_or_else(|_| {
                                     tauri::PhysicalSize::new(
-                                        (1000.0 * scale) as u32,
+                                        (1080.0 * scale) as u32,
                                         (740.0 * scale) as u32,
                                     )
                                 });

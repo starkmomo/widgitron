@@ -9,11 +9,14 @@ import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveData";
 import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
-import { ALL_ARXIV_KEYWORDS, UNCATEGORIZED_ARXIV_KEYWORD, filterArxivPapersByKeywords, formatArxivKeywordLabel, getArxivKeywords, getPaperArxivKeywords } from "../utils/arxivKeywords";
+import { ALL_ARXIV_KEYWORDS, UNCATEGORIZED_ARXIV_KEYWORD, hasArxivKeywords, filterArxivPapersByKeywords, formatArxivKeywordLabel, getArxivKeywords, getPaperArxivKeywords } from "../utils/arxivKeywords";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { arxivPaperLinks } from "../utils/arxivPaperLinks";
+import { useArxivLibrary } from "../hooks/useArxivLibrary";
+import { ArxivReadingActions } from "../components/ArxivReadingActions";
+import { ArxivSkippedDialog } from "../components/ArxivSkippedDialog";
 import { ArxivPaperActions } from "../components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
 
@@ -40,6 +43,7 @@ export function ArxivWidgetContent({
   hideHeader = false,
   appearance,
 }: ArxivWidgetContentProps) {
+  const library = useArxivLibrary();
   const [papers, setPapers] = useState<ArxivPaper[]>([]);
   const [arxivConfig, setArxivConfig] = useState<ArxivConfig>({});
   const [arxivBackendError, setArxivBackendError] = useState<string | null>(null);
@@ -56,7 +60,7 @@ export function ArxivWidgetContent({
   const arxivKeywordOptions = arxivKeywords.length === 0
     ? [ALL_ARXIV_KEYWORDS]
     : hasOtherArxivMatches ? [...arxivKeywords, UNCATEGORIZED_ARXIV_KEYWORD] : arxivKeywords;
-  const visiblePapers = filterArxivPapersByKeywords(papers, selectedKeywords, arxivConfig.keywords);
+  const visiblePapers = !hasArxivKeywords(arxivConfig.keywords) ? [] : filterArxivPapersByKeywords(papers, selectedKeywords, arxivConfig.keywords);
   const currentPaper = visiblePapers[currentIndex];
 
   useEffect(() => {
@@ -112,20 +116,12 @@ export function ArxivWidgetContent({
           unlisteners.push(u1);
         }
 
-        const u3 = await tauriListen("arxiv_config_update", async (event) => {
+        const u3 = await tauriListen("arxiv_config_update", (event) => {
           if (!active) return;
           setArxivConfig(event.payload);
           setArxivRefreshError(null);
           setCurrentIndex(0);
-          try {
-            const papers = await tauriInvoke("refresh_arxiv");
-            if (active) {
-              setPapers(papers);
-            }
-          } catch (e) {
-            console.error("Arxiv widget refresh after config change failed", e);
-            if (active) setArxivRefreshError(String(e));
-          }
+          // Saving filters already refreshes centrally and publishes arxiv_update.
         });
         if (!active) {
           u3();
@@ -195,11 +191,9 @@ export function ArxivWidgetContent({
     setExitDirection(direction);
 
     if (direction === "left") {
-      await tauriInvoke("mark_arxiv_seen", { id: paper.id, saved: false });
-      setCurrentIndex((prev) => prev + 1);
+      if (!(await library.act(paper, "skip"))) setExitDirection(undefined);
     } else if (direction === "right") {
-      await tauriInvoke("mark_arxiv_seen", { id: paper.id, saved: true });
-      setCurrentIndex((prev) => prev + 1);
+      if (!(await library.act(paper, "save"))) setExitDirection(undefined);
     } else if (direction === "up") {
       const links = arxivPaperLinks(paper);
       if (links) await tauriInvoke("open_link", { url: links.pageUrl });
@@ -362,6 +356,8 @@ export function ArxivWidgetContent({
           )}
         </div>
       )}
+      <div className="mb-2 flex shrink-0 items-center justify-end" data-no-drag="true"><ArxivSkippedDialog library={library} isLight={isLightAppearance} compact /></div>
+      {library.error && <p role="alert" className="mb-2 text-[10px] text-red-500" title={library.error}>Could not update paper. Please try again.</p>}
       <div className="flex-1 relative perspective-1000" data-no-drag="true">
         {!serviceEnabled ? (
           <div
@@ -414,10 +410,13 @@ export function ArxivWidgetContent({
                     )}
                   </span>
                 </div>
-                <ArxivPaperActions key={currentPaper.id} paper={currentPaper} compact />
+                <div className="flex flex-wrap items-center justify-between gap-1">
+                  <ArxivReadingActions paper={currentPaper} library={library} allowSkip compact />
+                  <ArxivPaperActions key={currentPaper.id} paper={currentPaper} compact />
+                </div>
                 {arxivConfig.show_card_hints !== false && (
                   <div className="flex items-center justify-between mt-3 text-[8px] font-black uppercase tracking-widest">
-                    <span className="text-red-400">← Discard</span>
+                    <span className="text-red-400">← Ignore</span>
                     <span className="text-blue-400">Open arXiv ↑</span>
                     <span className="text-emerald-400">Save →</span>
                   </div>
@@ -434,8 +433,8 @@ export function ArxivWidgetContent({
                 <Check size={32} className="text-emerald-500" />
               </div>
               <div className="space-y-1">
-                <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No recent papers" : "All caught up!"}</div>
-                <p className="text-[9px] text-slate-500">{arxivKeywords.length === 0 ? "Try another category or refresh later." : "Check back later for new papers in CS."}</p>
+                <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No keywords configured" : "All caught up!"}</div>
+                <p className="text-[9px] text-slate-500">{arxivKeywords.length === 0 ? "Add keywords in Paper filters to fill To read." : "Check back later for matching papers."}</p>
               </div>
             </div>
           )}

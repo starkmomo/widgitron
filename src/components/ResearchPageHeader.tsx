@@ -18,7 +18,7 @@ export function ResearchPageHeader({ title, tabs, toolbarActions, filter, action
 }
 
 export function ResearchTabs<Value extends string>({ value, items, onChange, label, idPrefix, panelId, isLight }: {
-  value: Value; items: { value: Value; label: string; count?: number }[]; onChange: (value: Value) => void;
+  value: Value; items: { value: Value; label: string; count?: number | "…" }[]; onChange: (value: Value) => void;
   label: string; idPrefix: string; panelId?: string; isLight: boolean;
 }) {
   return (

@@ -10,6 +10,8 @@ use crate::models::{
 };
 
 const DEADLINES_CACHE_FILE: &str = "paper_deadlines_cache.json";
+const CONFERENCE_SOURCE_CACHE_FILE: &str = "conference_source_cache.json";
+static CATALOG_LOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 // The old GitHub Pages URL redirects through HTTP. Use the current HTTPS
 // endpoint, with the same published YAML on GitHub as a fallback.
 const DEADLINE_SOURCES: &[&str] = &[
@@ -88,6 +90,67 @@ fn persist_deadlines_cache(app: &AppHandle, deadlines: &Vec<PaperDeadlineInfo>) 
     if let Err(e) = config_store::write_config(app, DEADLINES_CACHE_FILE, deadlines) {
         log::warn!("Failed to persist paper deadlines cache: {}", e);
     }
+}
+
+fn persist_conference_source(app: &AppHandle, text: &str) {
+    if let Err(error) = config_store::write_config(app, CONFERENCE_SOURCE_CACHE_FILE, &text) {
+        log::warn!("Failed to persist conference source: {error}");
+    }
+}
+
+// Keep the existing UI choices and stored preferences. The source groups CV and
+// NLP under AI and uses short codes for the other research areas.
+fn source_research_area(value: &str) -> String {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "CV" | "NLP" => "AI".into(),
+        "HCI" => "HI".into(),
+        "DM" => "DB".into(),
+        "GRAPHICS" => "CG".into(),
+        "SECURITY" => "SC".into(),
+        "NETWORK" => "NW".into(),
+        "SYSTEMS" => "DS".into(),
+        _ => value.trim().to_ascii_uppercase(),
+    }
+}
+
+pub fn build_conference_catalog(text: &str) -> Result<Vec<PaperDeadlineInfo>, String> {
+    // Search every upcoming edition, including conferences outside the user's
+    // rank/area filters. Following still stores a specific title + year.
+    build_deadlines_from_yaml(text, &PaperConfig {
+        filter_by_rank: None,
+        filter_by_core: None,
+        filter_by_sub: None,
+        ..PaperConfig::default()
+    })
+}
+
+pub async fn get_conference_catalog(
+    app: &AppHandle,
+    state: &GlobalState,
+) -> Result<Vec<PaperDeadlineInfo>, String> {
+    let _load = CATALOG_LOAD_LOCK.lock().await;
+    let memory = state.last_yaml.lock().map_err(|e| e.to_string())?.clone();
+    let cached = memory.unwrap_or_else(||
+        config_store::read_config::<String>(app, CONFERENCE_SOURCE_CACHE_FILE));
+    if !cached.is_empty() {
+        let text = cached.clone();
+        let parsed = tokio::task::spawn_blocking(move || build_conference_catalog(&text))
+            .await.map_err(|e| format!("Conference catalog task failed: {e}"))?;
+        match parsed {
+            Ok(rows) => {
+                *state.last_yaml.lock().map_err(|e| e.to_string())? = Some(cached);
+                return Ok(rows);
+            }
+            Err(error) => log::warn!("Could not read cached conference catalog: {error}"),
+        }
+    }
+    let text = fetch_deadline_yaml(&deadline_client()?, DEADLINE_SOURCES).await?;
+    let to_parse = text.clone();
+    let rows = tokio::task::spawn_blocking(move || build_conference_catalog(&to_parse))
+        .await.map_err(|e| format!("Conference catalog task failed: {e}"))??;
+    persist_conference_source(app, &text);
+    *state.last_yaml.lock().map_err(|e| e.to_string())? = Some(text);
+    Ok(rows)
 }
 
 pub fn normalize_paper_config(config: &mut PaperConfig) {
@@ -465,7 +528,8 @@ pub fn build_deadlines_from_yaml(
         let matches_sub = config
             .filter_by_sub
             .as_ref()
-            .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&sub));
+            .is_none_or(|allowed| allowed.is_empty() || allowed.iter()
+                .any(|choice| source_research_area(choice) == source_research_area(&sub)));
 
         if let Some(confs) = item.confs {
             for conf in confs {
@@ -620,6 +684,7 @@ async fn fetch_and_update_with_client(
         tokio::task::spawn_blocking(move || build_deadlines_from_yaml(&text_to_parse, &config))
             .await
             .map_err(|error| format!("Deadline parse task failed: {error}"))??;
+    persist_conference_source(app, &text);
     if let Ok(mut last) = state.last_yaml.lock() {
         *last = Some(text);
     }
@@ -769,6 +834,47 @@ mod tests {
         96, 158, 174, 66, 74, 106, 98, 10, 152, 15, 81, 164, 107, 8, 66, 10, 70, 198, 86, 166, 150,
         64, 164, 206, 5, 0, 156, 225, 138, 230, 95, 0, 0, 0,
     ];
+
+    #[test]
+    fn existing_research_buttons_match_source_codes_without_changing_ui_preferences() {
+        let yaml = ["AI", "HI", "DB", "CG", "SC", "NW", "DS", "CT", "SE", "MX"]
+            .map(|sub| format!("- title: {sub}Conf\n  sub: {sub}\n  confs:\n  - year: '2100'\n    timeline:\n    - deadline: '2100-10-10 23:59:59'\n"))
+            .join("");
+        for (choice, expected) in [
+            ("AI", "AI"), ("CV", "AI"), ("NLP", "AI"), ("HCI", "HI"),
+            ("DB", "DB"), ("DM", "DB"), ("Graphics", "CG"), ("Security", "SC"),
+            ("Network", "NW"), ("Systems", "DS"), ("CT", "CT"), ("SE", "SE"), ("MX", "MX"),
+        ] {
+            let config = PaperConfig { filter_by_rank: None, filter_by_core: None,
+                filter_by_sub: Some(vec![choice.into()]), ..PaperConfig::default() };
+            let rows = build_deadlines_from_yaml(&yaml, &config).unwrap();
+            assert_eq!(rows.len(), 1, "research filter {choice}");
+            assert_eq!(rows[0].sub, expected);
+            assert_eq!(config.filter_by_sub, Some(vec![choice.into()]));
+        }
+        let config = PaperConfig { filter_by_rank: None, filter_by_core: None,
+            filter_by_sub: Some(vec!["NLP".into()]), followed_conference_ids: Some(vec!["cgconf|2100".into()]),
+            ..PaperConfig::default() };
+        let rows = build_deadlines_from_yaml(&yaml, &config).unwrap();
+        assert_eq!(rows.len(), 2); // Followed editions survive area filters.
+    }
+
+    #[test]
+    fn catalog_search_includes_conferences_outside_rank_and_area_filters() {
+        let yaml = "- title: Example\n  description: Full Conference Name\n  sub: NW\n  rank:\n    ccf: N\n    core: N\n  confs:\n  - year: '2020'\n    timeline:\n    - deadline: '2019-10-10 23:59:59'\n  - year: '2100'\n    timeline:\n    - deadline: '2100-10-10 23:59:59'\n  - year: '2101'\n    timeline:\n    - deadline: TBD\n";
+        let filtered = PaperConfig { filter_by_sub: Some(vec!["AI".into()]), ..PaperConfig::default() };
+        assert!(build_deadlines_from_yaml(yaml, &filtered).unwrap().is_empty());
+        let catalog = build_conference_catalog(yaml).unwrap();
+        assert_eq!(catalog.len(), 2);
+        assert!(catalog.iter().any(|row| row.year == "2100"));
+        assert!(catalog.iter().any(|row| row.year == "2101"));
+        assert!(!catalog.iter().any(|row| row.year == "2020"));
+        assert!(catalog.iter().all(|row| row.description.as_deref() == Some("Full Conference Name")));
+        let following = PaperConfig { followed_conference_ids: Some(vec!["example|2100".into()]), ..filtered };
+        let selected = build_deadlines_from_yaml(yaml, &following).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].year, "2100"); // Do not follow the next edition.
+    }
 
     #[test]
     fn legacy_preferences_bind_once_to_one_edition_and_preserve_expired_choices() {

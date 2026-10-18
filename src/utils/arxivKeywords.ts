@@ -29,6 +29,20 @@ export function getArxivKeywords(keywords?: string[]): string[] {
   });
 }
 
+/** Spaces belong to a phrase; commas, semicolons and line breaks separate entries. */
+export function parseArxivKeywordInput(input: string): string[] {
+  return getArxivKeywords(input.split(/[,，;；\r\n]+/).map(value => value.trim().replace(/\s+/g, " ")));
+}
+
+export function appendArxivKeywords(keywords: string[], input: string): string[] {
+  // Also repair legacy entries entered with Chinese separators in the old field.
+  return getArxivKeywords([...keywords.flatMap(parseArxivKeywordInput), ...parseArxivKeywordInput(input)]);
+}
+
+export function hasArxivKeywords(keywords?: string[]): boolean {
+  return getArxivKeywords(keywords).some(keyword => /[\p{L}\p{N}]/u.test(keyword));
+}
+
 export function paperMatchesArxivKeyword(paper: ArxivPaper, keyword: string): boolean {
   const normalized = normalizeArxivKeyword(keyword);
   if (!normalized) return false;

@@ -18,12 +18,12 @@ export type SectionLiveDataMap = {
 
 export type AppTab = "dashboard" | "settings" | LiveDataSection;
 
-export type SettingsSection = "general" | "sidebar" | "about" | LiveDataSection;
+export type SettingsSection = "general" | "sidebar" | "floating" | "about" | LiveDataSection;
 
 export const LIVE_DATA_SECTION_LABELS: Record<LiveDataSection, string> = {
   gpu: "GPU Monitor",
-  deadlines: "Paper Deadlines",
-  arxiv: "Arxiv Radar",
+  deadlines: "Conference DDL",
+  arxiv: "arXiv Radar",
   quota: "Quota Monitor",
 };
 
@@ -36,6 +36,7 @@ export const APP_TAB_LABELS: Record<AppTab, string> = {
 export const SETTINGS_SECTION_LABELS: Record<SettingsSection, string> = {
   general: "General",
   sidebar: "Sidebar",
+  floating: "Floating style",
   about: "About",
   ...LIVE_DATA_SECTION_LABELS,
 };

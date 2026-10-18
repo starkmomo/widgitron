@@ -3,6 +3,7 @@ import React from "react";
 interface StatCardProps {
   label: string;
   value: string;
+  metric?: string;
   icon: React.ReactNode;
   theme?: string;
   hint?: string;
@@ -13,6 +14,7 @@ interface StatCardProps {
 export function StatCard({
   label,
   value,
+  metric,
   icon,
   theme = "dark",
   hint,
@@ -31,7 +33,7 @@ export function StatCard({
       <div>
         <div className={`text-xs font-bold mb-1 ${theme === "light" ? "text-slate-500" : "text-slate-300"}`}>{label}</div>
         <div className={`text-3xl font-black tracking-tighter ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-          {value}
+          {value}{metric && <span className="ml-2 text-xs font-medium tracking-normal text-slate-500">{metric}</span>}
         </div>
         {hint && (
           <div className={`text-xs font-medium mt-1 ${hintTone === "warning" ? "text-amber-500" : theme === "light" ? "text-slate-500" : "text-slate-400"}`}>

@@ -7,7 +7,6 @@ use crate::models::{AppConfig, ArxivConfig, ArxivPaper, GlobalState};
 
 const ARXIV_PAGE_SIZE: usize = 100;
 const ARXIV_MIN_PAPERS_PER_KEYWORD: usize = 10;
-const ARXIV_MIN_PAPERS_WITHOUT_KEYWORDS: usize = 20;
 const ARXIV_BROWSE_CACHE_FILE: &str = "arxiv_browse_cache.json";
 const ARXIV_BROWSE_CACHE_VERSION: u8 = 1;
 const ARXIV_BROWSE_MAX_CACHED_PAGES: usize = 24;
@@ -119,6 +118,10 @@ fn arxiv_keyword_query(keyword: &str) -> Option<String> {
                 .join(" AND ")
         )),
     }
+}
+
+pub(crate) fn has_reading_keywords(keywords: &[String]) -> bool {
+    keywords.iter().any(|keyword| arxiv_keyword_query(keyword).is_some())
 }
 
 fn paper_matches_keyword(haystack: &str, keyword: &str) -> bool {
@@ -651,9 +654,13 @@ pub async fn perform_arxiv_fetch(
     app: &AppHandle,
     state: &GlobalState,
 ) -> Result<Vec<ArxivPaper>, String> {
-    let client = arxiv_client(app)?;
-
     let config = config_store::read_config::<ArxivConfig>(app, "arxiv_config.json");
+    if !has_reading_keywords(&config.keywords) {
+        let papers = crate::arxiv_library::replace_batch(app, state, Vec::new(), &config)?;
+        let _ = app.emit("arxiv_error", "");
+        return Ok(papers);
+    }
+    let client = arxiv_client(app)?;
 
     let kws = &config.keywords;
     let cats = &config.categories;
@@ -662,49 +669,24 @@ pub async fn perform_arxiv_fetch(
 
     let mut papers = Vec::new();
 
-    if kws.is_empty() {
-        papers = fetch_papers_for_query(
-            &client,
-            &cat_query,
-            kws,
-            today_start,
-            tomorrow_start,
-            Some(ARXIV_MIN_PAPERS_WITHOUT_KEYWORDS),
-        )
-        .await?;
-    } else {
-        for keyword in get_unique_keywords(kws) {
-            if let Some(keyword_query) = arxiv_keyword_query(&keyword) {
-                let query = format!("{} AND {}", cat_query, keyword_query);
-                let keyword_papers = fetch_papers_for_query(
-                    &client,
-                    &query,
-                    kws,
-                    today_start,
-                    tomorrow_start,
-                    Some(ARXIV_MIN_PAPERS_PER_KEYWORD),
-                )
-                .await?;
-                merge_papers(&mut papers, keyword_papers);
-            }
-        }
-        sort_papers_by_updated_desc(&mut papers);
-    }
-
-    // Filter out seen papers
-    let seen = config_store::read_config::<Vec<String>>(app, "arxiv_seen.json");
-
-    papers.retain(|p| !seen.iter().any(|s| s == p.id.trim()));
-
-    // Save to cache file
-    let _ = config_store::write_config(app, "arxiv_cache.json", &papers);
-
-    {
-        if let Ok(mut state_papers) = state.arxiv_papers.lock() {
-            *state_papers = papers.clone();
+    for keyword in get_unique_keywords(kws) {
+        if let Some(keyword_query) = arxiv_keyword_query(&keyword) {
+            let query = format!("{} AND {}", cat_query, keyword_query);
+            let keyword_papers = fetch_papers_for_query(
+                &client,
+                &query,
+                kws,
+                today_start,
+                tomorrow_start,
+                Some(ARXIV_MIN_PAPERS_PER_KEYWORD),
+            )
+            .await?;
+            merge_papers(&mut papers, keyword_papers);
         }
     }
-    let _ = app.emit("arxiv_update", &papers);
+    sort_papers_by_updated_desc(&mut papers);
+
+    let papers = crate::arxiv_library::replace_batch(app, state, papers, &config)?;
     let _ = app.emit("arxiv_error", "");
 
     Ok(papers)
@@ -852,6 +834,15 @@ mod tests {
             published: updated.to_rfc3339(),
             updated: updated.to_rfc3339(),
         }
+    }
+
+    #[test]
+    fn reading_queue_requires_searchable_keywords() {
+        assert!(!has_reading_keywords(&[]));
+        assert!(!has_reading_keywords(&["  ".into(), "\"\"".into(), "***".into()]));
+        assert!(has_reading_keywords(&["omni".into()]));
+        assert!(has_reading_keywords(&["agentic rl".into()]));
+        assert!(has_reading_keywords(&["人工智能".into()]));
     }
 
     #[test]
