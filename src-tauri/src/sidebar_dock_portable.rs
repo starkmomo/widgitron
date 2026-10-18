@@ -386,7 +386,9 @@ fn persist_pinned(app: &AppHandle) {
     config.sidebar_pinned = Some(pinned);
     if let Err(err) = config_store::write_config(app, "app_config.json", &config) {
         log::warn!("Failed to persist sidebar pin state: {err}");
+        return;
     }
+    let _ = app.emit("app_config_update", config);
 }
 
 #[cfg(target_os = "macos")]

@@ -108,6 +108,7 @@ export interface TauriCommandMap {
   list_ssh_config_hosts: string[];
   get_ssh_config_host: SshConfigHostEntry;
   get_paper_config: PaperConfig;
+  get_conference_catalog: PaperDeadlineInfo[];
   get_arxiv_config: ArxivConfig;
   get_quota_config: QuotaConfig;
   get_theme_config: WidgetThemeConfig;
@@ -179,6 +180,7 @@ export const TAURI_COMMAND_NAMES = [
   "list_ssh_config_hosts",
   "get_ssh_config_host",
   "get_paper_config",
+  "get_conference_catalog",
   "get_arxiv_config",
   "get_quota_config",
   "get_theme_config",
@@ -256,6 +258,7 @@ export interface TauriCommandArgs {
   list_ssh_config_hosts: undefined;
   get_ssh_config_host: { alias: string };
   get_paper_config: undefined;
+  get_conference_catalog: undefined;
   get_arxiv_config: undefined;
   get_quota_config: undefined;
   get_theme_config: undefined;

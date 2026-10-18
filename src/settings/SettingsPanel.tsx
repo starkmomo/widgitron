@@ -22,6 +22,7 @@ import { FilterChoice } from "../components/FilterChoice";
 import { InlineHelp } from "../components/InlineHelp";
 import { KeywordTagsInput } from "../components/KeywordTagsInput";
 import { SshHostPicker } from "../components/SshHostPicker";
+import { ConferenceFollowPicker } from "../components/ConferenceFollowPicker";
 import { appendArxivKeywords, hasArxivKeywords } from "../utils/arxivKeywords";
 import { MODULE_NAVIGATION } from "../utils/moduleNavigation";
 import { APP_VERSION, APP_NAME, IS_TEST_BUILD } from "../constants";
@@ -30,7 +31,7 @@ import { tauriListen } from "../utils/tauriListen";
 import { MasterSwitch } from "../components/MasterSwitch";
 import { providerSupportsQuotaVisualizations } from "../components/QuotaVisualizations";
 import { ThemeManagementSection } from "./ThemeManagementSection";
-import { conferencePreferenceIds, updateConferencePreferences } from "../utils/deadlineKeys";
+import { updateConferencePreferences } from "../utils/deadlineKeys";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { listenGpuDataSync } from "../utils/gpuDataSync";
@@ -2598,15 +2599,12 @@ export function SettingsPanel({
         </div>
 
         {!embeddedSection && <div className="space-y-3 border-t border-[var(--dashboard-border)] pt-6">
-          <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Subscribed Conferences</label>
-          <div className="flex flex-wrap gap-2">
-            {conferencePreferenceIds(localPaper, "followed").map(id => <button key={id} type="button"
-              onClick={() => { const next = updateConferencePreferences(localPaper, [id], "unfollow"); setLocalPaper(next); onSavePaper(next); }}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--dashboard-border)] px-3 py-2 text-xs text-slate-500" title="Unfollow conference">
-              <span data-no-localize>{id.replace("|", " ").toUpperCase()}</span><X size={12} />
-            </button>)}
-            {!conferencePreferenceIds(localPaper, "followed").length && <p className="text-xs text-slate-500">No followed conferences.</p>}
-          </div>
+          <ConferenceFollowPicker config={localPaper} isLight={appConfig.theme === "light"}
+            onPreference={async (id, action) => {
+              const next = updateConferencePreferences(localPaper, [id], action);
+              setLocalPaper(next);
+              return onSavePaper(next);
+            }} />
         </div>}
       </div>
       </fieldset>
@@ -2751,7 +2749,7 @@ export function SettingsPanel({
             </div>
           </div>}
         </div>
-        {!embeddedSection && <div className="space-y-2 rounded-2xl border border-white/5 bg-white/5 p-4">
+        {!embeddedSection && <div className="space-y-3 border-t border-[var(--dashboard-border)] pt-5">
           <div className="space-y-1">
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
               Arxiv Proxy

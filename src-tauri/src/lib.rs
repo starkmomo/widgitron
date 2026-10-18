@@ -101,6 +101,7 @@ pub fn run() {
             commands::set_widget_always_on_top,
             commands::set_widget_desktop_fixed,
             commands::get_deadlines,
+            commands::get_conference_catalog,
             commands::refresh_paper_deadlines,
             commands::get_gpu_data,
             commands::refresh_gpu_data,

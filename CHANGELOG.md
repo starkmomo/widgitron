@@ -3,6 +3,8 @@
 ## [Unreleased] - 2026-10-18
 
 ### 中文
+
+- **会议设置与侧边栏同步**：研究领域按钮保持原样，修正与数据源分类编码的匹配；设置中的会议关注支持搜索缩写、英文全称和年份，从完整缓存数据中选择具体届次。对齐 arXiv 代理配置；修复 macOS 侧边栏钉选状态未及时同步到设置开关的问题。
 - **SSH 主机选择器**：统一应用内下拉样式，适配浅色和深色主题，支持搜索别名、键盘选择及空结果提示。
 - **关键词标签**：arXiv 关键词改为标签输入，回车添加、叉号删除；支持粘贴中英文逗号、分号及换行分隔的多个词，保留短语空格并自动去重。兼容旧配置，仍在收起筛选或离开设置栏目后统一更新论文；筛选说明统一使用与 GPU 设置相同的即时问号浮层。
 - **额度卡片**：按内容区宽度排列卡片，为周期名称、剩余额度和重置时间分行留出空间，避免窄卡片截断周期文字或挤压百分比；同步中英文。
@@ -35,6 +37,8 @@
 - **arXiv 空状态**：未设置关键词时，待看保持为空，可通过“全部”浏览所选分类的近期论文。
 
 ### English
+
+- **Conference settings and sidebar sync**: Preserve the research-area controls while matching their values to the source category codes. Search the full cached conference catalog by acronym, full name, or year and follow a specific edition from Settings. Align arXiv proxy settings and synchronize macOS sidebar pin changes with the Settings switch immediately.
 - **SSH host picker**: Use a consistent in-app dropdown in light and dark themes, with alias search, keyboard selection, and empty-result feedback.
 - **Keyword tags**: Enter adds an arXiv keyword and each tag has a remove action. Paste multiple entries separated by English/Chinese commas, semicolons, or newlines, preserving phrase spaces and removing duplicates. Retain existing configurations and update papers when filters close or the settings section is left. Use the same immediate question-mark help as GPU settings.
 - **Quota cards**: Size the grid to the available content width and separate period names, remaining percentages, and reset times to prevent truncation and collisions in narrow cards, in both languages.

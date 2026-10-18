@@ -360,6 +360,14 @@ pub async fn get_deadlines(
 }
 
 #[tauri::command]
+pub async fn get_conference_catalog(
+    app: AppHandle,
+    state: tauri::State<'_, GlobalState>,
+) -> Result<Vec<PaperDeadlineInfo>, String> {
+    crate::deadlines::get_conference_catalog(&app, state.inner()).await
+}
+
+#[tauri::command]
 pub async fn refresh_paper_deadlines(
     app: AppHandle,
     state: tauri::State<'_, GlobalState>,
