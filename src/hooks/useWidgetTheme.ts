@@ -24,7 +24,9 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
       const sidebarLight =
         win.label === "sidebar" &&
         isLightColor(resolveSidebarTheme(latestAppConfig?.sidebar_theme).background);
-      setCurrentTheme(resolveWidgetTheme(latestThemeConfig, win.label, kind, { sidebarLight }));
+      setCurrentTheme(resolveWidgetTheme(latestThemeConfig, win.label, kind, {
+        sidebarLight, dashboardTheme: latestAppConfig?.theme,
+      }));
     };
 
     const load = async () => {
@@ -43,6 +45,7 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
           latestThemeConfig = event.payload;
           updateTheme();
         });
+        if (!active) { unlistenTheme(); return; }
         unlisteners.push(() => unlistenTheme());
 
         const unlistenApp = await tauriListen("app_config_update", (event) => {
@@ -51,6 +54,7 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
           latestAppConfig = event.payload;
           updateTheme();
         });
+        if (!active) { unlistenApp(); return; }
         unlisteners.push(() => unlistenApp());
 
         if (win.label === "sidebar") {
@@ -65,6 +69,7 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
               })
               .catch((error) => console.error("Sidebar theme refresh failed", error));
           });
+          if (!active) { unlistenSidebar(); return; }
           unlisteners.push(() => unlistenSidebar());
         }
       } catch (e) {

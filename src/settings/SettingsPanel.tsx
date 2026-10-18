@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Sun, Moon, X, Plus, RotateCcw, RefreshCw, Settings, Cpu, Calendar, BookOpen, Coins, Info, GripVertical, ChevronDown, PanelRight, ArrowLeft, ArrowUp, ArrowRight, ArrowDown, Copy, Pencil, Trash2, Keyboard } from "lucide-react";
+import { Sun, Moon, X, Plus, RotateCcw, RefreshCw, Settings, Cpu, Calendar, BookOpen, Coins, Info, GripVertical, ChevronDown, PanelRight, ArrowLeft, ArrowUp, ArrowRight, ArrowDown, Copy, Pencil, Trash2, Keyboard, PanelsTopLeft } from "lucide-react";
 import { motion, AnimatePresence, Reorder, useDragControls } from "framer-motion";
 import { WidgetThemeConfig } from "../types/theme";
 import type {
@@ -30,7 +30,7 @@ import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { MasterSwitch } from "../components/MasterSwitch";
 import { providerSupportsQuotaVisualizations } from "../components/QuotaVisualizations";
-import { ThemeManagementSection } from "./ThemeManagementSection";
+import { FloatingAppearanceSettings } from "./FloatingAppearanceSettings";
 import { updateConferencePreferences } from "../utils/deadlineKeys";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
@@ -961,10 +961,9 @@ interface SettingsPanelProps {
   onToggleSidebarWidget: (key: "quota" | "gpu" | "deadlines" | "arxiv", enabled: boolean) => void;
   sidebarExpanded: boolean;
   onToggleSidebar: () => void;
-  onSaveThemes: (config: WidgetThemeConfig) => void;
+  onSaveThemes: (config: WidgetThemeConfig) => Promise<void>;
   isAutostart: boolean;
   onToggleAutostart: () => void;
-  activeWidgets: string[];
   updateInfo: UpdateInfo | null;
   setUpdateInfo: (info: UpdateInfo | null) => void;
   updateCheckError?: string | null;
@@ -994,7 +993,6 @@ export function SettingsPanel({
   onSaveThemes,
   isAutostart,
   onToggleAutostart,
-  activeWidgets,
   updateInfo,
   setUpdateInfo,
   updateCheckError,
@@ -1268,6 +1266,7 @@ export function SettingsPanel({
   const tabs: { id: SettingsSection; label: string; icon: typeof Settings }[] = [
     { id: "general", label: SETTINGS_SECTION_LABELS.general, icon: Settings },
     { id: "sidebar", label: SETTINGS_SECTION_LABELS.sidebar, icon: PanelRight },
+    { id: "floating", label: SETTINGS_SECTION_LABELS.floating, icon: PanelsTopLeft },
     ...MODULE_NAVIGATION.map(({ section, label, Icon }) => ({ id: section, label, icon: Icon })),
     { id: "about", label: SETTINGS_SECTION_LABELS.about, icon: Info },
   ];
@@ -1778,11 +1777,20 @@ export function SettingsPanel({
             <>
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
+            <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>Enable sidebar</div>
+            <p className="text-[10px] text-slate-500">Turn off to disable edge reveal and the sidebar shortcut.</p>
+          </div>
+          <MasterSwitch label="Enable sidebar" enabled={appConfig.sidebar_enabled !== false}
+            onToggle={enabled => onSaveApp({ ...appConfig, sidebar_enabled: enabled })} />
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1">
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
               Reveal Sidebar
             </div>
             <p className="text-[10px] text-slate-400">
-              Slide the docked widget hub into view.
+              {appConfig.sidebar_enabled === false ? "Opening the sidebar enables it again." : "Hide temporarily; move to the screen edge to reveal again."}
             </p>
           </div>
           <button
@@ -1790,7 +1798,7 @@ export function SettingsPanel({
             onClick={onToggleSidebar}
             className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-lg shadow-blue-600/20"
           >
-            {sidebarExpanded ? "Close Sidebar" : "Open Sidebar"}
+            {sidebarExpanded ? "Hide Sidebar" : "Open Sidebar"}
           </button>
         </div>
 
@@ -1844,6 +1852,7 @@ export function SettingsPanel({
               <MasterSwitch
                 label="Pin Display"
                 enabled={appConfig.sidebar_pinned === true}
+                disabled={appConfig.sidebar_enabled === false}
                 onToggle={(enabled) => onSaveApp({ ...appConfig, sidebar_pinned: enabled })}
               />
             </div>
@@ -2435,13 +2444,6 @@ export function SettingsPanel({
           <Plus size={16} /> Add New Server
         </button>
       </div>
-      {!embeddedSection && <ThemeManagementSection
-        themeConfig={themeConfig}
-        onSaveThemes={onSaveThemes}
-        dashboardTheme={appConfig.theme ?? "dark"}
-        activeWidgets={activeWidgets}
-        widgetId={serviceWidgetMeta("gpu_enabled").id}
-      />}
     </section>
     );
   };
@@ -2610,13 +2612,6 @@ export function SettingsPanel({
       </fieldset>
       <FilterStatus state={paperApplyState}
         progress="Applying conference filters…" applied="Conference filters applied." error={paperBackendError} />
-      {!embeddedSection && <ThemeManagementSection
-        themeConfig={themeConfig}
-        onSaveThemes={onSaveThemes}
-        dashboardTheme={appConfig.theme ?? "dark"}
-        activeWidgets={activeWidgets}
-        widgetId={serviceWidgetMeta("deadline_enabled").id}
-      />}
     </section>
   );
 
@@ -2785,13 +2780,6 @@ export function SettingsPanel({
         applied={!hasArxivKeywords(localArxiv.keywords) ? "To read is empty. Browse All without keywords."
           : appConfig.arxiv_enabled === false ? "Filters saved. Enable monitoring to update To read." : "To read updated."}
         error={arxivBackendError} />
-      {!embeddedSection && <ThemeManagementSection
-        themeConfig={themeConfig}
-        onSaveThemes={onSaveThemes}
-        dashboardTheme={appConfig.theme ?? "dark"}
-        activeWidgets={activeWidgets}
-        widgetId={serviceWidgetMeta("arxiv_enabled").id}
-      />}
     </section>
   );
 
@@ -2944,13 +2932,6 @@ export function SettingsPanel({
           )}
         </div>
       </div>
-      {!embeddedSection && <ThemeManagementSection
-        themeConfig={themeConfig}
-        onSaveThemes={onSaveThemes}
-        dashboardTheme={appConfig.theme ?? "dark"}
-        activeWidgets={activeWidgets}
-        widgetId={serviceWidgetMeta("quota_enabled").id}
-      />}
     </section>
     );
   };
@@ -3248,6 +3229,7 @@ export function SettingsPanel({
           >
             {activeSection === "general" && renderGeneralSection()}
             {activeSection === "sidebar" && renderSidebarSection()}
+            {activeSection === "floating" && <FloatingAppearanceSettings themeConfig={themeConfig} dashboardTheme={appConfig.theme ?? "dark"} language={resolveLanguage(appConfig.language)} onSaveThemes={onSaveThemes} />}
             {activeSection === LIVE_DATA_SECTION.QUOTA && renderQuotaSection()}
             {activeSection === LIVE_DATA_SECTION.GPU && renderGpuSection()}
             {activeSection === LIVE_DATA_SECTION.DEADLINES && renderDeadlinesSection()}

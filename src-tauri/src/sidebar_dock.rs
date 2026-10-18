@@ -219,6 +219,7 @@ pub struct SidebarDockState {
 
 #[derive(Debug)]
 struct DockRuntime {
+    enabled: bool,
     edge: DockEdge,
     pinned: bool,
     requested_expanded: bool,
@@ -338,9 +339,10 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
     let (reveal_dwell, reveal_cooldown) = reveal_timings(reveal_sensitivity);
     let hide_leave = hide_leave_delay(hide_sensitivity);
     let runtime = Arc::new(Mutex::new(DockRuntime {
+        enabled: config.sidebar_enabled.unwrap_or(true),
         edge: DockEdge::parse(config.sidebar_edge.as_deref()),
         pinned,
-        requested_expanded: pinned,
+        requested_expanded: config.sidebar_enabled.unwrap_or(true) && pinned,
         visual_expanded: false,
         native_visible: false,
         thickness_logical: config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL),
@@ -402,6 +404,35 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
     state.apply_sensitivity(config);
     let next_edge = DockEdge::parse(config.sidebar_edge.as_deref());
     let next_pinned = config.sidebar_pinned.unwrap_or(false);
+    let was_enabled = state.enabled;
+    state.enabled = config.sidebar_enabled.unwrap_or(true);
+    if !state.enabled {
+        state.pinned = next_pinned;
+        state.requested_expanded = false;
+        state.visual_expanded = false;
+        state.native_visible = false;
+        state.focus_requested = false;
+        state.raise_requested = false;
+        state.awaiting_pointer_entry = false;
+        state.dragging = false;
+        state.resizing = false;
+        state.drag_preview_edge = None;
+        state.drag_preview_area = None;
+        state.drag_start = None;
+        state.drag_offset = None;
+        state.reset_edge_reveal();
+        let payload = state.payload();
+        state.last_emitted = Some(payload.clone());
+        drop(state);
+        if let Some(window) = app.get_webview_window(SIDEBAR_LABEL) { native_hide(&window); }
+        let _ = app.emit("sidebar_state_update", payload);
+        return;
+    }
+    if !was_enabled && next_pinned {
+        state.requested_expanded = true;
+        state.raise_requested = true;
+        state.grace_until = Instant::now() + SHOW_GRACE;
+    }
     let next_thickness = config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL);
     let next_edge_length = config.sidebar_length;
     let now = Instant::now();
@@ -455,6 +486,7 @@ pub fn show(app: &AppHandle, focus: bool) -> Result<(), String> {
         .get()
         .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())?;
     let mut state = lock_runtime(runtime);
+    if !state.enabled { return Ok(()); }
     let anchor = POINT {
         x: state.work_area.left + state.work_area.width() / 2,
         y: state.work_area.top + state.work_area.height() / 2,
@@ -507,6 +539,7 @@ pub fn set_pinned(app: &AppHandle, pinned: bool, focus: bool) -> Result<SidebarD
         .ok_or_else(|| "Sidebar dock controller is unavailable".to_string())?;
     let payload = {
         let mut state = lock_runtime(runtime);
+        if !state.enabled { return Ok(state.payload()); }
         let now = Instant::now();
         state.pinned = pinned;
         state.reset_edge_reveal();
@@ -548,6 +581,7 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
     let cursor = cursor_position();
     let current_rect = native_window_rect(&window);
     let mut state = lock_runtime(runtime);
+    if !state.enabled { return Ok(state.payload()); }
     state.dragging = true;
     state.drag_start = cursor;
     state.drag_has_moved = false;
@@ -594,6 +628,10 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
     let _ = window.set_always_on_top(true);
 
     loop {
+        if !lock_runtime(&runtime).enabled {
+            std::thread::sleep(Duration::from_millis(250));
+            continue;
+        }
         let now = Instant::now();
         let cursor = cursor_position();
         let left_down = is_left_button_down();
@@ -604,6 +642,7 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
 
         {
             let mut state = lock_runtime(&runtime);
+            if !state.enabled { continue; }
             let shown_rect = sidebar_rect(
                 state.work_area,
                 state.edge,

@@ -4,6 +4,8 @@
 
 ### 中文
 
+- **浮窗外观与侧边栏停用**：四个独立浮窗的外观集中到设置中的同一栏目，提供跟随主界面、浅色、深色、透明预设及示例预览；支持多个自定义主题、新建、复制及删除确认弹窗。侧边栏增加独立的启用开关，停用后隐藏内容、停止边缘检测并注销 Windows 快捷键，重启后保留；主动打开可重新启用。临时收起统一标为“隐藏侧边栏”。
+
 - **会议设置与侧边栏同步**：研究领域按钮保持原样，修正与数据源分类编码的匹配；设置中的会议关注支持搜索缩写、英文全称和年份，从完整缓存数据中选择具体届次。对齐 arXiv 代理配置；修复 macOS 侧边栏钉选状态未及时同步到设置开关的问题。
 - **SSH 主机选择器**：统一应用内下拉样式，适配浅色和深色主题，支持搜索别名、键盘选择及空结果提示。
 - **关键词标签**：arXiv 关键词改为标签输入，回车添加、叉号删除；支持粘贴中英文逗号、分号及换行分隔的多个词，保留短语空格并自动去重。兼容旧配置，仍在收起筛选或离开设置栏目后统一更新论文；筛选说明统一使用与 GPU 设置相同的即时问号浮层。
@@ -37,6 +39,8 @@
 - **arXiv 空状态**：未设置关键词时，待看保持为空，可通过“全部”浏览所选分类的近期论文。
 
 ### English
+
+- **Floating appearance and sidebar control**: Manage all four floating windows in one Settings section, with live examples, Follow main, Light, Dark, Transparent, and multiple custom themes. Add explicit creation, duplication, and a deletion dialog. A persistent sidebar enable switch stops edge reveal and unregisters the Windows shortcut when disabled; opening it explicitly enables it again. Temporary dismissal is labeled Hide Sidebar.
 
 - **Conference settings and sidebar sync**: Preserve the research-area controls while matching their values to the source category codes. Search the full cached conference catalog by acronym, full name, or year and follow a specific edition from Settings. Align arXiv proxy settings and synchronize macOS sidebar pin changes with the Settings switch immediately.
 - **SSH host picker**: Use a consistent in-app dropdown in light and dark themes, with alias search, keyboard selection, and empty-result feedback.

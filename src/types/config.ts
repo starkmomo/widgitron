@@ -13,6 +13,7 @@ export interface AppConfig {
   global_scale?: number;
   sidebar_hotkey?: string;
   sidebar_edge?: "left" | "top" | "right" | "bottom";
+  sidebar_enabled?: boolean;
   sidebar_pinned?: boolean;
   sidebar_hide_widget_headers?: boolean;
   sidebar_monitor_x?: number;

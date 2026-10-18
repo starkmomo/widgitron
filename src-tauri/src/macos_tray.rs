@@ -74,9 +74,9 @@ pub fn create_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 fn sidebar_label(zh: bool, expanded: bool) -> &'static str {
     match (zh, expanded) {
-        (true, true) => "关闭侧边栏",
+        (true, true) => "隐藏侧边栏",
         (true, false) => "打开侧边栏",
-        (false, true) => "Close Sidebar",
+        (false, true) => "Hide Sidebar",
         (false, false) => "Open Sidebar",
     }
 }

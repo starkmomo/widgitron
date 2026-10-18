@@ -44,7 +44,7 @@ import { startWindowSnapshotSync } from "./utils/windowSnapshotSync";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { WidgetTheme, WidgetThemeConfig } from "./types/theme";
+import { WidgetThemeConfig } from "./types/theme";
 import { hexToRgba, isLightColor } from "./utils/color";
 import { providerLogoToneClass } from "./utils/providerLogo";
 import { listenBackendServiceError } from "./utils/backendServiceError";
@@ -662,7 +662,10 @@ function App() {
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
-  const [currentTheme, setCurrentTheme] = useState<WidgetTheme | null>(null);
+  const currentTheme = resolveWidgetTheme(themeConfig, windowLabel, undefined, { dashboardTheme: appConfig.theme });
+  const themePendingWrites = useRef(0);
+  const themeSaveRevision = useRef(0);
+  const themeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [pendingToggles, setPendingToggles] = useState<Set<string>>(new Set());
   const [toggleWidgetError, setToggleWidgetError] = useState<string | null>(null);
   const [serviceToggleBusy, setServiceToggleBusy] = useState<Partial<Record<ServiceField, boolean>>>({});
@@ -931,7 +934,6 @@ function App() {
           if (!active) return;
 
           setThemeConfig(tc);
-          setCurrentTheme(resolveWidgetTheme(tc, label));
 
           const pinned = ac.always_on_top?.[label] ?? false;
           setIsPinned(pinned);
@@ -955,7 +957,6 @@ function App() {
             if (!active) return;
             const config = event.payload;
             setThemeConfig(config);
-            setCurrentTheme(resolveWidgetTheme(config, label));
           });
           unlisteners.push(() => uTheme());
           return;
@@ -1080,10 +1081,7 @@ function App() {
         const u5 = await tauriListen("theme_update", (event) => {
           if (!active) return;
           const config = event.payload;
-          setThemeConfig(config);
-          if (win.label.startsWith("widget-")) {
-            setCurrentTheme(resolveWidgetTheme(config, win.label));
-          }
+          if (!themePendingWrites.current) setThemeConfig(config);
         });
         if (!active) {
           u5();
@@ -1389,8 +1387,22 @@ function App() {
   };
 
   const onSaveThemes = async (config: WidgetThemeConfig) => {
+    const revision = ++themeSaveRevision.current;
+    themePendingWrites.current += 1;
     setThemeConfig(config);
-    await tauriInvoke("save_theme_config", { config });
+    const save = themeSaveQueue.current.catch(() => {}).then(() => tauriInvoke("save_theme_config", { config }));
+    themeSaveQueue.current = save;
+    try {
+      await save;
+    } finally {
+      themePendingWrites.current -= 1;
+      if (!themePendingWrites.current && revision === themeSaveRevision.current) {
+        try {
+          const saved = await tauriInvoke("get_theme_config");
+          if (!themePendingWrites.current && revision === themeSaveRevision.current) setThemeConfig(saved);
+        } catch (error) { console.error("Could not reload floating appearance", error); }
+      }
+    }
   };
 
   const toggleMaximize = async () => {
@@ -1600,7 +1612,7 @@ function App() {
             size={14}
             className="text-slate-500 group-hover:text-cyan-600 transition-colors"
           />
-          <span className="text-[11px] font-bold">{sidebarDockState.expanded ? "Close Sidebar" : "Open Sidebar"}</span>
+          <span className="text-[11px] font-bold">{sidebarDockState.expanded ? "Hide Sidebar" : "Open Sidebar"}</span>
         </button>
         <button
           onClick={() => tauriInvoke("show_main")}
@@ -1633,6 +1645,7 @@ function App() {
 
   // --- SUMMONABLE SIDEBAR HUB VIEW ---
   if (windowLabel === "sidebar") {
+    if (appConfig.sidebar_enabled === false) return null;
     const openDashboard = async () => {
       await tauriInvoke("show_main");
     };
@@ -2060,8 +2073,8 @@ function App() {
             </button>
             <button
               type="button"
-              aria-label="Close sidebar"
-              title="Close sidebar"
+              aria-label="Hide sidebar"
+              title="Hide sidebar"
               onClick={() => tauriInvoke("hide_sidebar").catch(console.error)}
               className="flex h-7 w-7 items-center justify-center rounded-md bg-red-500/15 text-red-500 hover:bg-red-500/25 transition-colors focus-visible:outline-2 focus-visible:outline-red-400"
             >
@@ -2330,7 +2343,6 @@ function App() {
         else await enable();
         setIsAutostart(await isEnabled());
       }}
-      activeWidgets={activeWidgets}
       updateInfo={updateInfo}
       setUpdateInfo={setUpdateInfo}
       updateCheckError={updateCheckError}
@@ -2505,7 +2517,7 @@ function App() {
                       }`}
                     >
                       <Activity size={14} />
-                      {sidebarDockState.expanded ? "Close Sidebar" : "Open Sidebar"}
+                      {sidebarDockState.expanded ? "Hide Sidebar" : "Open Sidebar"}
                     </button>
                     {activeWidgets.length > 0 && <button
                       type="button"

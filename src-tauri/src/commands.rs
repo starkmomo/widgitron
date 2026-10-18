@@ -182,7 +182,7 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
             log::warn!("Failed to update macOS deadline widget language: {error}");
         }
     }
-    crate::sidebar_hotkey::update_global_sidebar_hotkey(config.sidebar_hotkey.clone());
+    crate::sidebar_hotkey::update_global_sidebar_hotkey(config.sidebar_hotkey.clone(), config.sidebar_enabled.unwrap_or(true));
     if scale_changed {
         crate::widget_layout::apply_scale_to_open_widgets(&app, next_scale);
     }
@@ -434,6 +434,11 @@ pub async fn show_main(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn show_sidebar(app: tauri::AppHandle) -> Result<(), String> {
+    let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    if !config.sidebar_enabled.unwrap_or(true) {
+        config.sidebar_enabled = Some(true);
+        save_app_config(app.clone(), config).await?;
+    }
     crate::sidebar_dock::show(&app, !cfg!(target_os = "macos"))?;
     if let Some(tray_menu) = app.get_webview_window("tray-menu") {
         let _ = tray_menu.hide();

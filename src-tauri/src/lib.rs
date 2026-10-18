@@ -429,6 +429,7 @@ pub fn run() {
             sidebar_hotkey::start_global_sidebar_hotkey(
                 handle.clone(),
                 app_config.sidebar_hotkey.clone(),
+                app_config.sidebar_enabled.unwrap_or(true),
             );
             if let Err(err) = sidebar_dock::start(handle.clone(), &app_config) {
                 log::warn!("Failed to initialize sidebar docking: {}", err);
