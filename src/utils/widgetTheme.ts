@@ -93,10 +93,10 @@ export function resolveWidgetTheme(
     const widgetKind = kind ?? widgetThemeKindFromLabel(windowLabel);
     return {
       ...theme,
-      // Windows uses light clear glass. macOS retains its
-      // existing dark glass appearance; custom themes keep their own colors.
-      bg_color: isWindows ? "#f3f3f3" : "#0f172a",
-      bg_opacity: isWindows ? 0.04 : 0.10,
+      // Windows uses light clear glass. macOS uses a lighter slate tint over
+      // its native material; custom themes retain their chosen colors.
+      bg_color: isWindows ? "#f3f3f3" : isMacOS ? "#334155" : "#0f172a",
+      bg_opacity: isWindows ? 0.04 : isMacOS ? 0.06 : 0.10,
       primary_colors: isWindows ? windowsGlassPrimaryColors(theme, kind ?? widgetThemeKindFromLabel(windowLabel)) : theme.primary_colors,
       text_colors: theme.text_colors.map(color => {
         // Secondary labels must stay opaque too: desktop colors already show

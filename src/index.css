@@ -309,53 +309,53 @@ html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"],
   opacity: 1;
 }
 
-/* Typography is independent of material: all Windows presets, custom themes,
-   settings previews and sidebar modules use these same sizes. */
-html[data-platform="windows"] :where([data-widget-kind]:not([data-widget-kind="arxiv"])) {
+/* Keep widget type readable on both desktop platforms, independently of
+   material. Settings previews and sidebar modules use the same scale. */
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) {
   font-weight: 500;
 }
 
-html[data-platform="windows"] :where([data-widget-kind]:not([data-widget-kind="arxiv"])) [class~="text-[6px]"] {
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) [class~="text-[6px]"] {
   font-size: 10px;
   line-height: 1.45;
 }
 
-html[data-platform="windows"] :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[7px]"], [class~="text-[8px]"]) {
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[7px]"], [class~="text-[8px]"]) {
   font-size: 11px;
   line-height: 1.45;
   letter-spacing: normal;
 }
 
-html[data-platform="windows"] :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[9px]"], [class~="text-[11px]"]) {
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[9px]"], [class~="text-[11px]"]) {
   font-size: 12px;
   line-height: 1.5;
   letter-spacing: normal;
 }
 
-html[data-platform="windows"] :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[10px]"], .text-xs, [data-widget-text="title"]) {
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[10px]"], .text-xs, [data-widget-text="title"]) {
   font-size: 13px;
   line-height: 1.45;
   letter-spacing: normal;
 }
 
-html[data-platform="windows"] [data-sidebar-theme] > header > span {
+html:is([data-platform="windows"], [data-platform="macos"]) [data-sidebar-theme] > header > span {
   font-size: 14px;
   line-height: 1.4;
 }
 
-html[data-platform="windows"] [data-widget-kind="deadline"] .deadline-timeline [class~="text-[10px]"] {
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="deadline"] .deadline-timeline [class~="text-[10px]"] {
   font-size: 12px;
 }
 
-html[data-platform="windows"] [data-widget-kind="deadline"] .deadline-timeline time {
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="deadline"] .deadline-timeline time {
   font-size: 11px;
 }
 
-html[data-platform="windows"] [data-widget-kind="gpu"] .widget-item-surface {
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="gpu"] .widget-item-surface {
   min-height: 40px;
 }
 
-html[data-platform="windows"] [data-widget-kind="gpu"] .widget-item-surface.h-11 {
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="gpu"] .widget-item-surface.h-11 {
   height: auto;
   min-height: 54px;
 }
@@ -394,12 +394,12 @@ html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"],
   color: #1d4ed8;
 }
 
-html[data-platform="windows"] .arxiv-widget .arxiv-paper-title {
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget .arxiv-paper-title {
   font-size: 14px;
   line-height: 1.45;
 }
 
-html[data-platform="windows"] .arxiv-widget .arxiv-abstract-preview {
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget .arxiv-abstract-preview {
   font-size: 12px;
   line-height: 1.6;
 }
@@ -408,12 +408,12 @@ html[data-platform="windows"] .arxiv-widget .arxiv-abstract-text {
   opacity: 1;
 }
 
-html[data-platform="windows"] .arxiv-widget :is(.arxiv-keyword-control, .arxiv-paper-meta, .arxiv-paper-hints, .arxiv-reading-action, .arxiv-abstract-action) {
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget :is(.arxiv-keyword-control, .arxiv-paper-meta, .arxiv-paper-hints, .arxiv-reading-action, .arxiv-abstract-action) {
   font-size: 11px;
   letter-spacing: normal;
 }
 
-html[data-platform="windows"] .arxiv-widget .arxiv-paper-hints {
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget .arxiv-paper-hints {
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -430,9 +430,16 @@ html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"],
   color: #047857;
 }
 
-html[data-platform="windows"] .reading-dialog[data-compact="true"] [tabindex="0"] {
+html:is([data-platform="windows"], [data-platform="macos"]) .reading-dialog[data-compact="true"] [tabindex="0"] {
   font-size: 14px;
   line-height: 1.7;
+}
+
+/* Widget headers remain distinct from their larger body labels. */
+html[data-platform="macos"] .widget-header .text-xs,
+html[data-platform="macos"] .glass-preview > div > .widget-header {
+  font-size: 14px;
+  line-height: 1.4;
 }
 
 /* Custom Scrollbar */

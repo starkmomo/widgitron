@@ -15,22 +15,22 @@ const glass: WidgetTheme = {
   primary_colors: [],
 };
 
-test("macOS built-in glass retains its original tint, opacity and text colors", () => {
+test("macOS built-in glass uses a lighter tint while retaining opaque bright text", () => {
   const theme = resolveWidgetTheme({ themes: [glass], assignments: { "widget-quota-default": glass.id } }, "widget-quota-default", "quota")!;
-  assert.equal(theme.bg_color, "#0f172a");
-  assert.equal(theme.bg_opacity, 0.10);
+  assert.equal(theme.bg_color, "#334155");
+  assert.equal(theme.bg_opacity, 0.06);
   assert.deepEqual(theme.text_colors, [
     { name: "Main Text", value: "#ffffff", opacity: 1 },
     { name: "Sub Text", value: "#f1f5f9", opacity: 1 },
   ]);
 });
 
-test("macOS sidebar glass retains all original material values", () => {
+test("macOS sidebar uses the same lighter glass tint with readable cards", () => {
   const theme = resolveSidebarTheme({ active_theme_id: "glass" });
   assert.equal(theme.material, "native-glass");
-  assert.equal(theme.background, "#0f172a");
-  assert.equal(theme.header, "#0f172a");
-  assert.equal(theme.background_opacity, 0.10);
+  assert.equal(theme.background, "#334155");
+  assert.equal(theme.header, "#334155");
+  assert.equal(theme.background_opacity, 0.06);
   assert.equal(theme.header_opacity, 0.24);
   assert.equal(theme.card_opacity, 0.30);
   assert.equal(theme.blur, 0);

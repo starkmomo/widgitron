@@ -115,9 +115,9 @@ fn configure(glass: &NSVisualEffectView, dark: bool) {
     glass.setMaterial(NSVisualEffectMaterial::HUDWindow);
     glass.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
     glass.setState(NSVisualEffectState::Active);
-    // Soften the HUD's neutral tint without fading the sibling web content.
-    // Let the wallpaper's colors through instead of a heavy grey surface.
-    glass.setAlphaValue(0.6);
+    // Let more wallpaper color through the dark HUD material. The sibling
+    // web content stays fully opaque, including secondary labels.
+    glass.setAlphaValue(0.45);
     // Keep the native material and web text in the same appearance, including
     // when the user chooses an app theme different from the macOS appearance.
     let name = unsafe {
