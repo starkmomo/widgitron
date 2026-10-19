@@ -1,6 +1,6 @@
 use tauri::{AppHandle, Manager};
 
-/// Keep a macOS widget beside the desktop icons so Show Desktop can reveal it.
+/// Keep a macOS widget above desktop icons but below ordinary app windows.
 /// This is a desktop-level AppKit window, not a WidgetKit extension.
 #[cfg(target_os = "macos")]
 pub async fn set_macos_desktop_fixed(
@@ -27,7 +27,10 @@ pub async fn set_macos_desktop_fixed(
                 if enabled {
                     let icon_level =
                         CGWindowLevelForKey(CGWindowLevelKey::DesktopIconWindowLevelKey);
-                    native.setLevel((icon_level - 1) as isize);
+                    // Finder's desktop icon window covers the entire screen,
+                    // including its visually empty areas. Below it the widget
+                    // remains visible but Finder consumes clicks and drags.
+                    native.setLevel((icon_level + 1) as isize);
                     native.setCollectionBehavior(native.collectionBehavior() | desktop_flags);
                 } else {
                     native.setLevel(NSNormalWindowLevel);

@@ -1,4 +1,7 @@
 import { useState, useEffect } from "react";
+import type { ReactNode } from "react";
+import { WidgetContentList } from "../components/WidgetContentList";
+import { WidgetHeader } from "../components/WidgetHeader";
 import { Trophy, RefreshCw } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
 import { hexToRgba } from "../utils/color";
@@ -18,7 +21,7 @@ import { deadlineConferenceKey, selectWidgetDeadlines } from "../utils/deadlineK
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 
-export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHeader?: boolean; language: UiLanguage }) {
+export function DeadlineWidgetContent({ hideHeader = false, language, headerControls }: { hideHeader?: boolean; language: UiLanguage; headerControls?: ReactNode }) {
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
   const { conferences, now } = useDeadlineConferences(deadlines);
   const [paperConfig, setPaperConfig] = useState<PaperConfig>({});
@@ -163,16 +166,9 @@ export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHe
   };
 
   return (
-    <div className="h-full flex flex-col" style={{ color: mainText }}>
-      {!hideHeader && (
-        <div className="flex items-center justify-between gap-2 mb-4">
-          <div className="flex items-center gap-2">
-            <Trophy size={16} style={{ color: highlight }} />
-            <span className="text-xs font-black uppercase tracking-widest" style={{ color: subText }}>
-              Deadlines
-            </span>
-          </div>
-          <button
+    <div className="h-full min-h-0 flex flex-col" style={{ color: mainText }}>
+      {!hideHeader && <WidgetHeader icon={<Trophy size={16} style={{ color: highlight }} />} title="Deadlines" color={subText} controls={headerControls}
+        actions={<button
             onClick={handleRefresh}
             disabled={isRefreshing || !serviceEnabled}
             className="p-1 hover:bg-white/10 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -180,9 +176,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHe
             title="Refresh Deadlines"
           >
             <RefreshCw size={12} className={isRefreshing ? "animate-spin" : "hover:rotate-45 transition-transform"} />
-          </button>
-        </div>
-      )}
+          </button>} />}
 
       <ServiceErrorBanners
         backendError={paperBackendError}
@@ -202,7 +196,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHe
         )}
       />
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 w-full space-y-2">
+      <WidgetContentList className="pr-1 w-full">
         {!serviceEnabled ? (
           <div
             className="flex flex-col items-center justify-center text-center py-10 px-4 rounded-xl border border-dashed"
@@ -215,7 +209,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHe
           displayList.map((dl) => (
             <div
               key={deadlineConferenceKey(dl)}
-              className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10"
+              className="widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10"
             >
               <div className="flex items-start justify-between relative z-10 gap-2">
                 <div className="flex flex-col min-w-0 flex-1">
@@ -272,7 +266,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language }: { hideHe
             </span>
           </div>
         )}
-      </div>
+      </WidgetContentList>
     </div>
   );
 }

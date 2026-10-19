@@ -1,4 +1,4 @@
-import { Loader2, Monitor, Settings2 } from "lucide-react";
+import { Loader2, Settings2 } from "lucide-react";
 
 interface WidgetPreviewCardProps {
   title: string;
@@ -11,14 +11,12 @@ interface WidgetPreviewCardProps {
   onToggleSidebar: () => void;
   onToggleFloating: () => void;
   onConfigure: () => void;
-  desktopFixed?: boolean;
-  onToggleDesktop?: () => void;
 }
 
 export function WidgetPreviewCard({
   title, detail, theme = "dark", enabled, sidebarVisible, floatingVisible,
   loading = false, onToggleSidebar,
-  onToggleFloating, onConfigure, desktopFixed, onToggleDesktop,
+  onToggleFloating, onConfigure,
 }: WidgetPreviewCardProps) {
   const isLight = theme === "light";
   const buttonClass = `min-w-0 rounded-lg px-2 py-2 text-xs font-semibold whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 ${
@@ -51,14 +49,7 @@ export function WidgetPreviewCard({
           {loading ? <Loader2 size={14} className="mx-auto animate-spin" /> : floatingVisible ? "Window On" : "Window Off"}
         </button>
       </div>
-      {onToggleDesktop && floatingVisible && (
-        <button type="button" onClick={onToggleDesktop} disabled={!enabled || loading}
-          aria-pressed={Boolean(desktopFixed)}
-          title={desktopFixed ? "Return to floating window" : "Fix on Desktop"}
-          className={`mt-2 inline-flex w-full items-center justify-center gap-2 ${stateClass(Boolean(desktopFixed))}`}>
-          <Monitor size={13} /> {desktopFixed ? "On Desktop" : "Move to Desktop"}
-        </button>
-      )}
+
     </section>
   );
 }

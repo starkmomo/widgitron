@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
-import { Activity, Check, ChevronDown } from "lucide-react";
+import type { ReactNode } from "react";
+import { WidgetHeader } from "../components/WidgetHeader";
+import { Radar, Check, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
 import type { ArxivConfig, ArxivPaper } from "../types/config";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
@@ -16,7 +18,6 @@ import { tauriListen } from "../utils/tauriListen";
 import { arxivPaperLinks } from "../utils/arxivPaperLinks";
 import { useArxivLibrary } from "../hooks/useArxivLibrary";
 import { ArxivReadingActions } from "../components/ArxivReadingActions";
-import { ArxivSkippedDialog } from "../components/ArxivSkippedDialog";
 import { ArxivPaperActions } from "../components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
 
@@ -24,6 +25,7 @@ type SwipeDirection = "left" | "right" | "up";
 
 type ArxivWidgetContentProps = {
   hideHeader?: boolean;
+  headerControls?: ReactNode;
   appearance?: "light" | "dark";
 };
 
@@ -41,6 +43,7 @@ const paperCardVariants: Variants = {
 
 export function ArxivWidgetContent({
   hideHeader = false,
+  headerControls,
   appearance,
 }: ArxivWidgetContentProps) {
   const library = useArxivLibrary();
@@ -225,18 +228,8 @@ export function ArxivWidgetContent({
 
 
   return (
-    <div className="h-full flex flex-col select-none" style={{ color: mainText }}>
-      {!hideHeader && (
-        <div className="flex items-center gap-2 mb-4">
-          <Activity size={16} style={{ color: accent }} className="pointer-events-none" />
-          <span
-            className="text-xs font-black uppercase tracking-widest pointer-events-none"
-            style={{ color: subText }}
-          >
-            Arxiv Radar
-          </span>
-        </div>
-      )}
+    <div className="h-full min-h-0 flex flex-col select-none" style={{ color: mainText }}>
+      {!hideHeader && <WidgetHeader icon={<Radar size={16} style={{ color: accent }} />} title="Arxiv Radar" color={subText} controls={headerControls} />}
 
       <ServiceErrorBanners
         backendError={arxivBackendError}
@@ -356,9 +349,8 @@ export function ArxivWidgetContent({
           )}
         </div>
       )}
-      <div className="mb-2 flex shrink-0 items-center justify-end" data-no-drag="true"><ArxivSkippedDialog library={library} isLight={isLightAppearance} compact /></div>
       {library.error && <p role="alert" className="mb-2 text-[10px] text-red-500" title={library.error}>Could not update paper. Please try again.</p>}
-      <div className="flex-1 relative perspective-1000" data-no-drag="true">
+      <div className="flex-1 min-h-0 relative perspective-1000" data-no-drag="true">
         {!serviceEnabled ? (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 rounded-xl border border-dashed"
@@ -388,13 +380,13 @@ export function ArxivWidgetContent({
                 if (definition === "exit") setExitDirection(undefined);
               }}
               data-no-drag="true"
-              className="absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-5 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
+              className="widget-paper-card absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-3 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
             >
               <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1">
-                <h3 className="shrink-0 text-[10px] font-bold mb-3 leading-relaxed break-words">{currentPaper.title}</h3>
+                <h3 className="shrink-0 text-[10px] font-bold mb-2 leading-snug break-words">{currentPaper.title}</h3>
                 <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} />
               </div>
-              <div className="shrink-0 pt-3 border-t border-white/5 space-y-2">
+              <div className="shrink-0 pt-2 border-t border-white/5 space-y-1.5">
                 <div className="flex flex-wrap gap-1">
                   <span
                     className="text-[8px] bg-white/5 px-2 py-0.5 rounded-full font-medium"
@@ -415,7 +407,7 @@ export function ArxivWidgetContent({
                   <ArxivPaperActions key={currentPaper.id} paper={currentPaper} compact />
                 </div>
                 {arxivConfig.show_card_hints !== false && (
-                  <div className="flex items-center justify-between mt-3 text-[8px] font-black uppercase tracking-widest">
+                  <div className="flex items-center justify-between mt-2 text-[8px] font-black uppercase tracking-widest">
                     <span className="text-red-400">← Ignore</span>
                     <span className="text-blue-400">Open arXiv ↑</span>
                     <span className="text-emerald-400">Save →</span>
@@ -428,9 +420,9 @@ export function ArxivWidgetContent({
               />
             </motion.div>
           ) : (
-            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-4">
-              <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center">
-                <Check size={32} className="text-emerald-500" />
+            <div className="h-full min-h-0 flex flex-col items-center justify-center text-center p-4 space-y-2">
+              <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
+                <Check size={22} className="text-emerald-500" />
               </div>
               <div className="space-y-1">
                 <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No keywords configured" : "All caught up!"}</div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import {
   LayoutDashboard,
@@ -9,11 +9,8 @@ import {
   Minus,
   Square,
   Activity,
-  Lock,
-  Unlock,
   Pin,
   PinOff,
-  Monitor,
   Copy,
   RefreshCw,
   GripVertical,
@@ -75,6 +72,7 @@ import { ServiceErrorBanners } from "./components/ServiceErrorBanners";
 import { QuotaVisualizations } from "./components/QuotaVisualizations";
 import { StatCard } from "./components/StatCard";
 import { SectionEmptyState } from "./components/SectionEmptyState";
+import { FloatingWindowControls, type WidgetDisplayMode } from "./components/FloatingWindowControls";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
 import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
@@ -83,8 +81,11 @@ import { ConferenceUndoNotice } from "./components/ConferenceUndoNotice";
 import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
 import { conferencePreferenceIds, isConferenceFollowed, isConferenceIgnored, resolveConferencePreferences, updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
+import { observeSidebarContentHeight } from "./utils/sidebarContentHeight";
 import {
   compactSidebarTileLayout,
+  constrainSidebarTileHeights,
+  sidebarTileHeightLimits,
   findSidebarInsertionGuide,
   insertSidebarTileAtGuide,
   reconcileSidebarTileVisibility,
@@ -94,13 +95,13 @@ import {
   sidebarRowsFromLayout,
   sidebarTileWithinBounds,
   SIDEBAR_TILE_GAP,
-  SIDEBAR_TILE_MIN_HEIGHT,
   SIDEBAR_TILE_MIN_WIDTH_RATIO,
   type SidebarCollisionAxis,
   type SidebarInsertionGuide,
   type SidebarSectionKey,
   type SidebarResizeDirection,
   type SidebarTileRect,
+  type SidebarTileHeightLimitMap,
 } from "./utils/sidebarTileLayout";
 import { GPUWidgetContent } from "./widgets/GPUWidgetContent";
 import { DeadlineWidgetContent } from "./widgets/DeadlineWidgetContent";
@@ -243,7 +244,7 @@ const normalizeSidebarTileLayout = (
       const x = Math.min(1 - w, Math.max(0, legacyX / LEGACY_SIDEBAR_GRID_COLUMNS));
       const y = Math.max(0, legacyY * (LEGACY_SIDEBAR_GRID_ROW_HEIGHT + LEGACY_SIDEBAR_GRID_GAP));
       const h = Math.max(
-        SIDEBAR_TILE_MIN_HEIGHT,
+        sidebarTileHeightLimits(key, window.innerHeight).min,
         legacyH * LEGACY_SIDEBAR_GRID_ROW_HEIGHT + Math.max(0, legacyH - 1) * LEGACY_SIDEBAR_GRID_GAP
       );
       return { x, y, w, h };
@@ -255,7 +256,7 @@ const normalizeSidebarTileLayout = (
         : fallback.w;
     const h =
       typeof source?.h === "number" && Number.isFinite(source.h)
-        ? Math.max(SIDEBAR_TILE_MIN_HEIGHT, source.h)
+        ? Math.max(sidebarTileHeightLimits(key, window.innerHeight).min, source.h)
         : fallback.h;
     const x =
       typeof source?.x === "number" && Number.isFinite(source.x)
@@ -301,6 +302,8 @@ const normalizeSidebarTileLayout = (
 };
 
 function SidebarWidgetSection({
+  sectionKey,
+  onContentHeight,
   title,
   accentColor,
   theme,
@@ -310,6 +313,8 @@ function SidebarWidgetSection({
   onResizeStart,
   children,
 }: {
+  sectionKey: SidebarSectionKey;
+  onContentHeight: (key: SidebarSectionKey, height: number, expanded: boolean) => void;
   title: string;
   accentColor: string;
   theme: ResolvedSidebarTheme;
@@ -322,8 +327,16 @@ function SidebarWidgetSection({
   ) => void;
   children: ReactNode;
 }) {
+  const sectionRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (sectionKey === "arxiv") return;
+    const section = sectionRef.current;
+    if (!section) return;
+    return observeSidebarContentHeight(section, (height, expanded) => onContentHeight(sectionKey, height, expanded));
+  }, [sectionKey, onContentHeight]);
   return (
     <section
+      ref={sectionRef}
       className="group/sidebar-tile h-full min-h-0 rounded-md border overflow-hidden flex flex-col relative"
       style={{
         backgroundColor: isLight
@@ -673,6 +686,26 @@ function App() {
   const [serviceToggleErrorDismissed, setServiceToggleErrorDismissed] = useState(false);
   const [sidebarTileLayoutDraft, setSidebarTileLayoutDraft] =
     useState<Record<SidebarSectionKey, SidebarTileRect> | null>(null);
+  const [sidebarContentHeights, setSidebarContentHeights] = useState<Partial<Record<SidebarSectionKey, { height: number; expanded: boolean; collapsedHeight: number }>>>({});
+  const sidebarExpandedResizeOverrides = useRef(new Set<SidebarSectionKey>());
+  const [sidebarViewportHeight, setSidebarViewportHeight] = useState(() => window.innerHeight);
+  const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, expanded: boolean) => {
+    if (!expanded) sidebarExpandedResizeOverrides.current.delete(key);
+    setSidebarContentHeights((previous) => Math.abs((previous[key]?.height ?? 0) - height) < 2 && previous[key]?.expanded === expanded
+      ? previous : { ...previous, [key]: { height, expanded, collapsedHeight: expanded ? (previous[key]?.collapsedHeight ?? height) : height } });
+  }, []);
+  useEffect(() => {
+    if (windowLabel !== "sidebar" || appConfig.sidebar_enabled === false) return;
+    const update = () => setSidebarViewportHeight(window.innerHeight);
+    const observer = new ResizeObserver(update);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [windowLabel, appConfig.sidebar_enabled]);
   const [activeSidebarTile, setActiveSidebarTile] = useState<SidebarSectionKey | null>(null);
   const [sidebarTileDragPreview, setSidebarTileDragPreview] = useState<{
     key: SidebarSectionKey;
@@ -1436,7 +1469,6 @@ function App() {
 
   const toggleLock = async () => {
     const nextLocked = !isLocked;
-    setIsLocked(nextLocked);
 
     // When unlocking, we MUST exit desktop mode to allow movement
     // When locking, if we are NOT pinned, we re-enter desktop mode
@@ -1451,6 +1483,7 @@ function App() {
         }
       }
     }
+    setIsLocked(nextLocked);
   };
 
   const togglePin = async (labelToToggle?: string) => {
@@ -1483,27 +1516,11 @@ function App() {
     }
   };
 
-  const toggleDesktopFixed = async (labelToToggle?: string, title?: string) => {
-    const targetLabel = labelToToggle || windowLabel;
-    const currentlyFixed = targetLabel === windowLabel
-      ? isDesktopFixed
-      : appConfig.embedded?.[targetLabel] ?? false;
-    const fixed = !currentlyFixed;
-    try {
-      const nextConfig = await tauriInvoke("set_widget_desktop_fixed", {
-        label: targetLabel,
-        fixed,
-      });
-      setAppConfig(nextConfig);
-      if (targetLabel === windowLabel) setIsDesktopFixed(fixed);
-      if (fixed && !activeWidgets.includes(targetLabel) && title) {
-        await tauriInvoke("create_widget", { id: targetLabel, title });
-        setActiveWidgets((previous) => [...new Set([...previous, targetLabel])]);
-      }
-    } catch (error) {
-      console.error("Failed to change desktop mode", error);
-      setToggleWidgetError(formatWidgetToggleError(String(error)));
-    }
+  const setWidgetDisplayMode = async (mode: WidgetDisplayMode) => {
+    const nextConfig = await tauriInvoke("set_widget_display_mode", { label: windowLabel, mode });
+    setAppConfig(nextConfig);
+    setIsPinned(mode === "topmost");
+    setIsDesktopFixed(mode === "desktop");
   };
 
   const handleClose = async () => {
@@ -1711,9 +1728,26 @@ function App() {
     const visibleSidebarKeys = sidebarOrder.filter(
       (key) => sidebarWidgets[key] !== false
     );
-    const sidebarTileLayout =
-      sidebarTileLayoutDraft ??
-      normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys);
+    const heightLimits = Object.fromEntries(DEFAULT_SIDEBAR_ORDER.map((key) => [key,
+      sidebarTileHeightLimits(key, sidebarViewportHeight - 48, sidebarContentHeights[key]?.height),
+    ])) as SidebarTileHeightLimitMap;
+    const deadlineHeight = sidebarContentHeights.deadlines;
+    const timelineGrowth = deadlineHeight?.expanded && !sidebarExpandedResizeOverrides.current.has("deadlines")
+      ? Math.max(0, deadlineHeight.height - deadlineHeight.collapsedHeight) : 0;
+    const sidebarBaseLayout = constrainSidebarTileHeights(
+      sidebarTileLayoutDraft ?? normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys),
+      visibleSidebarKeys, heightLimits,
+    );
+    const sidebarTileLayout = constrainSidebarTileHeights(
+      sidebarBaseLayout, visibleSidebarKeys, heightLimits,
+      { deadlines: timelineGrowth },
+    );
+    const effectiveTimelineGrowth = sidebarTileLayout.deadlines.h - sidebarBaseLayout.deadlines.h;
+    const withoutTimelineGrowth = (layout: Record<SidebarSectionKey, SidebarTileRect>) =>
+      effectiveTimelineGrowth > 0 && !sidebarExpandedResizeOverrides.current.has("deadlines") ? {
+        ...layout,
+        deadlines: { ...layout.deadlines, h: Math.max(heightLimits.deadlines.min, layout.deadlines.h - effectiveTimelineGrowth) },
+      } : layout;
     sidebarOrderRef.current = sidebarOrder;
     const allSidebarSections: SidebarSectionDefinition[] = [
       {
@@ -1779,7 +1813,10 @@ function App() {
             ...sidebarOrderRef.current.filter((key) => !nextVisibleOrder.includes(key)),
           ]
         : sidebarOrderRef.current;
-      const compactedLayout = compactSidebarTileLayout(nextLayout, visibleSidebarKeys);
+      // Moving cards while a timeline is open must not save its temporary
+      // expansion as the user's collapsed reading height.
+      const savedLayout = withoutTimelineGrowth(nextLayout);
+      const compactedLayout = constrainSidebarTileHeights(savedLayout, visibleSidebarKeys, heightLimits);
       sidebarOrderRef.current = nextOrder;
       setSidebarTileLayoutDraft(compactedLayout);
       tauriInvoke("save_sidebar_tile_layout", {
@@ -1859,7 +1896,7 @@ function App() {
       const onPointerUp = () => {
         cleanup();
         if (!latestGuide) {
-          setSidebarTileLayoutDraft(sidebarTileLayout);
+          setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
           return;
         }
         const inserted = insertSidebarTileAtGuide(
@@ -1873,11 +1910,11 @@ function App() {
       };
       const onPointerCancel = () => {
         cleanup();
-        setSidebarTileLayoutDraft(sidebarTileLayout);
+        setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
       };
       const onWindowBlur = () => {
         cleanup();
-        setSidebarTileLayoutDraft(sidebarTileLayout);
+        setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
       };
 
       window.addEventListener("pointermove", onPointerMove);
@@ -1897,6 +1934,12 @@ function App() {
       const resizeTarget = event.currentTarget;
       const pointerId = event.pointerId;
       resizeTarget.setPointerCapture(pointerId);
+      // An explicit resize while a timeline is open overrides automatic fit
+      // until it is collapsed. Start from the currently displayed height.
+      if (sidebarContentHeights[key]?.expanded) {
+        sidebarExpandedResizeOverrides.current.add(key);
+        setSidebarTileLayoutDraft(sidebarTileLayout);
+      }
       setActiveSidebarTile(key);
 
       const startX = event.clientX;
@@ -1913,7 +1956,8 @@ function App() {
           direction,
           deltaXPixels,
           deltaYPixels,
-          metrics.width
+          metrics.width,
+          heightLimits[key],
         );
         if (!sidebarTileWithinBounds(nextRect)) return;
         const hasHorizontalEdge = direction.includes("e") || direction.includes("w");
@@ -1934,7 +1978,7 @@ function App() {
           metrics.width,
           preferredAxis
         );
-        setSidebarTileLayoutDraft(latestLayout);
+        setSidebarTileLayoutDraft(withoutTimelineGrowth(latestLayout));
       };
 
       const cleanup = () => {
@@ -1953,7 +1997,7 @@ function App() {
       };
       const onPointerCancel = () => {
         cleanup();
-        setSidebarTileLayoutDraft(sidebarTileLayout);
+        setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
       };
       const onWindowBlur = () => {
         cleanup();
@@ -2056,7 +2100,7 @@ function App() {
           style={{ backgroundColor: hexToRgba(sidebarTheme.header, sidebarTheme.header_opacity) }}
           onMouseDown={isMacOS ? undefined : startDrag}
         >
-          <span className="text-xs font-bold tracking-wide">Sidebar</span>
+          <span className="text-xs font-bold tracking-wide">Widgitron Sidebar</span>
           <div className="flex items-center gap-2" data-no-drag="true" onMouseDown={(event) => event.stopPropagation()}>
             <button
               type="button"
@@ -2166,6 +2210,8 @@ function App() {
                     }}
                   >
                     <SidebarWidgetSection
+                      sectionKey={section.key}
+                      onContentHeight={reportSidebarContentHeight}
                       title={section.title}
                       accentColor={section.accentColor}
                       theme={sidebarTheme}
@@ -2226,53 +2272,16 @@ function App() {
     const isDeadline = windowLabel.includes("deadlines");
     const isQuota = windowLabel.includes("quota");
 
-    return (
-      <div className="absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0">
-        {/* Reserve room for the visible macOS window controls in the card below. */}
-        <div className={`absolute top-1 right-1 flex items-center gap-1 transition-opacity duration-300 z-50 ${isMacOS ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-          <button
-            data-no-drag="true"
-            onClick={toggleLock}
-            title={isLocked ? "Unlock to move" : "Lock position"}
-            className="w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 text-white/70 hover:text-white transition-all shadow-lg backdrop-blur-md"
-          >
-            {isLocked ? <Lock size={12} /> : <Unlock size={12} />}
-          </button>
-          <button
-            data-no-drag="true"
-            onClick={() => togglePin()}
-            className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
-              isPinned ? "text-blue-400" : "text-white/70"
-            } hover:text-white transition-all shadow-lg backdrop-blur-md`}
-            title={isPinned ? (isMacOS ? "Keep in normal window order" : "Unpin (Embed in Desktop)") : "Keep above other windows"}
-          >
-            {isPinned ? <Pin size={12} /> : <PinOff size={12} />}
-          </button>
-          {isMacOS && <button
-            data-no-drag="true"
-            onClick={() => toggleDesktopFixed()}
-            className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
-              isDesktopFixed ? "text-blue-400" : "text-white/70"
-            } hover:text-white transition-all shadow-lg backdrop-blur-md`}
-            title={isDesktopFixed ? "Return to floating window" : "Fix on Desktop"}
-          >
-            <Monitor size={12} />
-          </button>}
-          <button
-            data-no-drag="true"
-            onClick={handleClose}
-            title="Hide widget"
-            className="w-7 h-7 flex items-center justify-center rounded-md bg-red-500/30 border border-red-500/20 text-red-400 hover:bg-red-50 hover:text-white transition-all shadow-lg backdrop-blur-md"
-          >
-            <X size={12} />
-          </button>
-        </div>
+    const controls = <FloatingWindowControls macOS={isMacOS} language={resolveLanguage(appConfig.language)} locked={isLocked} pinned={isPinned}
+      desktopFixed={isDesktopFixed} light={Boolean(currentTheme && isLightColor(currentTheme.bg_color))}
+      onToggleLock={toggleLock} onTogglePin={() => togglePin()} onDisplayModeChange={setWidgetDisplayMode} onHide={handleClose} />;
 
-        {/* The glass card fills the window; macOS controls use reserved insets. */}
+    return (
+      <div className="floating-window absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0"
+        data-floating-surface={currentTheme && currentTheme.bg_opacity >= 0.5 && isLightColor(currentTheme.bg_color) ? "light" : undefined}>
+
         <div
-          className={`flex-1 p-5 ${isMacOS ? "pt-12 pb-10" : ""} flex flex-col gap-4 relative overflow-hidden rounded-xl z-10 ${
-            isLocked ? "" : "shadow-2xl shadow-black/80"
-          }`}
+          className="min-h-0 flex-1 p-3 flex flex-col relative overflow-hidden rounded-xl z-10"
           style={
             windowLabel.startsWith("widget-") && currentTheme
               ? {
@@ -2293,10 +2302,10 @@ function App() {
           onMouseDown={!isLocked ? startDrag : undefined}
           data-tauri-drag-region={!isLocked ? "true" : "false"}
         >
-          {isGpu && <GPUWidgetContent />}
-          {isDeadline && <DeadlineWidgetContent language={resolveLanguage(appConfig.language)} />}
-          {windowLabel.includes("arxiv") && <ArxivWidgetContent />}
-          {isQuota && <QuotaWidgetContent />}
+          {isGpu && <GPUWidgetContent headerControls={controls} />}
+          {isDeadline && <DeadlineWidgetContent language={resolveLanguage(appConfig.language)} headerControls={controls} />}
+          {windowLabel.includes("arxiv") && <ArxivWidgetContent headerControls={controls} />}
+          {isQuota && <QuotaWidgetContent headerControls={controls} />}
         </div>
         {isMacOS && <button
           type="button"
@@ -2308,7 +2317,7 @@ function App() {
             event.stopPropagation();
             appWindow.startResizeDragging("SouthEast").catch(console.error);
           }}
-          className="absolute bottom-1 right-1 z-50 flex h-7 w-7 items-center justify-center rounded-md text-slate-400/70 hover:bg-white/10 hover:text-white cursor-se-resize"
+          className="absolute bottom-0 right-0 z-50 flex h-5 w-5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity items-center justify-center rounded-md text-slate-400/70 hover:bg-white/10 hover:text-white cursor-se-resize"
         >
           <Maximize2 size={12} />
         </button>}
@@ -2380,9 +2389,15 @@ function App() {
     >
       {/* Sidebar */}
       <aside
-        className={`w-64 border-r border-white/5 flex flex-col bg-[var(--sidebar-bg)] z-20 select-none`}
-        onMouseDown={startDrag}
+        className={`relative w-64 border-r border-white/5 flex flex-col bg-[var(--sidebar-bg)] z-20 select-none`}
+        onMouseDown={(event) => {
+          // Let Tauri handle this strip's native drag/double-click sequence;
+          // starting another drag here consumes its second click on macOS.
+          if (isMacOS && (event.target as HTMLElement).closest("[data-tauri-drag-region]")) return;
+          void startDrag(event);
+        }}
       >
+        {isMacOS && <div className="absolute inset-x-0 top-0 z-50 h-8" data-tauri-drag-region="true" />}
         <div className={`${isMacOS ? "px-6 pt-11 pb-3" : "p-6"} flex items-center gap-2.5 cursor-default`}>
           <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/40 overflow-hidden pointer-events-none">
             <img src="/logo.png" alt="Widgitron" className="w-full h-full object-cover" />
@@ -2562,8 +2577,6 @@ function App() {
                           }}
                           onToggleFloating={() => handleToggleWidget(id, title)}
                           onConfigure={() => openSettingsSection(section)}
-                          desktopFixed={isMacOS ? appConfig.embedded?.[id] ?? false : undefined}
-                          onToggleDesktop={isMacOS ? () => toggleDesktopFixed(id, title) : undefined}
                         />
                       );
                     })}

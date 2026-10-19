@@ -19,7 +19,7 @@ const SAVE_DEBOUNCE_MS: u64 = 300;
 // (quota at 1900ms) plus SetParent/DPI settle time.
 const PROGRAMMATIC_LAYOUT_SETTLE_MS: u64 = 2500;
 const MONITOR_POLL_INTERVAL_MS: u64 = 2000;
-const MIN_WIDGET_WIDTH: u32 = 220;
+const MIN_WIDGET_WIDTH: u32 = 300;
 const MIN_WIDGET_HEIGHT: u32 = 180;
 
 // First-run target sizes in logical CSS pixels (before OS DPI / UI scale).
@@ -342,11 +342,12 @@ fn ensure_widget_layout_for_window_at_scale(
         .ok_or_else(|| format!("No default widget layout for {}", label))?;
 
     ui_scale::apply_to_window(win, scale)?;
-    apply_layout_to_window(win, &target_monitor, layout, scale)?;
+    apply_layout_to_window(win, label, &target_monitor, layout, scale)?;
 
     // Persist the post-clamp geometry so stored fractions match what is on screen
     // (UI scale / min-size clamps can otherwise drift from the ideal default).
-    let (applied_position, applied_size) = normalized_to_physical(layout, &target_monitor, scale);
+    let (applied_position, applied_size) =
+        normalized_to_physical(layout, label, &target_monitor, scale);
     let applied_layout =
         physical_to_normalized(applied_position, applied_size, &target_monitor, scale);
 
@@ -435,7 +436,7 @@ fn persist_layout_for_window_at_scale(
 
     if let Some(stored_layout) = stored_layout {
         let (expected_position, expected_size) =
-            normalized_to_physical(stored_layout, &monitor, scale);
+            normalized_to_physical(stored_layout, label, &monitor, scale);
         if geometry_matches(position, size, expected_position, expected_size) {
             return Ok(());
         }
@@ -458,11 +459,20 @@ fn persist_layout_for_window_at_scale(
 
 fn apply_layout_to_window(
     win: &WebviewWindow,
+    label: &str,
     monitor: &Monitor,
     layout: NormalizedWidgetLayout,
     scale: f64,
 ) -> Result<(), String> {
-    let (position, size) = normalized_to_physical(layout, monitor, scale);
+    let minimum = widget_minimum_size(
+        label,
+        monitor_work_area(monitor),
+        monitor.scale_factor(),
+        scale,
+    );
+    win.set_min_size(Some(Size::Physical(minimum)))
+        .map_err(|e| e.to_string())?;
+    let (position, size) = normalized_to_physical(layout, label, monitor, scale);
     win.set_size(Size::Physical(size))
         .map_err(|e| e.to_string())?;
     win.set_position(Position::Physical(position))
@@ -572,27 +582,68 @@ fn physical_to_normalized(
 
 fn normalized_to_physical(
     layout: NormalizedWidgetLayout,
+    label: &str,
     monitor: &Monitor,
     scale: f64,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    normalized_to_physical_in_area(layout, monitor_work_area(monitor), scale)
+    let area = monitor_work_area(monitor);
+    let minimum = widget_minimum_size(label, area, monitor.scale_factor(), scale);
+    normalized_to_physical_with_minimum(layout, area, scale, minimum)
 }
 
+/// Minimum content area in CSS pixels, converted once for OS DPI and UI zoom.
+/// Cap to the work area so a small display cannot leave the controls offscreen.
+fn widget_minimum_size(
+    label: &str,
+    area: MonitorWorkArea,
+    dpi: f64,
+    scale: f64,
+) -> PhysicalSize<u32> {
+    let height = match label {
+        "widget-arxiv-default" => 300,
+        "widget-gpu-default" => 220,
+        _ => MIN_WIDGET_HEIGHT,
+    };
+    let dpi = if dpi.is_finite() && dpi > 0.0 {
+        dpi
+    } else {
+        1.0
+    };
+    let zoom = dpi * ui_scale::sanitize(Some(scale));
+    PhysicalSize::new(
+        ((MIN_WIDGET_WIDTH as f64 * zoom).round() as u32)
+            .max(1)
+            .min(area.width.max(1)),
+        ((height as f64 * zoom).round() as u32)
+            .max(1)
+            .min(area.height.max(1)),
+    )
+}
+
+#[cfg(test)]
 fn normalized_to_physical_in_area(
     layout: NormalizedWidgetLayout,
     area: MonitorWorkArea,
     scale: f64,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    let minimum = widget_minimum_size("widget-quota-default", area, 1.0, scale);
+    normalized_to_physical_with_minimum(layout, area, scale, minimum)
+}
+
+fn normalized_to_physical_with_minimum(
+    layout: NormalizedWidgetLayout,
+    area: MonitorWorkArea,
+    scale: f64,
+    minimum: PhysicalSize<u32>,
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
     let layout = sanitize_layout(layout);
     let scale = ui_scale::sanitize(Some(scale));
-    let min_width = ((MIN_WIDGET_WIDTH as f64 * scale).round() as u32).max(1);
-    let min_height = ((MIN_WIDGET_HEIGHT as f64 * scale).round() as u32).max(1);
 
     let width = ((layout.width * area.width as f64 * scale).round() as u32)
-        .max(min_width)
+        .max(minimum.width)
         .min(area.width.max(1));
     let height = ((layout.height * area.height as f64 * scale).round() as u32)
-        .max(min_height)
+        .max(minimum.height)
         .min(area.height.max(1));
 
     let desired_x = area.x + (layout.x * area.width as f64).round() as i32;
@@ -777,6 +828,57 @@ mod tests {
         let (ax, ay, aw, ah) = a;
         let (bx, by, bw, bh) = b;
         ax < bx + bw as i32 && bx < ax + aw as i32 && ay < by + bh as i32 && by < ay + ah as i32
+    }
+
+    #[test]
+    fn minimum_sizes_account_for_content_dpi_and_zoom() {
+        let area = sample_area(2560, 1440);
+        assert_eq!(
+            widget_minimum_size("widget-quota-default", area, 1.0, 1.0),
+            PhysicalSize::new(300, 180)
+        );
+        assert_eq!(
+            widget_minimum_size("widget-gpu-default", area, 2.0, 1.25),
+            PhysicalSize::new(750, 550)
+        );
+        assert_eq!(
+            widget_minimum_size("widget-arxiv-default", area, 2.0, 1.25),
+            PhysicalSize::new(750, 750)
+        );
+    }
+
+    #[test]
+    fn tiny_saved_layout_is_enlarged_and_kept_inside_work_area() {
+        let area = MonitorWorkArea {
+            x: -1200,
+            y: 40,
+            width: 1200,
+            height: 760,
+        };
+        let minimum = widget_minimum_size("widget-arxiv-default", area, 1.5, 1.25);
+        let layout = NormalizedWidgetLayout {
+            x: 0.95,
+            y: 0.95,
+            width: 0.08,
+            height: 0.08,
+        };
+        let (position, size) = normalized_to_physical_with_minimum(layout, area, 1.25, minimum);
+        assert_eq!(size, minimum);
+        assert!(
+            position.x >= area.x && position.x + size.width as i32 <= area.x + area.width as i32
+        );
+        assert!(
+            position.y >= area.y && position.y + size.height as i32 <= area.y + area.height as i32
+        );
+    }
+
+    #[test]
+    fn minimum_cannot_exceed_a_small_work_area() {
+        let area = sample_area(500, 400);
+        assert_eq!(
+            widget_minimum_size("widget-arxiv-default", area, 2.0, 2.0),
+            PhysicalSize::new(500, 400)
+        );
     }
 
     #[test]

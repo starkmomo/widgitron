@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from "react";
+import type { ReactNode } from "react";
+import { WidgetContentList } from "../components/WidgetContentList";
+import { WidgetHeader } from "../components/WidgetHeader";
 import { Gauge, RefreshCw, AlertCircle, Minus, Plus, Edit2, Globe, Cpu, User } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
 import { hexToRgba, adjustColorOpacity, isLightColor } from "../utils/color";
@@ -48,7 +51,7 @@ function renderQuotaAlert(
   );
 }
 
-export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolean }) {
+export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hideHeader?: boolean; headerControls?: ReactNode }) {
   const [quotas, setQuotas] = useState<QuotaItem[]>([]);
   const currentTheme = useWidgetTheme("quota");
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -318,24 +321,9 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
   };
 
   return (
-    <div className="h-full flex flex-col select-none" style={{ color: mainText }}>
-      {!hideHeader && (
-        <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
-          <div className="flex items-center gap-2">
-            <Gauge size={16} style={{ color: accent }} className="animate-pulse" />
-            <span className="text-xs font-black uppercase tracking-widest" style={{ color: subText }}>
-              Quota Monitor
-            </span>
-            {quotaHeaderHint && (
-              <span
-                className="text-[8px] font-black uppercase tracking-widest"
-                style={{ color: quotaHardErrorCount > 0 ? danger : warning }}
-              >
-                {quotaHeaderHint}
-              </span>
-            )}
-          </div>
-          <button
+    <div className="h-full min-h-0 flex flex-col select-none" style={{ color: mainText }}>
+      {!hideHeader && <WidgetHeader icon={<Gauge size={16} style={{ color: accent }} />} title="Quota Monitor" color={subText} controls={headerControls} status={quotaHeaderHint && <span className="text-[8px] font-bold" style={{ color: quotaHardErrorCount > 0 ? danger : warning }}>{quotaHeaderHint}</span>}
+        actions={<button
             onClick={handleRefresh}
             disabled={isRefreshing || !serviceEnabled}
             className="p-1 hover:bg-white/10 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -343,9 +331,7 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
             title="Refresh Quotas"
           >
             <RefreshCw size={12} className={isRefreshing ? "animate-spin" : "hover:rotate-45 transition-transform"} />
-          </button>
-        </div>
-      )}
+          </button>} />}
 
       <ServiceErrorBanners
         backendError={quotaBackendError}
@@ -387,10 +373,10 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
       )}
 
       {/* Quotas List */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 w-full space-y-2 pb-2">
+      <WidgetContentList className="pr-1 w-full pb-2">
         {!serviceEnabled ? (
           <div
-            className="flex flex-col items-center justify-center text-center mt-10 px-4 py-8 rounded-xl border border-dashed"
+            className="flex flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >
             <Gauge size={20} style={{ color: accent, opacity: 0.5 }} className="mb-3" />
@@ -454,7 +440,7 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
               return (
                 <div
                   key={q.id}
-                  className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
+                  className="widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
                 >
                   <div className="relative z-10 flex flex-col gap-2">
                     {/* Header: Title + optional shared reset */}
@@ -711,7 +697,7 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
           })
         ) : (
           <div
-            className="flex flex-col items-center justify-center text-center mt-10 px-4 py-8 rounded-xl border border-dashed"
+            className="flex flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >
             <Gauge size={20} style={{ color: accent, opacity: 0.5 }} className="mb-3" />
@@ -723,7 +709,7 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
             </span>
           </div>
         )}
-      </div>
+      </WidgetContentList>
     </div>
   );
 }

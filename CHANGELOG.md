@@ -1,8 +1,12 @@
 # Changelog
 
-## [Unreleased] - 2026-10-18
+## [Unreleased] - 2026-10-19
 
 ### 中文
+
+- **侧边栏卡片尺寸**：按模块设置最小高度，arXiv 保留完整阅读与操作区域；额度、GPU、会议卡片保留手动调整高度，上限为完整内容所需高度；内容多时可拉长看全，缩短后在卡片内滚动，少量内容不会拉出大块空白。旧的过小、过高布局会自动修正，后续卡片随之紧凑排列；修复异步主题加载后未绑定内容测量、导致卡片仍能被拉长的问题，测量前采用紧凑上限。展开会议时间线时卡片只增加时间线所需高度，收起后恢复；展开期间仍可手动调整。修正 macOS 桌面层浮窗位于 Finder 图标层下方而无法点击、拖动的问题；浮窗选项改为原生弹出菜单，可超出浮窗边界。补齐主窗口左侧顶部空白区的双击最大化/恢复，与右侧一致。
+
+- **侧边栏与浮窗整理**：侧边栏标题明确为“Widgitron 侧边栏”；侧边栏及独立 arXiv 浮窗移除“已忽略”管理入口，主界面仍可查看和恢复。浮窗按模块设置原生最小尺寸，兼顾 DPI、缩放和旧布局恢复；压缩内边距、页头和模块间距。macOS 浮窗的控制按钮在悬停或键盘聚焦时显示，“普通浮窗 / 始终置顶 / 置于桌面层”合并为互斥选项，位置锁定单独控制，并去掉总览中重复的桌面按钮；修正圆角外灰色残角，接收未激活浮窗的首次点击，避免按钮需要点两次；浅色浮窗内部卡片使用淡灰底和细描边，明确内容分组，透明主题保留玻璃效果。
 
 - **浮窗外观与侧边栏停用**：四个独立浮窗的外观集中到设置中的同一栏目，提供跟随主界面、浅色、深色、透明预设及示例预览；支持多个自定义主题、新建、复制及删除确认弹窗。侧边栏增加独立的启用开关，停用后隐藏内容、停止边缘检测并注销 Windows 快捷键，重启后保留；主动打开可重新启用。临时收起统一标为“隐藏侧边栏”。
 
@@ -39,6 +43,10 @@
 - **arXiv 空状态**：未设置关键词时，待看保持为空，可通过“全部”浏览所选分类的近期论文。
 
 ### English
+
+- **Sidebar card sizing**: Added module-specific minimum heights, preserving a usable reading and action area for arXiv. Quota, GPU, and conference cards retain manual resizing up to their complete content height: long lists can be expanded beyond one screen or scrolled in a shorter card, while short lists cannot leave large blank areas. Restored undersized or oversized cards are clamped and following cards close up. Content measurement attaches after asynchronous theme loading; cards use compact bounds until measurement is ready. Conference cards temporarily grow by the newly opened timeline height and restore their collapsed height when it is closed; manual resizing remains available while expanded. Fixed macOS desktop-layer widgets sitting below Finder's icon window and losing clicks and drags. Floating options now use a native menu that can extend outside the widget. Added native drag and double-click zoom/restore to the dashboard's upper-left blank area.
+
+- **Sidebar and floating windows**: Renamed the sidebar header to “Widgitron Sidebar”. Removed ignored-paper management from the sidebar and floating arXiv cards; it remains available in the dashboard. Added native minimum sizes per module, accounting for DPI, UI zoom, and restored layouts, and tightened padding, headers, and spacing. macOS controls appear on hover or keyboard focus; a single menu selects Normal floating window, Always on top, or Desktop layer, with a separate position lock. Removed the duplicate desktop button from Overview. Clipped grey artifacts outside floating-window corners and enabled first-click actions on inactive macOS widgets. Light floating windows use subtle grey card fills and outlines to distinguish content groups; transparent themes retain their glass styling.
 
 - **Floating appearance and sidebar control**: Manage all four floating windows in one Settings section, with live examples, Follow main, Light, Dark, Transparent, and multiple custom themes. Add explicit creation, duplication, and a deletion dialog. A persistent sidebar enable switch stops edge reveal and unregisters the Windows shortcut when disabled; opening it explicitly enables it again. Temporary dismissal is labeled Hide Sidebar.
 

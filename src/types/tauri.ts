@@ -134,7 +134,7 @@ export interface TauriCommandMap {
   save_app_config: void;
   save_sidebar_tile_layout: AppConfig;
   set_widget_always_on_top: AppConfig;
-  set_widget_desktop_fixed: AppConfig;
+  set_widget_display_mode: AppConfig;
   save_theme_config: void;
   download_and_install_update: void;
   create_widget: void;
@@ -206,7 +206,7 @@ export const TAURI_COMMAND_NAMES = [
   "save_app_config",
   "save_sidebar_tile_layout",
   "set_widget_always_on_top",
-  "set_widget_desktop_fixed",
+  "set_widget_display_mode",
   "save_theme_config",
   "download_and_install_update",
   "create_widget",
@@ -287,7 +287,7 @@ export interface TauriCommandArgs {
     widgets: Record<string, boolean> | null;
   };
   set_widget_always_on_top: { label: string; pinned: boolean };
-  set_widget_desktop_fixed: { label: string; fixed: boolean };
+  set_widget_display_mode: { label: string; mode: "normal" | "topmost" | "desktop" };
   save_theme_config: { config: WidgetThemeConfig };
   toggle_widget: { id: string; title: string };
   create_widget: { id: string; title: string };

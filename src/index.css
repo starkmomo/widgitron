@@ -86,6 +86,30 @@ body {
   border-radius: 0;
 }
 
+/* Clip the entire transparent widget surface, including composited shadows.
+   Clipping only the inner card leaves grey wedges outside its rounded corners
+   where its shadow meets the rectangular native webview bounds. */
+.floating-window {
+  border-radius: 12px;
+  clip-path: inset(0 round 12px);
+}
+
+/* White translucent cards need a darker outline on an opaque light surface.
+   Transparent and dark themes retain their existing glass styling. */
+.floating-window[data-floating-surface="light"] :is(.widget-item-card, .widget-item-surface, .widget-paper-card) {
+  background-color: rgba(15, 23, 42, 0.035);
+  border-color: rgba(100, 116, 139, 0.22);
+}
+
+.floating-window[data-floating-surface="light"] .widget-item-card:hover {
+  background-color: rgba(15, 23, 42, 0.055);
+  border-color: rgba(100, 116, 139, 0.30);
+}
+
+.floating-window[data-floating-surface="light"] .widget-server-header {
+  border-color: rgba(100, 116, 139, 0.28);
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

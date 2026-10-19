@@ -288,13 +288,35 @@ pub async fn set_widget_always_on_top(
     Ok(config)
 }
 
-/// Persist and apply the macOS desktop-level window mode independently of the
-/// move lock and always-on-top preference.
+/// The three macOS stacking modes are mutually exclusive. Persist both flags
+/// together so other windows never observe a half-applied mode change.
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WidgetDisplayMode {
+    Normal,
+    Topmost,
+    Desktop,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl WidgetDisplayMode {
+    fn apply_preferences(self, config: &mut AppConfig, label: &str) {
+        config
+            .always_on_top
+            .get_or_insert_with(Default::default)
+            .insert(label.to_string(), matches!(self, Self::Topmost));
+        config
+            .embedded
+            .get_or_insert_with(Default::default)
+            .insert(label.to_string(), matches!(self, Self::Desktop));
+    }
+}
+
 #[tauri::command]
-pub async fn set_widget_desktop_fixed(
+pub async fn set_widget_display_mode(
     app: AppHandle,
     label: String,
-    fixed: bool,
+    mode: WidgetDisplayMode,
 ) -> Result<AppConfig, String> {
     if !crate::widget_layout::is_tracked_widget(&label) {
         return Err(format!("Unsupported widget label: {}", label));
@@ -302,37 +324,27 @@ pub async fn set_widget_desktop_fixed(
     #[cfg(target_os = "macos")]
     {
         if let Some(win) = app.get_webview_window(&label) {
-            if fixed {
-                win.set_always_on_top(false)
-                    .map_err(|error| error.to_string())?;
-            }
-            crate::desktop::set_macos_desktop_fixed(&win, fixed).await?;
-            if !fixed {
-                let _ = win.set_focus();
+            win.set_always_on_top(false)
+                .map_err(|error| error.to_string())?;
+            crate::desktop::set_macos_desktop_fixed(
+                &win,
+                matches!(mode, WidgetDisplayMode::Desktop),
+            )
+            .await?;
+            if matches!(mode, WidgetDisplayMode::Topmost) {
+                win.set_always_on_top(true).map_err(|error| error.to_string())?;
             }
         }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = fixed;
-        return Err("Desktop fixation is only supported on macOS".to_string());
-    }
-    #[cfg(target_os = "macos")]
-    {
         let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-        config
-            .embedded
-            .get_or_insert_with(Default::default)
-            .insert(label.clone(), fixed);
-        if fixed {
-            config
-                .always_on_top
-                .get_or_insert_with(Default::default)
-                .insert(label, false);
-        }
+        mode.apply_preferences(&mut config, &label);
         config_store::write_config(&app, "app_config.json", &config)?;
         let _ = app.emit("app_config_update", &config);
         Ok(config)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, mode);
+        Err("This display-mode menu is only supported on macOS".to_string())
     }
 }
 
@@ -559,6 +571,10 @@ async fn create_widget_impl_with_options(
             .shadow(false)
             .always_on_top(keep_on_top)
             .skip_taskbar(true);
+        // An inactive macOS window otherwise consumes the first click just to
+        // activate itself, making every widget button appear to require two.
+        #[cfg(target_os = "macos")]
+        let builder = builder.accept_first_mouse(true);
 
         match builder.build() {
             Ok(win) => win,
@@ -1054,4 +1070,30 @@ pub fn get_antigravity_setup_status(
     app: AppHandle,
 ) -> Result<crate::antigravity::AntigravitySetupStatus, String> {
     Ok(crate::antigravity::get_setup_status(&app))
+}
+
+#[cfg(test)]
+mod widget_display_mode_tests {
+    use super::*;
+
+    #[test]
+    fn changing_mode_clears_the_previous_stacking_preference() {
+        let label = "widget-quota-default";
+        let mut config = AppConfig::default();
+        for mode in [
+            WidgetDisplayMode::Desktop,
+            WidgetDisplayMode::Topmost,
+            WidgetDisplayMode::Normal,
+        ] {
+            mode.apply_preferences(&mut config, label);
+            assert_eq!(
+                config.embedded.as_ref().and_then(|values| values.get(label)),
+                Some(&matches!(mode, WidgetDisplayMode::Desktop)),
+            );
+            assert_eq!(
+                config.always_on_top.as_ref().and_then(|values| values.get(label)),
+                Some(&matches!(mode, WidgetDisplayMode::Topmost)),
+            );
+        }
+    }
 }

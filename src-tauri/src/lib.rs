@@ -99,7 +99,7 @@ pub fn run() {
             commands::save_app_config,
             commands::save_sidebar_tile_layout,
             commands::set_widget_always_on_top,
-            commands::set_widget_desktop_fixed,
+            commands::set_widget_display_mode,
             commands::get_deadlines,
             commands::get_conference_catalog,
             commands::refresh_paper_deadlines,

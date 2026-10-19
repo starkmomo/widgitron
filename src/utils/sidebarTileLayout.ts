@@ -27,6 +27,47 @@ export const SIDEBAR_TILE_MIN_WIDTH_RATIO = 0.01;
 export const SIDEBAR_TILE_RESIZE_MIN_WIDTH = 84;
 export const SIDEBAR_TILE_MIN_HEIGHT = 128;
 
+export type SidebarTileHeightLimits = { min: number; max: number };
+export type SidebarTileHeightLimitMap = Record<SidebarSectionKey, SidebarTileHeightLimits>;
+
+const MIN_CONTENT_HEIGHT: Record<SidebarSectionKey, number> = {
+  quota: 136,
+  gpu: 160,
+  deadlines: 176,
+  arxiv: 300,
+};
+
+export function sidebarTileHeightLimits(
+  key: SidebarSectionKey,
+  viewportHeight: number,
+  naturalHeight?: number,
+): SidebarTileHeightLimits {
+  const min = MIN_CONTENT_HEIGHT[key];
+  const viewport = Number.isFinite(viewportHeight) ? Math.max(1, viewportHeight) : 800;
+  const cap = Math.max(min, Math.min(key === "arxiv" ? 560 : 640, Math.floor(viewport * 0.75)));
+  // arXiv is a reading viewport. Lists may grow to show all of their content,
+  // including beyond one screen, but cannot be stretched into empty space.
+  const contentMax = key === "arxiv" ? cap
+    : naturalHeight !== undefined && Number.isFinite(naturalHeight)
+      ? Math.ceil(Math.max(0, naturalHeight)) + 12
+      : min;
+  return { min, max: Math.max(min, contentMax) };
+}
+
+export function constrainSidebarTileHeights(
+  layout: Record<SidebarSectionKey, SidebarTileRect>,
+  keys: SidebarSectionKey[],
+  limits: SidebarTileHeightLimitMap,
+  contentGrowth: Partial<Record<SidebarSectionKey, number>> = {},
+) {
+  const bounded = { ...layout };
+  for (const key of keys) {
+    const requested = layout[key].h + Math.max(0, contentGrowth[key] ?? 0);
+    bounded[key] = { ...layout[key], h: Math.round(Math.min(limits[key].max, Math.max(limits[key].min, requested))) };
+  }
+  return compactSidebarTileLayout(bounded, keys);
+}
+
 export function sidebarRectsOverlap(a: SidebarTileRect, b: SidebarTileRect) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
@@ -385,7 +426,8 @@ export function resizeSidebarTileRect(
   direction: SidebarResizeDirection,
   deltaXPixels: number,
   deltaYPixels: number,
-  boardWidth: number
+  boardWidth: number,
+  heightLimits: SidebarTileHeightLimits = { min: SIDEBAR_TILE_MIN_HEIGHT, max: Number.POSITIVE_INFINITY },
 ) {
   const minWidthRatio = Math.min(
     0.95,
@@ -418,15 +460,12 @@ export function resizeSidebarTileRect(
     nextRect.w = right - nextRect.x;
   }
   if (direction.includes("s")) {
-    nextRect.h = Math.max(SIDEBAR_TILE_MIN_HEIGHT, startRect.h + deltaYPixels);
+    nextRect.h = Math.min(heightLimits.max, Math.max(heightLimits.min, startRect.h + deltaYPixels));
   }
   if (direction.includes("n")) {
     const bottom = startRect.y + startRect.h;
-    nextRect.y = Math.min(
-      bottom - SIDEBAR_TILE_MIN_HEIGHT,
-      Math.max(0, startRect.y + deltaYPixels)
-    );
-    nextRect.h = bottom - nextRect.y;
+    nextRect.h = Math.min(bottom, heightLimits.max, Math.max(heightLimits.min, startRect.h - deltaYPixels));
+    nextRect.y = bottom - nextRect.h;
   }
 
   return {
