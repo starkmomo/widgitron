@@ -72,7 +72,7 @@ import { ServiceErrorBanners } from "./components/ServiceErrorBanners";
 import { QuotaVisualizations } from "./components/QuotaVisualizations";
 import { StatCard } from "./components/StatCard";
 import { SectionEmptyState } from "./components/SectionEmptyState";
-import { FloatingWindowControls, type WidgetDisplayMode } from "./components/FloatingWindowControls";
+import { FloatingWindowControls } from "./components/FloatingWindowControls";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
 import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
@@ -82,6 +82,7 @@ import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
 import { conferencePreferenceIds, isConferenceFollowed, isConferenceIgnored, resolveConferencePreferences, updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
 import { observeSidebarContentHeight } from "./utils/sidebarContentHeight";
+import { useFloatingGlass } from "./hooks/useFloatingGlass";
 import {
   compactSidebarTileLayout,
   constrainSidebarTileHeights,
@@ -467,7 +468,6 @@ function App() {
   const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
   const [isLocked, setIsLocked] = useState(!isMacOS);
   const [isPinned, setIsPinned] = useState(false);
-  const [isDesktopFixed, setIsDesktopFixed] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
   const { conferences: deadlineConferences, now: deadlineNow } = useDeadlineConferences(deadlines);
@@ -720,6 +720,13 @@ function App() {
     dragging: false,
     preview_edge: null,
   });
+  const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme, appConfig.theme);
+  const sidebarGlass = sidebarTheme.material === "native-glass";
+  const nativeGlass = useFloatingGlass(windowLabel.startsWith("widget-") || windowLabel === "sidebar",
+    windowLabel === "sidebar" || Boolean(currentTheme),
+    windowLabel === "sidebar" ? sidebarGlass && appConfig.sidebar_enabled !== false : currentTheme?.material === "native-glass",
+    windowLabel === "sidebar" ? !isLightColor(sidebarTheme.background) : currentTheme ? !isLightColor(currentTheme.bg_color) : false,
+    windowLabel === "sidebar" ? sidebarDockState.edge : null);
   const sidebarOrderRef = useRef<SidebarSectionKey[]>(DEFAULT_SIDEBAR_ORDER);
   const sidebarBoardRef = useRef<HTMLDivElement | null>(null);
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
@@ -855,7 +862,8 @@ function App() {
       }
     };
     const summary = (config: AppConfig) => JSON.stringify({
-      theme: resolveSidebarTheme(config.sidebar_theme).id,
+      theme: resolveSidebarTheme(config.sidebar_theme, config.theme).id,
+      dashboardTheme: config.theme,
       widgets: config.sidebar_widgets,
       hideHeaders: config.sidebar_hide_widget_headers,
     });
@@ -892,7 +900,6 @@ function App() {
           });
           if (windowLabel.startsWith("widget-")) {
             setIsPinned(config.always_on_top?.[windowLabel] ?? false);
-            setIsDesktopFixed(config.embedded?.[windowLabel] ?? false);
           }
           if (windowLabel === "main") {
             setActiveWidgets(activeWidgetLabelsFromConfig(config) ?? (isMacOS ? [] : [
@@ -970,7 +977,6 @@ function App() {
 
           const pinned = ac.always_on_top?.[label] ?? false;
           setIsPinned(pinned);
-          setIsDesktopFixed(ac.embedded?.[label] ?? false);
 
           if (!isMacOS) {
             const stagger = WIDGET_DESKTOP_STAGGER_MS[label] ?? 500;
@@ -1513,14 +1519,8 @@ function App() {
       }
     } catch (e) {
       console.error(e);
+      throw e;
     }
-  };
-
-  const setWidgetDisplayMode = async (mode: WidgetDisplayMode) => {
-    const nextConfig = await tauriInvoke("set_widget_display_mode", { label: windowLabel, mode });
-    setAppConfig(nextConfig);
-    setIsPinned(mode === "topmost");
-    setIsDesktopFixed(mode === "desktop");
   };
 
   const handleClose = async () => {
@@ -1666,7 +1666,6 @@ function App() {
     const openDashboard = async () => {
       await tauriInvoke("show_main");
     };
-    const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme);
     const sidebarIsLight = isLightColor(sidebarTheme.background);
     const sidebarWindowBorder = sidebarIsLight
       ? "rgba(203, 213, 225, 0.96)"
@@ -2051,27 +2050,27 @@ function App() {
     return (
       <div
         data-sidebar-theme={sidebarTheme.id}
-        className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarDockRounding[sidebarDockState.edge]} ${
+        data-native-glass={sidebarGlass && nativeGlass ? "true" : undefined}
+        className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarGlass ? "glass-surface glass-sidebar" : ""} ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
         }`}
         style={{
           backgroundColor: hexToRgba(
             sidebarTheme.background,
-            sidebarTheme.background_opacity
+            sidebarGlass && !nativeGlass ? 0.88 : sidebarTheme.background_opacity
           ),
           backdropFilter:
-            sidebarTheme.blur > 0
+            !sidebarGlass && sidebarTheme.blur > 0
               ? `blur(${sidebarTheme.blur}px) saturate(145%)`
               : undefined,
           WebkitBackdropFilter:
-            sidebarTheme.blur > 0
+            !sidebarGlass && sidebarTheme.blur > 0
               ? `blur(${sidebarTheme.blur}px) saturate(145%)`
               : undefined,
-          border: `1px solid ${sidebarWindowBorder}`,
-          // This is the same inset highlight treatment used by the Dashboard
-          // frame, rendered directly so it remains visible in this transparent
-          // webview without adding a drop shadow.
-          boxShadow: `inset 0 0 0 1px ${sidebarWindowBorder}`,
+          // Glass already supplies its own rim. Stacking the old border and
+          // inset outline on it creates a conspicuous white frame.
+          border: `1px solid ${sidebarGlass ? "transparent" : sidebarWindowBorder}`,
+          boxShadow: sidebarGlass ? undefined : `inset 0 0 0 1px ${sidebarWindowBorder}`,
           outline: sidebarDockState.dragging ? "2px solid rgba(56, 189, 248, 0.72)" : undefined,
           outlineOffset: sidebarDockState.dragging ? "-2px" : undefined,
         }}
@@ -2272,27 +2271,30 @@ function App() {
     const isDeadline = windowLabel.includes("deadlines");
     const isQuota = windowLabel.includes("quota");
 
-    const controls = <FloatingWindowControls macOS={isMacOS} language={resolveLanguage(appConfig.language)} locked={isLocked} pinned={isPinned}
-      desktopFixed={isDesktopFixed} light={Boolean(currentTheme && isLightColor(currentTheme.bg_color))}
-      onToggleLock={toggleLock} onTogglePin={() => togglePin()} onDisplayModeChange={setWidgetDisplayMode} onHide={handleClose} />;
+    const controls = <FloatingWindowControls locked={isLocked} pinned={isPinned}
+      light={Boolean(currentTheme && isLightColor(currentTheme.bg_color))}
+      onToggleLock={toggleLock} onTogglePin={() => togglePin()} onHide={handleClose} />;
 
     return (
-      <div className="floating-window absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0"
-        data-floating-surface={currentTheme && currentTheme.bg_opacity >= 0.5 && isLightColor(currentTheme.bg_color) ? "light" : undefined}>
+      <div className={`floating-window absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0 ${currentTheme?.material === "native-glass" ? "glass-surface" : ""}`}
+        role={currentTheme?.material === "native-glass" ? "group" : undefined} aria-label={currentTheme?.material === "native-glass" ? "Glass" : undefined}
+        data-native-glass={nativeGlass ? "true" : undefined}
+        data-floating-surface={currentTheme && (currentTheme.bg_opacity >= 0.5 || currentTheme.material === "native-glass") && isLightColor(currentTheme.bg_color) ? "light" : undefined}>
 
         <div
           className="min-h-0 flex-1 p-3 flex flex-col relative overflow-hidden rounded-xl z-10"
           style={
             windowLabel.startsWith("widget-") && currentTheme
               ? {
-                  backgroundColor: hexToRgba(currentTheme.bg_color, currentTheme.bg_opacity),
+                  backgroundColor: hexToRgba(currentTheme.bg_color,
+                    currentTheme.material === "native-glass" && !nativeGlass ? 0.84 : currentTheme.bg_opacity),
                   color: currentTheme.text_colors?.find((c) => c.name === "Main Text")
                     ? hexToRgba(
                         currentTheme.text_colors.find((c) => c.name === "Main Text")!.value,
                         currentTheme.text_colors.find((c) => c.name === "Main Text")!.opacity ?? 1.0
                       )
                     : "#ffffff",
-                  border: `1px solid ${hexToRgba(
+                  border: nativeGlass ? "1px solid transparent" : `1px solid ${hexToRgba(
                     currentTheme.text_colors?.find((c) => c.name === "Main Text")?.value || "#ffffff",
                     0.1
                   )}`

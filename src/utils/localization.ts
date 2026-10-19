@@ -233,7 +233,7 @@ const ZH: Record<string, string> = {
   "Accent opacity": "强调色不透明度", "Success opacity": "正常状态不透明度",
   "Warning opacity": "警告状态不透明度", "Danger opacity": "错误状态不透明度",
   "Highlight opacity": "高亮色不透明度",
-  "Transparent": "透明", "Accent": "强调色", "Success": "正常", "Warning": "警告", "Danger": "错误", "Highlight": "高亮色",
+  "Transparent": "透明", "Glass": "玻璃", "Accent": "强调色", "Success": "正常", "Warning": "警告", "Danger": "错误", "Highlight": "高亮色",
   "Assign Theme to Widgets": "为浮窗分配主题", "Create Theme": "创建主题",
   "Duplicate Theme": "复制主题", "Editing Custom Theme": "编辑自定义主题",
   "Duplicate": "复制", "Built-in": "内置", "Night": "深色",
@@ -367,6 +367,9 @@ const ZH: Record<string, string> = {
   "Dock target ready": "已到达停靠位置", "Moving sidebar": "正在移动侧边栏",
   "Unknown Author": "未知作者", "SYSTEM": "系统",
   "Your editable sidebar theme.": "你可以编辑的侧边栏主题。",
+  "Match the main window's light or dark appearance.": "随主界面切换浅色或深色。",
+  "A glass backdrop with readable module cards.": "通透背景，搭配清晰的模块卡片。",
+  "If this theme is in use, the sidebar will switch to Light.": "如果正在使用此主题，侧边栏将切换为浅色。",
 };
 
 function translated(source: string): string {

@@ -32,10 +32,13 @@ mod config_store;
 mod deadlines;
 mod desktop;
 mod gpu;
+mod glass_shape;
 mod logger;
 mod main_navigation;
 #[cfg(target_os = "macos")]
 mod macos_setup;
+#[cfg(target_os = "macos")]
+mod macos_glass;
 #[cfg(target_os = "macos")]
 mod macos_tray;
 #[cfg(target_os = "macos")]
@@ -61,6 +64,8 @@ mod ui_scale;
 mod utils;
 mod vscode_secrets;
 mod widget_layout;
+#[cfg(windows)]
+mod windows_glass;
 
 pub fn run() {
     tauri::Builder::default()
@@ -100,6 +105,7 @@ pub fn run() {
             commands::save_sidebar_tile_layout,
             commands::set_widget_always_on_top,
             commands::set_widget_display_mode,
+            commands::set_widget_glass,
             commands::get_deadlines,
             commands::get_conference_catalog,
             commands::refresh_paper_deadlines,
@@ -607,6 +613,20 @@ pub fn run() {
                 let flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED;
                 let _ = window.app_handle().save_window_state(flags);
                 return;
+            }
+
+            #[cfg(windows)]
+            if label == "sidebar" || widget_layout::is_tracked_widget(&label) {
+                match event {
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                        | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                        if let Some(widget) = window.app_handle().get_webview_window(&label) {
+                            windows_glass::geometry_changed(&widget);
+                        }
+                    }
+                    tauri::WindowEvent::Destroyed => windows_glass::forget(&label),
+                    _ => {}
+                }
             }
 
             if !widget_layout::is_tracked_widget(&label) {

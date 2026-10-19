@@ -1,12 +1,19 @@
 # Changelog
 
-## [Unreleased] - 2026-10-19
+## [Unreleased] - 2026-10-20
 
 ### 中文
 
-- **侧边栏卡片尺寸**：按模块设置最小高度，arXiv 保留完整阅读与操作区域；额度、GPU、会议卡片保留手动调整高度，上限为完整内容所需高度；内容多时可拉长看全，缩短后在卡片内滚动，少量内容不会拉出大块空白。旧的过小、过高布局会自动修正，后续卡片随之紧凑排列；修复异步主题加载后未绑定内容测量、导致卡片仍能被拉长的问题，测量前采用紧凑上限。展开会议时间线时卡片只增加时间线所需高度，收起后恢复；展开期间仍可手动调整。修正 macOS 桌面层浮窗位于 Finder 图标层下方而无法点击、拖动的问题；浮窗选项改为原生弹出菜单，可超出浮窗边界。补齐主窗口左侧顶部空白区的双击最大化/恢复，与右侧一致。
+- **arXiv 下拉菜单**：按浮窗或侧边栏主题匹配菜单配色；玻璃与透明主题使用通透背景，展开时虚化、淡化后方论文卡片，收起后恢复，避免菜单选项和摘要文字重叠。玻璃菜单复用边缘高光。
 
-- **侧边栏与浮窗整理**：侧边栏标题明确为“Widgitron 侧边栏”；侧边栏及独立 arXiv 浮窗移除“已忽略”管理入口，主界面仍可查看和恢复。浮窗按模块设置原生最小尺寸，兼顾 DPI、缩放和旧布局恢复；压缩内边距、页头和模块间距。macOS 浮窗的控制按钮在悬停或键盘聚焦时显示，“普通浮窗 / 始终置顶 / 置于桌面层”合并为互斥选项，位置锁定单独控制，并去掉总览中重复的桌面按钮；修正圆角外灰色残角，接收未激活浮窗的首次点击，避免按钮需要点两次；浅色浮窗内部卡片使用淡灰底和细描边，明确内容分组，透明主题保留玻璃效果。
+- **侧边栏外观**：增加跟随主界面和玻璃，与浅色、深色一起独立选择；跟随模式同步主界面的明暗变化。玻璃复用浮窗的原生模糊与边缘高光，内部模块卡片提高不透明度并保持清晰文字；四条停靠边分别裁剪圆角，不支持模糊时保留可读背景。复制玻璃样式可继续自定义，已有主题选择保持兼容。删除自定义主题前显示确认弹窗，取消保留主题，删除当前主题后回到浅色。
+
+- **浮窗操作统一**：macOS 浮窗使用与 Windows 相同的锁定、置顶、隐藏按钮，移除普通浮窗模式。默认显示在桌面层，取消置顶后返回桌面层，保留已有置顶选择。
+- **玻璃外观试用**：Windows 和 macOS 独立浮窗增加可选的模糊背景与自绘圆角高光、内侧暗边，模拟轻微透镜感。macOS 背景固定激活外观；Windows 使用原生背景模糊，桌面层/置顶切换后重新应用，按 DPI 与缩放裁剪圆角，移动/缩放时暂用可读背景并在结束后恢复。系统不支持时自动回退；亮色文字单独叠在上层，arXiv 操作按钮增加对比度。设置预览复用边缘光效，并使用冷暖参考背景展示通透程度。此效果不扭曲窗外桌面，切回普通主题会移除材质，现有自定义主题兼容。
+
+- **侧边栏卡片尺寸**：按模块设置最小高度，arXiv 保留完整阅读与操作区域；额度、GPU、会议卡片保留手动调整高度，上限为完整内容所需高度；内容多时可拉长看全，缩短后在卡片内滚动，少量内容不会拉出大块空白。旧的过小、过高布局会自动修正，后续卡片随之紧凑排列；修复异步主题加载后未绑定内容测量、导致卡片仍能被拉长的问题，测量前采用紧凑上限。展开会议时间线时卡片只增加时间线所需高度，收起后恢复；展开期间仍可手动调整。修正 macOS 桌面层浮窗位于 Finder 图标层下方而无法点击、拖动的问题；补齐主窗口左侧顶部空白区的双击最大化/恢复，与右侧一致。
+
+- **侧边栏与浮窗整理**：侧边栏标题明确为“Widgitron 侧边栏”；侧边栏及独立 arXiv 浮窗移除“已忽略”管理入口，主界面仍可查看和恢复。浮窗按模块设置原生最小尺寸，兼顾 DPI、缩放和旧布局恢复；压缩内边距、页头和模块间距。macOS 浮窗的控制按钮在悬停或键盘聚焦时显示，使用锁定、置顶、隐藏按钮，默认固定到桌面，并去掉总览中重复的桌面按钮；修正圆角外灰色残角，接收未激活浮窗的首次点击，避免按钮需要点两次；浅色浮窗内部卡片使用淡灰底和细描边，明确内容分组，透明主题保留玻璃效果。
 
 - **浮窗外观与侧边栏停用**：四个独立浮窗的外观集中到设置中的同一栏目，提供跟随主界面、浅色、深色、透明预设及示例预览；支持多个自定义主题、新建、复制及删除确认弹窗。侧边栏增加独立的启用开关，停用后隐藏内容、停止边缘检测并注销 Windows 快捷键，重启后保留；主动打开可重新启用。临时收起统一标为“隐藏侧边栏”。
 
@@ -44,9 +51,16 @@
 
 ### English
 
-- **Sidebar card sizing**: Added module-specific minimum heights, preserving a usable reading and action area for arXiv. Quota, GPU, and conference cards retain manual resizing up to their complete content height: long lists can be expanded beyond one screen or scrolled in a shorter card, while short lists cannot leave large blank areas. Restored undersized or oversized cards are clamped and following cards close up. Content measurement attaches after asynchronous theme loading; cards use compact bounds until measurement is ready. Conference cards temporarily grow by the newly opened timeline height and restore their collapsed height when it is closed; manual resizing remains available while expanded. Fixed macOS desktop-layer widgets sitting below Finder's icon window and losing clicks and drags. Floating options now use a native menu that can extend outside the widget. Added native drag and double-click zoom/restore to the dashboard's upper-left blank area.
+- **arXiv keyword menus**: Match the floating widget or sidebar appearance. Glass and transparent menus use translucent surfaces and temporarily blur and fade the paper behind them, restoring it on close so option text stays separate from the abstract. Glass menus share the rim highlights.
 
-- **Sidebar and floating windows**: Renamed the sidebar header to “Widgitron Sidebar”. Removed ignored-paper management from the sidebar and floating arXiv cards; it remains available in the dashboard. Added native minimum sizes per module, accounting for DPI, UI zoom, and restored layouts, and tightened padding, headers, and spacing. macOS controls appear on hover or keyboard focus; a single menu selects Normal floating window, Always on top, or Desktop layer, with a separate position lock. Removed the duplicate desktop button from Overview. Clipped grey artifacts outside floating-window corners and enabled first-click actions on inactive macOS widgets. Light floating windows use subtle grey card fills and outlines to distinguish content groups; transparent themes retain their glass styling.
+- **Sidebar appearance**: Add Follow main and Glass alongside Light and Dark, with separate choices from floating widgets. Follow main updates with the dashboard appearance. Glass shares the native backdrop and edge highlights while using more opaque module cards and clear text; clip the exposed corners for each docking edge and fall back to a readable surface when blur is unavailable. Copied glass themes remain editable and existing selections stay compatible. Confirm before deleting a custom theme; cancel preserves it and deleting the active theme restores Light.
+
+- **Consistent floating controls**: Use the same lock, pin and hide buttons on macOS and Windows. Remove normal floating mode on macOS; default to the desktop layer and return there when unpinned, preserving existing always-on-top choices.
+- **Glass appearance preview**: Add Windows and macOS native blur with custom curved highlights and an inner shadow to suggest a subtle lens. macOS keeps its material active. Windows reapplies the backdrop after desktop/pin transitions, clips corners using DPI and zoom, and uses a readable surface while moving or resizing before restoring blur. Unsupported systems fall back safely, with bright web content and higher-contrast arXiv actions. Settings previews share the rim effects over a warm and cool reference scene. This effect does not distort the desktop. Switching back removes the native material, preserving existing custom themes.
+
+- **Sidebar card sizing**: Added module-specific minimum heights, preserving a usable reading and action area for arXiv. Quota, GPU, and conference cards retain manual resizing up to their complete content height: long lists can be expanded beyond one screen or scrolled in a shorter card, while short lists cannot leave large blank areas. Restored undersized or oversized cards are clamped and following cards close up. Content measurement attaches after asynchronous theme loading; cards use compact bounds until measurement is ready. Conference cards temporarily grow by the newly opened timeline height and restore their collapsed height when it is closed; manual resizing remains available while expanded. Fixed macOS desktop-layer widgets sitting below Finder's icon window and losing clicks and drags. Added native drag and double-click zoom/restore to the dashboard's upper-left blank area.
+
+- **Sidebar and floating windows**: Renamed the sidebar header to “Widgitron Sidebar”. Removed ignored-paper management from the sidebar and floating arXiv cards; it remains available in the dashboard. Added native minimum sizes per module, accounting for DPI, UI zoom, and restored layouts, and tightened padding, headers, and spacing. macOS controls appear on hover or keyboard focus; lock, pin and hide buttons match Windows, with the desktop layer as the default. Removed the duplicate desktop button from Overview. Clipped grey artifacts outside floating-window corners and enabled first-click actions on inactive macOS widgets. Light floating windows use subtle grey card fills and outlines to distinguish content groups; transparent themes retain their glass styling.
 
 - **Floating appearance and sidebar control**: Manage all four floating windows in one Settings section, with live examples, Follow main, Light, Dark, Transparent, and multiple custom themes. Add explicit creation, duplication, and a deletion dialog. A persistent sidebar enable switch stops edge reveal and unregisters the Windows shortcut when disabled; opening it explicitly enables it again. Temporary dismissal is labeled Hide Sidebar.
 

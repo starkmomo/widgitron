@@ -63,7 +63,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
         ref={triggerRef}
         type="button"
         data-no-drag="true"
-        className={`mt-2 inline-flex shrink-0 self-start items-center gap-1 rounded text-blue-500 hover:text-blue-600 hover:underline focus-visible:outline-2 focus-visible:outline-blue-500 ${compact ? "text-[9px]" : "text-[10px]"}`}
+        className={`arxiv-abstract-action mt-2 inline-flex shrink-0 self-start items-center gap-1 rounded text-blue-500 hover:text-blue-600 hover:underline focus-visible:outline-2 focus-visible:outline-blue-500 ${compact ? "text-[9px]" : "text-[10px]"}`}
         onPointerDownCapture={(event) => event.stopPropagation()}
         onClick={() => setReading(true)}
         aria-haspopup="dialog"

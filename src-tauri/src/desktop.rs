@@ -507,6 +507,7 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                 // restore the user UI scale without host-DPI compensation.
                 apply_widget_zoom(app, &win, 1.0);
             }
+            crate::windows_glass::refresh(&win);
         }
 
         #[cfg(not(windows))]

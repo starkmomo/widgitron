@@ -110,6 +110,116 @@ body {
   border-color: rgba(100, 116, 139, 0.28);
 }
 
+/* Glass already blends the desktop into the background. Keep foreground
+   labels opaque and give glyphs a subtle dark edge over busy wallpapers. */
+.glass-surface {
+  isolation: isolate;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+
+/* A narrow, curved rim suggests a lens without washing out the content.
+   These highlights are decorative: all controls remain in the web content
+   above a stable native blur, and no layer reads or captures the desktop. */
+.glass-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1.25px;
+  background: conic-gradient(from 135deg,
+    rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.80) 12%,
+    rgba(255, 255, 255, 0.13) 28%, rgba(255, 255, 255, 0.08) 42%,
+    rgba(255, 255, 255, 0.88) 58%, rgba(255, 255, 255, 0.22) 72%,
+    rgba(255, 255, 255, 0.06) 86%, rgba(255, 255, 255, 0.12));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+.glass-surface::after {
+  content: "";
+  position: absolute;
+  inset: 1.25px;
+  z-index: 20;
+  pointer-events: none;
+  border-radius: calc(var(--glass-radius, 12px) - 1.25px);
+  background: radial-gradient(ellipse 75% 22% at 20% 0%, rgba(255, 255, 255, 0.12), transparent 80%);
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.23),
+    inset -1px -1px 2px rgba(0, 0, 0, 0.22),
+    inset 0 -4px 8px -7px rgba(255, 255, 255, 0.65);
+}
+
+.glass-surface :is(span, p):is(.opacity-50, .opacity-60, .opacity-65, .opacity-70, .opacity-80) {
+  opacity: 1;
+}
+
+.glass-surface [data-floating-controls] button {
+  color: #f1f5f9;
+}
+
+.glass-surface .arxiv-reading-action {
+  color: #f8fafc;
+  background-color: rgba(15, 23, 42, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  font-weight: 600;
+}
+
+.glass-surface .arxiv-reading-action[aria-pressed="true"] {
+  color: #dbeafe;
+  background-color: rgba(37, 99, 235, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.55);
+}
+
+.glass-surface .arxiv-reading-action:hover:not(:disabled) {
+  background-color: rgba(15, 23, 42, 0.52);
+}
+
+.glass-surface :is(.arxiv-paper-action, .arxiv-abstract-action) {
+  color: #bfdbfe;
+}
+
+.glass-surface :is(.arxiv-paper-action, .arxiv-abstract-action):hover {
+  color: #fff;
+}
+
+/* The settings preview blurs its reference scene; the real widget uses the
+   native desktop material. Both use the same rim, shading and action colors. */
+.glass-preview {
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+}
+
+/* A docked sidebar rounds only the pair of corners facing the desktop. */
+.glass-sidebar::before {
+  opacity: 0.55;
+}
+
+.glass-sidebar::after {
+  border-radius: inherit;
+  opacity: 0.6;
+}
+
+.glass-menu {
+  --glass-radius: 8px;
+}
+
+.glass-menu::before {
+  opacity: 0.55;
+}
+
+.glass-menu::after {
+  opacity: 0.5;
+}
+
+.floating-preview-scene {
+  background:
+    radial-gradient(ellipse at 16% 26%, rgba(204, 229, 233, 0.7), transparent 45%),
+    linear-gradient(135deg, #466a83 5%, #638da0 32%, #d3b28a 57%, #a56956 76%, #4c4565);
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

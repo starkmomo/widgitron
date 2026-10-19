@@ -263,38 +263,33 @@ pub async fn set_widget_always_on_top(
     }
 
     #[cfg(target_os = "macos")]
-    if let Some(win) = app.get_webview_window(&label) {
-        if pinned {
-            crate::desktop::set_macos_desktop_fixed(&win, false).await?;
-        }
-        win.set_always_on_top(pinned)
-            .map_err(|error| error.to_string())?;
+    {
+        return set_widget_display_mode(
+            app,
+            label,
+            if pinned { WidgetDisplayMode::Topmost } else { WidgetDisplayMode::Desktop },
+        ).await;
     }
-
-    let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-    config
-        .always_on_top
-        .get_or_insert_with(Default::default)
-        .insert(label.clone(), pinned);
-    #[cfg(target_os = "macos")]
-    if pinned {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
         config
-            .embedded
+            .always_on_top
             .get_or_insert_with(Default::default)
-            .insert(label, false);
+            .insert(label, pinned);
+        config_store::write_config(&app, "app_config.json", &config)?;
+        let _ = app.emit("app_config_update", &config);
+        Ok(config)
     }
-    config_store::write_config(&app, "app_config.json", &config)?;
-    let _ = app.emit("app_config_update", &config);
-    Ok(config)
 }
 
-/// The three macOS stacking modes are mutually exclusive. Persist both flags
+/// The two macOS stacking modes are mutually exclusive. Persist both flags
 /// together so other windows never observe a half-applied mode change.
 #[derive(Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WidgetDisplayMode {
-    Normal,
     Topmost,
+    #[serde(alias = "normal")]
     Desktop,
 }
 
@@ -344,8 +339,23 @@ pub async fn set_widget_display_mode(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, mode);
-        Err("This display-mode menu is only supported on macOS".to_string())
+        Err("This display-mode command is only supported on macOS".to_string())
     }
+}
+
+#[tauri::command]
+pub async fn set_widget_glass(window: tauri::WebviewWindow, enabled: bool, dark: bool,
+    dock_edge: Option<crate::glass_shape::GlassDockEdge>) -> Result<bool, String> {
+    if window.label() != "sidebar" && !crate::widget_layout::is_tracked_widget(window.label()) {
+        return Err("Glass is only supported for the sidebar and independent widgets".into());
+    }
+    let dock_edge = if window.label() == "sidebar" { Some(dock_edge.unwrap_or(crate::glass_shape::GlassDockEdge::Right)) } else { None };
+    #[cfg(target_os = "macos")]
+    { crate::macos_glass::set_widget_glass(&window, enabled, dark, dock_edge).await }
+    #[cfg(windows)]
+    { crate::windows_glass::set_widget_glass(&window, enabled, dark, dock_edge).await }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    { let _ = (window, enabled, dark, dock_edge); Ok(false) }
 }
 
 #[tauri::command]
@@ -552,12 +562,7 @@ async fn create_widget_impl_with_options(
         .copied()
         .unwrap_or(cfg!(windows));
     #[cfg(target_os = "macos")]
-    let desktop_fixed = config
-        .embedded
-        .as_ref()
-        .and_then(|values| values.get(&id))
-        .copied()
-        .unwrap_or(false);
+    let desktop_fixed = !keep_on_top;
     let win = if let Some(win) = app.get_webview_window(&id) {
         win
     } else {
@@ -1019,12 +1024,7 @@ pub async fn restore_widget_position(
         // Re-apply desktop mode if not pinned/always_on_top
         #[cfg(target_os = "macos")]
         {
-            let desktop_fixed = config
-                .embedded
-                .as_ref()
-                .and_then(|values| values.get(&id))
-                .copied()
-                .unwrap_or(false);
+            let desktop_fixed = !always_on_top;
             let _ = win.set_always_on_top(always_on_top && !desktop_fixed);
             let _ = crate::desktop::set_macos_desktop_fixed(&win, desktop_fixed).await;
             if !desktop_fixed {
@@ -1077,13 +1077,19 @@ mod widget_display_mode_tests {
     use super::*;
 
     #[test]
+    fn legacy_normal_mode_resolves_to_the_desktop() {
+        let mode: WidgetDisplayMode = serde_json::from_str("\"normal\"").unwrap();
+        assert!(matches!(mode, WidgetDisplayMode::Desktop));
+    }
+
+    #[test]
     fn changing_mode_clears_the_previous_stacking_preference() {
         let label = "widget-quota-default";
         let mut config = AppConfig::default();
         for mode in [
             WidgetDisplayMode::Desktop,
             WidgetDisplayMode::Topmost,
-            WidgetDisplayMode::Normal,
+            WidgetDisplayMode::Desktop,
         ] {
             mode.apply_preferences(&mut config, label);
             assert_eq!(

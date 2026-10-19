@@ -2,7 +2,7 @@ import type { DashboardTheme } from "../types/config";
 import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
 import { defaultThemeIdForWidgetLabel, FOLLOW_DASHBOARD_THEME_ID, resolveWidgetTheme, widgetThemeKindFromLabel } from "./widgetTheme";
 
-export type FloatingAppearanceMode = "follow" | "light" | "dark" | "transparent" | "custom";
+export type FloatingAppearanceMode = "follow" | "light" | "dark" | "transparent" | "glass" | "custom";
 export type FloatingPreset = Exclude<FloatingAppearanceMode, "custom">;
 
 export function floatingPresetId(widgetId: string, mode: FloatingPreset): string {
@@ -12,7 +12,7 @@ export function floatingPresetId(widgetId: string, mode: FloatingPreset): string
 
 export function floatingAppearanceMode(config: WidgetThemeConfig, widgetId: string): FloatingAppearanceMode {
   const id = config.assignments[widgetId] || defaultThemeIdForWidgetLabel(widgetId);
-  for (const mode of ["follow", "light", "dark", "transparent"] as const) {
+  for (const mode of ["follow", "light", "dark", "transparent", "glass"] as const) {
     if (id === floatingPresetId(widgetId, mode)) return mode;
   }
   return config.themes.some(theme => theme.id === id && !theme.is_default) ? "custom"

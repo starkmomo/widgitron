@@ -31,6 +31,7 @@ import { tauriListen } from "../utils/tauriListen";
 import { MasterSwitch } from "../components/MasterSwitch";
 import { providerSupportsQuotaVisualizations } from "../components/QuotaVisualizations";
 import { FloatingAppearanceSettings } from "./FloatingAppearanceSettings";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { updateConferencePreferences } from "../utils/deadlineKeys";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
@@ -1072,6 +1073,8 @@ export function SettingsPanel({
   );
   const pendingQuotaReorderRef = useRef<QuotaConfig | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
+  const [deleteSidebarThemeId, setDeleteSidebarThemeId] = useState<string | null>(null);
+  useEffect(() => { setDeleteSidebarThemeId(null); }, [activeSection]);
   const [openProviderId, setOpenProviderId] = useState<string | null>(null);
   const [quotaProviderPickerOpen, setQuotaProviderPickerOpen] = useState(false);
   const [quotaItemSettingsId, setQuotaItemSettingsId] = useState<string | null>(null);
@@ -1738,8 +1741,8 @@ export function SettingsPanel({
         }`}
       >
         {(() => {
-          const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme);
-          const sidebarThemes = sidebarThemeOptions(appConfig.sidebar_theme);
+          const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme, appConfig.theme);
+          const sidebarThemes = sidebarThemeOptions(appConfig.sidebar_theme, appConfig.theme);
           const sidebarWidgets = appConfig.sidebar_widgets || {};
           const saveSidebarWidget = (
             key: "quota" | "gpu" | "deadlines" | "arxiv",
@@ -2100,6 +2103,8 @@ export function SettingsPanel({
                 >
                   <button
                     type="button"
+                    aria-label={theme.name}
+                    aria-pressed={selected}
                     onClick={() =>
                       onSaveApp({
                         ...appConfig,
@@ -2109,18 +2114,12 @@ export function SettingsPanel({
                     className="block w-full text-left"
                   >
                     <div
-                      className="relative h-20 overflow-hidden"
-                      style={{
-                        backgroundColor: "#94a3b8",
-                        backgroundImage:
-                          "linear-gradient(135deg, rgba(255,255,255,.34) 25%, transparent 25%), linear-gradient(315deg, rgba(255,255,255,.34) 25%, transparent 25%)",
-                        backgroundSize: "18px 18px",
-                      }}
+                      className="floating-preview-scene relative h-20 overflow-hidden"
                     >
                       <div
-                        className="absolute inset-0 p-2"
+                        className={`absolute inset-0 p-2 ${theme.material === "native-glass" ? "glass-surface glass-preview glass-sidebar rounded-l-lg" : ""}`}
                         style={{
-                          backgroundColor: hexToRgba(theme.background, theme.background_opacity),
+                          backgroundColor: hexToRgba(theme.background, theme.material === "native-glass" ? 0.30 : theme.background_opacity),
                           backdropFilter: theme.blur > 0 ? `blur(${Math.min(theme.blur, 18)}px)` : undefined,
                         }}
                       >
@@ -2180,7 +2179,7 @@ export function SettingsPanel({
                       <button
                         type="button"
                         onClick={() => {
-                          const duplicate = duplicateSidebarTheme(appConfig.sidebar_theme, theme.id);
+                          const duplicate = duplicateSidebarTheme(appConfig.sidebar_theme, theme.id, appConfig.theme);
                           onSaveApp({ ...appConfig, sidebar_theme: duplicate.config });
                         }}
                         className="flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-wider text-slate-500 hover:text-blue-500 hover:bg-blue-500/10"
@@ -2193,6 +2192,17 @@ export function SettingsPanel({
               );
             })}
           </div>
+          {deleteSidebarThemeId && sidebarThemes.some(theme => theme.id === deleteSidebarThemeId && !isBuiltInSidebarTheme(theme.id)) && (
+            <ConfirmDialog title="Delete this custom theme?" isLight={appConfig.theme === "light"}
+              onCancel={() => setDeleteSidebarThemeId(null)}
+              onConfirm={() => {
+                onSaveApp({ ...appConfig, sidebar_theme: removeSidebarTheme(appConfig.sidebar_theme, deleteSidebarThemeId) });
+                setDeleteSidebarThemeId(null);
+              }}>
+              <span className="font-semibold" data-no-localize>{sidebarThemes.find(theme => theme.id === deleteSidebarThemeId)?.name}</span>
+              <p className="mt-2">If this theme is in use, the sidebar will switch to Light.</p>
+            </ConfirmDialog>
+          )}
           {selectedThemeIsEditable ? (
             <div className={`rounded-xl border p-4 space-y-4 ${
               appConfig.theme === "light" ? "bg-white border-slate-200" : "bg-black/25 border-white/10"
@@ -2208,12 +2218,7 @@ export function SettingsPanel({
                 </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    onSaveApp({
-                      ...appConfig,
-                      sidebar_theme: removeSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id),
-                    })
-                  }
+                  onClick={() => setDeleteSidebarThemeId(sidebarTheme.id)}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider text-red-400 hover:bg-red-500/10"
                 >
                   <Trash2 size={11} /> Delete

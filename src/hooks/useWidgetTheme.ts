@@ -21,12 +21,16 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
 
     const updateTheme = () => {
       if (!active || !latestThemeConfig) return;
+      const sidebarTheme = resolveSidebarTheme(latestAppConfig?.sidebar_theme, latestAppConfig?.theme);
       const sidebarLight =
         win.label === "sidebar" &&
-        isLightColor(resolveSidebarTheme(latestAppConfig?.sidebar_theme).background);
-      setCurrentTheme(resolveWidgetTheme(latestThemeConfig, win.label, kind, {
-        sidebarLight, dashboardTheme: latestAppConfig?.theme,
-      }));
+        isLightColor(sidebarTheme.background);
+      const resolved = resolveWidgetTheme(latestThemeConfig, win.label, kind, {
+        sidebarLight, sidebarGlass: sidebarTheme.material === "native-glass", dashboardTheme: latestAppConfig?.theme,
+      });
+      setCurrentTheme(win.label === "sidebar" && sidebarTheme.material === "native-glass" && resolved
+        ? { ...resolved, material: "native-glass", bg_color: sidebarTheme.background, bg_opacity: sidebarTheme.background_opacity }
+        : resolved);
     };
 
     const load = async () => {

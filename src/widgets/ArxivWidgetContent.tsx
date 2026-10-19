@@ -218,7 +218,18 @@ export function ArxivWidgetContent({
   const isLightAppearance = appearance
     ? appearance === "light"
     : isLightColor(currentTheme.bg_color);
-  const keywordMenuText = isLightAppearance ? "#475569" : subText;
+  const keywordMenuGlass = currentTheme.material === "native-glass";
+  const keywordMenuTranslucent = keywordMenuGlass || currentTheme.bg_opacity < 0.5;
+  // Translucent menus share the widget's tint. Glass can stay lighter because
+  // it also has a native backdrop; plain transparency needs a stronger tint.
+  const keywordMenuBackground = keywordMenuGlass
+    ? hexToRgba(currentTheme.bg_color, Math.min(1, Math.max(0.30, currentTheme.bg_opacity + 0.12)))
+    : hexToRgba(isLightAppearance ? "#ffffff" : currentTheme.bg_color,
+        keywordMenuTranslucent ? Math.min(1, Math.max(0.65, currentTheme.bg_opacity + 0.12)) : 1);
+  const keywordMenuBlur = keywordMenuTranslucent ? "blur(24px) saturate(125%)" : undefined;
+  // Foreground glyphs stay opaque even when the menu surface is translucent.
+  const keywordMenuText = isLightAppearance ? "#334155" : "#f1f5f9";
+  const keywordMenuActiveText = keywordMenuTranslucent ? keywordMenuText : accent;
   const keywordMenuBorder = isLightAppearance
     ? "rgba(100, 116, 139, 0.28)"
     : "rgba(148, 163, 184, 0.24)";
@@ -249,9 +260,10 @@ export function ArxivWidgetContent({
         )}
       />
       {serviceEnabled && arxivKeywordOptions.length > 0 && (
-        <div className="relative mb-3" data-no-drag="true">
+        <div className="relative z-[60] mb-3 shrink-0" data-no-drag="true">
           <button
             type="button"
+            aria-expanded={keywordMenuOpen}
             onClick={() => setKeywordMenuOpen((open) => !open)}
             className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
             style={{
@@ -281,12 +293,13 @@ export function ArxivWidgetContent({
           </button>
           {keywordMenuOpen && (
             <div
-              className="absolute left-0 right-0 top-full z-50 mt-1 max-h-40 overflow-y-auto rounded-lg border backdrop-blur-xl"
+              className={`absolute left-0 right-0 top-full z-50 isolate mt-1 max-h-40 overflow-y-auto rounded-lg border ${keywordMenuGlass ? "glass-surface glass-menu" : ""}`}
               style={{
-                borderColor: keywordMenuBorder,
-                backgroundColor: isLightAppearance
-                  ? "rgba(255, 255, 255, 0.94)"
-                  : "rgba(15, 23, 42, 0.94)",
+                borderColor: keywordMenuGlass ? "transparent" : keywordMenuBorder,
+                backgroundColor: keywordMenuBackground,
+                backdropFilter: keywordMenuBlur,
+                WebkitBackdropFilter: keywordMenuBlur,
+                textShadow: keywordMenuGlass ? undefined : "none",
                 boxShadow: isLightAppearance
                   ? "0 8px 24px rgba(15, 23, 42, 0.12)"
                   : "0 8px 24px rgba(0, 0, 0, 0.24)",
@@ -302,7 +315,7 @@ export function ArxivWidgetContent({
                 className={`w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
                   isLightAppearance ? "hover:bg-slate-900/5" : "hover:bg-white/10"
                 }`}
-                style={{ color: selectedKeywords.length === 0 ? accent : keywordMenuText }}
+                style={{ color: selectedKeywords.length === 0 ? keywordMenuActiveText : keywordMenuText }}
               >
                 <span
                   className="w-3 h-3 rounded border flex items-center justify-center shrink-0"
@@ -332,7 +345,7 @@ export function ArxivWidgetContent({
                     className={`w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
                       isLightAppearance ? "hover:bg-slate-900/5" : "hover:bg-white/10"
                     }`}
-                    style={{ color: active ? accent : keywordMenuText }}
+                    style={{ color: active ? keywordMenuActiveText : keywordMenuText }}
                     title={keyword}
                   >
                     <span
@@ -350,7 +363,8 @@ export function ArxivWidgetContent({
         </div>
       )}
       {library.error && <p role="alert" className="mb-2 text-[10px] text-red-500" title={library.error}>Could not update paper. Please try again.</p>}
-      <div className="flex-1 min-h-0 relative perspective-1000" data-no-drag="true">
+      <div className="flex-1 min-h-0 relative z-0 perspective-1000" data-no-drag="true"
+        style={keywordMenuOpen && keywordMenuTranslucent ? { filter: "blur(6px)", opacity: 0.55 } : undefined}>
         {!serviceEnabled ? (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 rounded-xl border border-dashed"

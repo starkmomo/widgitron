@@ -175,6 +175,8 @@ pub struct SidebarThemeDefinition {
     pub header_opacity: Option<f64>,
     pub card_opacity: Option<f64>,
     pub blur: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<WidgetMaterial>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -545,6 +547,13 @@ pub struct ColorConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "kebab-case")]
+pub enum WidgetMaterial {
+    #[serde(alias = "liquid-glass")]
+    NativeGlass,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WidgetTheme {
     pub id: String,
     pub name: String,
@@ -555,12 +564,50 @@ pub struct WidgetTheme {
     pub primary_colors: Vec<ColorConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub widget_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub material: Option<WidgetMaterial>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WidgetThemeConfig {
     pub themes: Vec<WidgetTheme>,
     pub assignments: HashMap<String, String>, // widget_id -> theme_id
+}
+
+#[cfg(test)]
+mod widget_material_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_custom_theme_and_glass_copy_round_trip_without_losing_colors() {
+        let legacy = serde_json::json!({
+            "id": "saved-custom", "name": "My colors", "is_default": false,
+            "bg_color": "#e9efff", "bg_opacity": 0.55,
+            "text_colors": [{"name": "Main Text", "value": "#123456", "opacity": 1.0}],
+            "primary_colors": [{"name": "Accent", "value": "#abc123", "opacity": 0.8}],
+            "widget_scope": "widget-quota-default"
+        });
+        let mut theme: WidgetTheme = serde_json::from_value(legacy.clone()).expect("legacy theme");
+        assert!(theme.material.is_none());
+        let output = serde_json::to_value(&theme).expect("legacy output");
+        assert!(output.get("material").is_none());
+        for field in ["id", "name", "bg_color", "widget_scope", "text_colors"] {
+            assert_eq!(output[field], legacy[field]);
+        }
+        assert!((theme.bg_opacity - 0.55).abs() < f32::EPSILON);
+        theme.material = Some(WidgetMaterial::NativeGlass);
+        let serialized = serde_json::to_value(&theme).expect("glass output");
+        assert_eq!(serialized["material"], "native-glass");
+        let mut previous_preview = serialized.clone();
+        previous_preview["material"] = serde_json::json!("liquid-glass");
+        let previous: WidgetTheme = serde_json::from_value(previous_preview).expect("previous glass preview");
+        assert!(matches!(previous.material, Some(WidgetMaterial::NativeGlass)));
+        let restored: WidgetTheme = serde_json::from_value(serialized).expect("glass input");
+        assert!(matches!(restored.material, Some(WidgetMaterial::NativeGlass)));
+        assert_eq!(restored.text_colors[0].value, "#123456");
+        assert_eq!(restored.primary_colors[0].value, "#abc123");
+        assert_eq!(restored.widget_scope.as_deref(), Some("widget-quota-default"));
+    }
 }
 
 impl Default for WidgetThemeConfig {
@@ -606,6 +653,7 @@ impl Default for WidgetThemeConfig {
                 },
             ],
             widget_scope: None,
+            material: None,
         };
         let deadline_default = WidgetTheme {
             id: "theme-deadline-default".into(),
@@ -638,6 +686,7 @@ impl Default for WidgetThemeConfig {
                 },
             ],
             widget_scope: None,
+            material: None,
         };
         let gpu_transparent = WidgetTheme {
             id: "theme-gpu-transparent".into(),
@@ -680,6 +729,7 @@ impl Default for WidgetThemeConfig {
                 },
             ],
             widget_scope: None,
+            material: None,
         };
         let deadline_transparent = WidgetTheme {
             id: "theme-deadline-transparent".into(),
@@ -712,6 +762,7 @@ impl Default for WidgetThemeConfig {
                 },
             ],
             widget_scope: None,
+            material: None,
         };
         let arxiv_default = WidgetTheme {
             id: "theme-arxiv-default".into(),
@@ -737,6 +788,7 @@ impl Default for WidgetThemeConfig {
                 opacity: Some(1.0),
             }],
             widget_scope: None,
+            material: None,
         };
         let arxiv_transparent = WidgetTheme {
             id: "theme-arxiv-transparent".into(),
@@ -762,6 +814,7 @@ impl Default for WidgetThemeConfig {
                 opacity: Some(1.0),
             }],
             widget_scope: None,
+            material: None,
         };
         let quota_default = WidgetTheme {
             id: "theme-quota-default".into(),
@@ -804,6 +857,7 @@ impl Default for WidgetThemeConfig {
                 },
             ],
             widget_scope: None,
+            material: None,
         };
         let quota_transparent = WidgetTheme {
             id: "theme-quota-transparent".into(),
@@ -846,6 +900,7 @@ impl Default for WidgetThemeConfig {
                 },
             ],
             widget_scope: None,
+            material: None,
         };
 
         // A readable light surface for macOS independent widgets. Keep the
@@ -861,6 +916,19 @@ impl Default for WidgetThemeConfig {
         let deadline_light = light_theme(&deadline_transparent, "Deadline Light");
         let arxiv_light = light_theme(&arxiv_transparent, "Arxiv Radar Light");
         let quota_light = light_theme(&quota_transparent, "Quota Light");
+
+        let glass_theme = |source: &WidgetTheme, name: &str| {
+            let mut theme = source.clone();
+            theme.id = source.id.replace("-light", "-glass");
+            theme.name = name.into();
+            theme.material = Some(WidgetMaterial::NativeGlass);
+            theme.bg_opacity = 0.05;
+            theme
+        };
+        let gpu_glass = glass_theme(&gpu_light, "GPU Glass");
+        let deadline_glass = glass_theme(&deadline_light, "Deadline Glass");
+        let arxiv_glass = glass_theme(&arxiv_light, "Arxiv Glass");
+        let quota_glass = glass_theme(&quota_light, "Quota Glass");
 
         let mut assignments = HashMap::new();
         let preset = |kind: &str| {
@@ -885,6 +953,10 @@ impl Default for WidgetThemeConfig {
                 deadline_light,
                 arxiv_light,
                 quota_light,
+                gpu_glass,
+                deadline_glass,
+                arxiv_glass,
+                quota_glass,
                 gpu_transparent,
                 deadline_transparent,
                 arxiv_transparent,

@@ -13,6 +13,7 @@ export interface WidgetTheme {
   text_colors: ColorConfig[];
   primary_colors: ColorConfig[];
   widget_scope?: string;
+  material?: "native-glass";
 }
 
 export interface WidgetThemeConfig {

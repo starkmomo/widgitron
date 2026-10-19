@@ -19,9 +19,13 @@ pub fn from_config(config: &AppConfig) -> f64 {
 }
 
 pub fn apply_to_window(window: &WebviewWindow, scale: f64) -> Result<(), String> {
-    window
-        .set_zoom(sanitize(Some(scale)))
-        .map_err(|err| err.to_string())
+    let zoom = sanitize(Some(scale));
+    window.set_zoom(zoom).map_err(|err| err.to_string())?;
+    #[cfg(windows)]
+    if window.label() == "sidebar" || crate::widget_layout::is_tracked_widget(window.label()) {
+        crate::windows_glass::remember_zoom(window, zoom);
+    }
+    Ok(())
 }
 
 /// Apply user UI scale with an extra DPI ratio. Used when a desktop-locked
@@ -38,7 +42,12 @@ pub fn apply_to_window_with_dpi_ratio(
         1.0
     };
     let zoom = (sanitize(Some(user_scale)) * ratio).clamp(0.25, MAX_UI_SCALE * 2.0);
-    window.set_zoom(zoom).map_err(|err| err.to_string())
+    window.set_zoom(zoom).map_err(|err| err.to_string())?;
+    #[cfg(windows)]
+    if window.label() == "sidebar" || crate::widget_layout::is_tracked_widget(window.label()) {
+        crate::windows_glass::remember_zoom(window, zoom);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

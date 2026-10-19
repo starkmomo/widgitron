@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Copy, Plus, Palette, Trash2 } from "lucide-react";
+import { Bookmark, Check, ChevronDown, Copy, EyeOff, Plus, Palette, Trash2 } from "lucide-react";
 import type { DashboardTheme } from "../types/config";
 import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
 import { MODULE_NAVIGATION } from "../utils/moduleNavigation";
@@ -9,10 +9,12 @@ import { resolveWidgetTheme, type WidgetThemeKind } from "../utils/widgetTheme";
 import { assignFloatingPreset, copyFloatingTheme, deleteFloatingTheme, editableFloatingTheme, floatingAppearanceMode, type FloatingPreset } from "../utils/floatingAppearance";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { UiLanguage } from "../utils/localization";
+import { supportsFloatingGlass } from "../utils/platform";
 
 const PRESETS: { mode: FloatingPreset; label: string }[] = [
   { mode: "follow", label: "Follow main" }, { mode: "light", label: "Light" },
   { mode: "dark", label: "Dark" }, { mode: "transparent", label: "Transparent" },
+  { mode: "glass", label: "Glass" },
 ];
 const WIDGET_LABELS: Record<string, string> = { quota: "Quota", gpu: "GPU", deadlines: "Conference", arxiv: "arXiv" };
 const colorValue = (theme: WidgetTheme, role: string, fallback: string, primary = false) => {
@@ -20,15 +22,22 @@ const colorValue = (theme: WidgetTheme, role: string, fallback: string, primary 
   return color ? hexToRgba(color.value, color.opacity ?? 1) : fallback;
 };
 
+// Approximate the native backdrop tint over the preview's reference scene.
+// A CSS preview cannot sample the real desktop behind the application window.
+const previewBackground = (theme: WidgetTheme) => hexToRgba(theme.bg_color,
+  theme.material === "native-glass" ? 1 - (1 - theme.bg_opacity) * 0.78 : theme.bg_opacity);
+
 function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: WidgetThemeKind; label: string }) {
+  const glass = theme.material === "native-glass";
   const main = colorValue(theme, "Main Text", "#fff");
   const sub = colorValue(theme, "Sub Text", "#94a3b8");
   const accent = colorValue(theme, "Accent", "#3b82f6", true);
   const highlight = colorValue(theme, "Highlight", accent, true);
   const success = colorValue(theme, "Success", accent, true);
-  return <div className="rounded-xl border border-slate-300/20 p-4 shadow-lg" style={{
-    background: hexToRgba(theme.bg_color, theme.bg_opacity), color: main,
+  return <div className={`relative overflow-hidden rounded-xl border p-4 shadow-lg ${glass ? "glass-surface glass-preview border-transparent" : "border-slate-300/20"}`} style={{
+    background: previewBackground(theme), color: main,
   }}>
+    <div className="relative z-10">
     <div className="mb-4 flex items-center gap-2 text-xs font-bold"><span className="h-2 w-2 rounded-full" style={{ background: accent }} /><span>{label}</span></div>
     {kind === "quota" && <div className="space-y-3 text-[11px]">
       <div className="font-semibold" data-no-localize>Codex</div>
@@ -48,8 +57,12 @@ function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: Widge
     {kind === "arxiv" && <div className="space-y-3 text-[11px]">
       <div className="text-sm font-semibold leading-snug" data-no-localize>Learning to See, Hear and Reason</div>
       <div className="leading-relaxed" style={{ color: sub }}>An example paper abstract for previewing text and accent colors.</div>
-      <div className="flex justify-between" style={{ color: accent }}><span>Bookmark</span><span>Ignore</span></div>
+      <div aria-hidden="true" className="flex gap-2" style={{ color: sub }}>
+        <span className="arxiv-reading-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5"><Bookmark size={12} /><span>Bookmark</span></span>
+        <span className="arxiv-reading-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5"><EyeOff size={12} /><span>Ignore</span></span>
+      </div>
     </div>}
+    </div>
   </div>;
 }
 
@@ -92,6 +105,7 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
   const activeTheme = resolveWidgetTheme(themeConfig, widgetId, undefined, { dashboardTheme });
   const mode = floatingAppearanceMode(themeConfig, widgetId);
   const isLight = dashboardTheme === "light";
+  const presets = PRESETS.filter(preset => preset.mode !== "glass" || supportsFloatingGlass);
   const customs = themeConfig.themes.filter(theme => !theme.is_default &&
     (!theme.widget_scope || theme.widget_scope === widgetId || theme.id === activeTheme?.id));
 
@@ -135,8 +149,8 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
             selected === item.section ? isLight ? "bg-white text-blue-600 shadow-sm" : "bg-slate-700 text-blue-300" : "text-slate-500 hover:text-blue-500"
           }`}><item.Icon size={14} className="shrink-0" /><span className="truncate">{WIDGET_LABELS[item.section]}</span></button>)}
       </div>
-      <div role="radiogroup" aria-label="Floating appearance presets" className="grid grid-cols-2 gap-2 xl:grid-cols-4">
-        {PRESETS.map((preset, index) => {
+      <div role="radiogroup" aria-label="Floating appearance presets" className={`grid gap-2 ${supportsFloatingGlass ? "grid-cols-5" : "grid-cols-4"}`}>
+        {presets.map((preset, index) => {
           const preview = resolveWidgetTheme(assignFloatingPreset(themeConfig, widgetId, preset.mode), widgetId, undefined, { dashboardTheme });
           return <button key={preset.mode} type="button" role="radio" aria-checked={mode === preset.mode}
             tabIndex={mode === preset.mode || mode === "custom" && index === 0 ? 0 : -1}
@@ -145,16 +159,16 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
                 : ["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 0;
               if (!offset) return;
               event.preventDefault();
-              const next = (index + offset + PRESETS.length) % PRESETS.length;
+              const next = (index + offset + presets.length) % presets.length;
               (event.currentTarget.parentElement?.children[next] as HTMLButtonElement | undefined)?.focus();
-              void save(assignFloatingPreset(config.current, widgetId, PRESETS[next].mode));
+              void save(assignFloatingPreset(config.current, widgetId, presets[next].mode));
             }}
             onClick={() => { setDeleteId(null); void save(assignFloatingPreset(config.current, widgetId, preset.mode)); }}
             className={`min-w-0 space-y-2 rounded-xl border p-2.5 text-left text-[11px] font-semibold transition-colors ${
               mode === preset.mode ? "border-blue-500 bg-blue-500/5 ring-1 ring-blue-500" : "border-[var(--dashboard-border)] hover:border-blue-400"
             }`}>
-            <div aria-hidden="true" className="h-9 rounded-md border border-slate-400/20 bg-gradient-to-br from-slate-300 to-slate-500 p-1.5">
-              {preview && <div className="h-full rounded-sm px-1.5 py-1" style={{ background: hexToRgba(preview.bg_color, preview.bg_opacity) }}>
+            <div aria-hidden="true" className="floating-preview-scene h-9 rounded-md border border-slate-400/20 p-1.5">
+              {preview && <div className={`relative h-full overflow-hidden rounded-sm px-1.5 py-1 ${preview.material === "native-glass" ? "glass-surface glass-preview [--glass-radius:4px]" : ""}`} style={{ background: previewBackground(preview) }}>
                 <div className="h-1 w-2/3 rounded-full" style={{ background: colorValue(preview, "Main Text", "#fff") }} />
                 <div className="mt-1 h-1 w-1/3 rounded-full" style={{ background: colorValue(preview, "Accent", "#3b82f6", true) }} />
               </div>}
@@ -165,7 +179,7 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
       </div>
       {activeTheme && <div className="space-y-2">
         <div className="flex justify-between text-[10px] font-medium text-slate-500"><span>Preview</span><span>Example data</span></div>
-        <div className="rounded-2xl border border-slate-400/20 bg-gradient-to-br from-slate-200 via-slate-300 to-slate-500 p-5">
+        <div className="floating-preview-scene relative isolate overflow-hidden rounded-2xl border border-slate-400/20 p-5">
           <div className="mx-auto w-full max-w-sm"><WidgetPreview theme={activeTheme} kind={kind} label={module.label} /></div>
         </div>
       </div>}
