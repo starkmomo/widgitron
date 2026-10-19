@@ -1,6 +1,6 @@
 import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
 import type { DashboardTheme } from "../types/config";
-import { isMacOS } from "./platform";
+import { isMacOS, isWindows } from "./platform";
 
 export type WidgetThemeKind = "gpu" | "deadline" | "arxiv" | "quota";
 export const FOLLOW_DASHBOARD_THEME_ID = "@follow-dashboard";
@@ -18,6 +18,20 @@ const SIDEBAR_THEME_IDS: Record<WidgetThemeKind, string> = {
   arxiv: "theme-arxiv-default",
   quota: "theme-quota-default",
 };
+
+function windowsGlassPrimaryColors(theme: WidgetTheme, kind: WidgetThemeKind) {
+  const accents = { gpu: "#1d4ed8", deadline: "#6d28d9", arxiv: "#be185d", quota: "#0e7490" };
+  const colors: Record<string, string> = {
+    Accent: accents[kind], Highlight: "#92400e", Success: "#047857", Warning: "#92400e", Danger: "#b91c1c",
+  };
+  return theme.primary_colors.map(color => colors[color.name]
+    ? { ...color, value: colors[color.name], opacity: 1 } : color);
+}
+
+function windowsGlassTextColor(role: "Main Text" | "Sub Text", kind: WidgetThemeKind) {
+  if (kind === "arxiv") return role === "Main Text" ? "#0f172a" : "#334155";
+  return role === "Main Text" ? "#0b1220" : "#1e293b";
+}
 
 export const PRESET_THEME_IDS: Record<WidgetThemeKind, readonly string[]> = {
   gpu: ["theme-gpu-default", "theme-gpu-light", "theme-gpu-transparent", "theme-gpu-glass"],
@@ -52,13 +66,17 @@ export function resolveWidgetTheme(
     const base = config.themes.find((theme) => theme.id === SIDEBAR_THEME_IDS[kind]);
     if (!base) return null;
     if (!options?.sidebarLight && !options?.sidebarGlass) return base;
+    const lightWindowsGlass = isWindows && options?.sidebarGlass && options.sidebarLight;
+    const brightGlassText = options?.sidebarGlass && !lightWindowsGlass;
     return {
       ...base,
+      primary_colors: lightWindowsGlass
+        ? windowsGlassPrimaryColors(base, kind) : base.primary_colors,
       text_colors: base.text_colors.map((color) =>
         color.name === "Main Text"
-          ? { ...color, value: options?.sidebarGlass ? "#ffffff" : "#0f172a", opacity: 1 }
+          ? { ...color, value: brightGlassText ? "#ffffff" : lightWindowsGlass ? windowsGlassTextColor("Main Text", kind) : "#0f172a", opacity: 1 }
           : color.name === "Sub Text"
-            ? { ...color, value: options?.sidebarGlass ? "#f1f5f9" : "#475569", opacity: 1 }
+            ? { ...color, value: brightGlassText ? "#f1f5f9" : lightWindowsGlass ? windowsGlassTextColor("Sub Text", kind) : "#475569", opacity: 1 }
             : color
       ),
     };
@@ -72,20 +90,22 @@ export function resolveWidgetTheme(
   const theme =
     config.themes.find((t) => t.id === resolvedId) || config.themes.find((t) => t.id === defaultId);
   if (theme?.material === "native-glass" && theme.is_default) {
+    const widgetKind = kind ?? widgetThemeKindFromLabel(windowLabel);
     return {
       ...theme,
-      // Glass sits over the desktop, whose brightness is unrelated to the
-      // dashboard theme. Use a dark scrim and bright text in either app theme.
-      bg_color: "#0f172a",
-      bg_opacity: 0.10,
+      // Windows uses light clear glass. macOS retains its
+      // existing dark glass appearance; custom themes keep their own colors.
+      bg_color: isWindows ? "#f3f3f3" : "#0f172a",
+      bg_opacity: isWindows ? 0.04 : 0.10,
+      primary_colors: isWindows ? windowsGlassPrimaryColors(theme, kind ?? widgetThemeKindFromLabel(windowLabel)) : theme.primary_colors,
       text_colors: theme.text_colors.map(color => {
         // Secondary labels must stay opaque too: desktop colors already show
         // through the material, so fading the glyphs compounds the contrast loss.
         if (color.name === "Main Text") {
-          return { ...color, value: "#ffffff", opacity: 1 };
+          return { ...color, value: isWindows ? windowsGlassTextColor("Main Text", widgetKind) : "#ffffff", opacity: 1 };
         }
         if (color.name === "Sub Text") {
-          return { ...color, value: "#f1f5f9", opacity: 1 };
+          return { ...color, value: isWindows ? windowsGlassTextColor("Sub Text", widgetKind) : "#f1f5f9", opacity: 1 };
         }
         return color;
       }),

@@ -20,6 +20,7 @@ import { useArxivLibrary } from "../hooks/useArxivLibrary";
 import { ArxivReadingActions } from "../components/ArxivReadingActions";
 import { ArxivPaperActions } from "../components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
+import { isWindows } from "../utils/platform";
 
 type SwipeDirection = "left" | "right" | "up";
 
@@ -239,7 +240,7 @@ export function ArxivWidgetContent({
 
 
   return (
-    <div className="h-full min-h-0 flex flex-col select-none" style={{ color: mainText }}>
+    <div className="arxiv-widget h-full min-h-0 flex flex-col select-none" style={{ color: mainText }}>
       {!hideHeader && <WidgetHeader icon={<Radar size={16} style={{ color: accent }} />} title="Arxiv Radar" color={subText} controls={headerControls} />}
 
       <ServiceErrorBanners
@@ -265,7 +266,7 @@ export function ArxivWidgetContent({
             type="button"
             aria-expanded={keywordMenuOpen}
             onClick={() => setKeywordMenuOpen((open) => !open)}
-            className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
+            className="arxiv-keyword-control w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
             style={{
               borderColor: keywordMenuOpen ? accent : keywordMenuBorder,
               backgroundColor: keywordMenuOpen
@@ -273,7 +274,7 @@ export function ArxivWidgetContent({
                   ? "rgba(236, 72, 153, 0.08)"
                   : "rgba(236, 72, 153, 0.12)"
                 : isLightAppearance
-                  ? "rgba(255, 255, 255, 0.62)"
+                  ? isWindows && keywordMenuGlass ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.62)"
                   : "rgba(255, 255, 255, 0.04)",
               color: selectedKeywords.length > 0 ? accent : keywordMenuText,
             }}
@@ -312,7 +313,7 @@ export function ArxivWidgetContent({
                   setCurrentIndex(0);
                   setKeywordMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
+                className={`arxiv-keyword-control w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
                   isLightAppearance ? "hover:bg-slate-900/5" : "hover:bg-white/10"
                 }`}
                 style={{ color: selectedKeywords.length === 0 ? keywordMenuActiveText : keywordMenuText }}
@@ -342,7 +343,7 @@ export function ArxivWidgetContent({
                       );
                       setCurrentIndex(0);
                     }}
-                    className={`w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
+                    className={`arxiv-keyword-control w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
                       isLightAppearance ? "hover:bg-slate-900/5" : "hover:bg-white/10"
                     }`}
                     style={{ color: active ? keywordMenuActiveText : keywordMenuText }}
@@ -367,6 +368,7 @@ export function ArxivWidgetContent({
         style={keywordMenuOpen && keywordMenuTranslucent ? { filter: "blur(6px)", opacity: 0.55 } : undefined}>
         {!serviceEnabled ? (
           <div
+            data-widget-surface="empty"
             className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >
@@ -397,13 +399,13 @@ export function ArxivWidgetContent({
               className="widget-paper-card absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-3 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
             >
               <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1">
-                <h3 className="shrink-0 text-[10px] font-bold mb-2 leading-snug break-words">{currentPaper.title}</h3>
+                <h3 className="arxiv-paper-title shrink-0 text-[10px] font-bold mb-2 leading-snug break-words">{currentPaper.title}</h3>
                 <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} />
               </div>
               <div className="shrink-0 pt-2 border-t border-white/5 space-y-1.5">
                 <div className="flex flex-wrap gap-1">
                   <span
-                    className="text-[8px] bg-white/5 px-2 py-0.5 rounded-full font-medium"
+                    className="arxiv-paper-meta text-[8px] bg-white/5 px-2 py-0.5 rounded-full font-medium"
                     style={{ color: subText }}
                   >
                     {currentPaper.authors.length > 0 ? (
@@ -421,7 +423,7 @@ export function ArxivWidgetContent({
                   <ArxivPaperActions key={currentPaper.id} paper={currentPaper} compact />
                 </div>
                 {arxivConfig.show_card_hints !== false && (
-                  <div className="flex items-center justify-between mt-2 text-[8px] font-black uppercase tracking-widest">
+                  <div className="arxiv-paper-hints flex items-center justify-between mt-2 text-[8px] font-black uppercase tracking-widest">
                     <span className="text-red-400">← Ignore</span>
                     <span className="text-blue-400">Open arXiv ↑</span>
                     <span className="text-emerald-400">Save →</span>

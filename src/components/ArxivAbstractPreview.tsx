@@ -47,13 +47,13 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
     <div className="flex min-h-0 flex-1 flex-col">
       <div
         ref={previewBoxRef}
-        className={`relative flex-1 overflow-hidden leading-relaxed ${compact ? "min-h-[1.625em] text-[9px]" : "min-h-[9.75em] text-[10px]"}`}
+        className={`arxiv-abstract-preview relative flex-1 overflow-hidden leading-relaxed ${compact ? "min-h-[1.625em] text-[9px]" : "min-h-[9.75em] text-[10px]"}`}
       >
         {/* Six lines establish the dashboard row's natural height. Absolute
             text fills spare space without increasing that height on resize. */}
         <p
           ref={previewTextRef}
-          className={`absolute inset-x-0 top-0 overflow-hidden break-words ${compact ? "opacity-60" : "text-slate-500"}`}
+          className={`arxiv-abstract-text absolute inset-x-0 top-0 overflow-hidden break-words ${compact ? "opacity-60" : "text-slate-500"}`}
           style={{ color: textColor, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: previewLines }}
         >
           {paper.summary}
@@ -74,6 +74,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
       {reading && createPortal(
         <dialog
           ref={dialogRef}
+          data-compact={compact ? "true" : undefined}
           aria-labelledby={titleId}
           data-no-drag="true"
           className={`reading-dialog m-auto w-[calc(100%_-_2rem)] max-w-2xl max-h-[calc(100dvh_-_2rem)] overflow-hidden rounded-2xl border p-0 shadow-2xl backdrop:bg-slate-950/40 ${isLight ? "border-slate-200 bg-white text-slate-900" : "border-slate-700 bg-slate-900 text-slate-100"}`}

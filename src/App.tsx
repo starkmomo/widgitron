@@ -60,7 +60,7 @@ import { formatArxivKeywordLabel, groupArxivPapersByKeyword, hasArxivKeywords } 
 import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaBarDisplay, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
 import type { SidebarDockState, UpdateInfo } from "./types/tauri";
 import { resolveWidgetTheme } from "./utils/widgetTheme";
-import { isMacOS } from "./utils/platform";
+import { isMacOS, isWindows } from "./utils/platform";
 import { resolveLanguage, useUiLocalization } from "./utils/localization";
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel, messageShowsCached } from "./utils/cachedLabels";
 import { MODULE_NAVIGATION } from "./utils/moduleNavigation";
@@ -2050,14 +2050,16 @@ function App() {
     return (
       <div
         data-sidebar-theme={sidebarTheme.id}
+        data-glass-tone={isWindows ? (sidebarIsLight ? "light" : "dark") : undefined}
         data-native-glass={sidebarGlass && nativeGlass ? "true" : undefined}
         className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarGlass ? "glass-surface glass-sidebar" : ""} ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
         }`}
         style={{
+          ...(isWindows ? { "--surface-radii": ({ left: "0 8px 8px 0", top: "0 0 8px 8px", right: "8px 0 0 8px", bottom: "8px 8px 0 0" })[sidebarDockState.edge] } : {}),
           backgroundColor: hexToRgba(
             sidebarTheme.background,
-            sidebarGlass && !nativeGlass ? 0.88 : sidebarTheme.background_opacity
+            sidebarGlass && !nativeGlass ? (isWindows ? 0.86 : 0.88) : sidebarTheme.background_opacity
           ),
           backdropFilter:
             !sidebarGlass && sidebarTheme.blur > 0
@@ -2073,7 +2075,7 @@ function App() {
           boxShadow: sidebarGlass ? undefined : `inset 0 0 0 1px ${sidebarWindowBorder}`,
           outline: sidebarDockState.dragging ? "2px solid rgba(56, 189, 248, 0.72)" : undefined,
           outlineOffset: sidebarDockState.dragging ? "-2px" : undefined,
-        }}
+        } as React.CSSProperties}
       >
         {sidebarWindowResizeHandles.map((handle) => (
           <div
@@ -2287,7 +2289,7 @@ function App() {
             windowLabel.startsWith("widget-") && currentTheme
               ? {
                   backgroundColor: hexToRgba(currentTheme.bg_color,
-                    currentTheme.material === "native-glass" && !nativeGlass ? 0.84 : currentTheme.bg_opacity),
+                    currentTheme.material === "native-glass" && !nativeGlass ? (isWindows ? 0.86 : 0.84) : currentTheme.bg_opacity),
                   color: currentTheme.text_colors?.find((c) => c.name === "Main Text")
                     ? hexToRgba(
                         currentTheme.text_colors.find((c) => c.name === "Main Text")!.value,
@@ -2309,12 +2311,13 @@ function App() {
           {windowLabel.includes("arxiv") && <ArxivWidgetContent headerControls={controls} />}
           {isQuota && <QuotaWidgetContent headerControls={controls} />}
         </div>
-        {isMacOS && <button
+        {(isMacOS || isWindows) && <button
           type="button"
           data-no-drag="true"
           aria-label="Resize widget"
           title="Resize widget"
           onPointerDown={(event) => {
+            if (isWindows && event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
             appWindow.startResizeDragging("SouthEast").catch(console.error);

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Cpu, Activity, RefreshCw, List } from "lucide-react";
@@ -356,7 +356,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col" style={{ color: mainText }}>
+    <div data-widget-kind="gpu" className="h-full min-h-0 flex flex-col" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Cpu size={16} style={{ color: accent }} />} title="GPU Monitor" color={subText} controls={headerControls} status={gpuHeaderHint && <span className="text-[8px] font-bold" style={{ color: warning }}>{gpuHeaderHint}</span>}
         actions={<button
               onClick={handleRefresh}
@@ -378,6 +378,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
       <WidgetContentList className="pr-2" spacing="space-y-3">
         {!serviceEnabled ? (
           <div
+            data-widget-surface="empty"
             className="flex w-full flex-col items-center justify-center text-center py-10 px-4 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >
@@ -417,6 +418,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
             return (
               <div
                 key={idx}
+                data-widget-surface="server"
                 className={`${isCompact ? "space-y-4" : "space-y-2"} min-w-0 max-w-full`}
               >
                 <div
@@ -810,6 +812,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
           })
         ) : configuredServerCount === 0 ? (
           <div
+            data-widget-surface="empty"
             className="flex w-full flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >

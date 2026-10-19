@@ -2,6 +2,9 @@ import ReactDOM from "react-dom/client";import App from "./App";
 import "./index.css";
 import type { TauriCommandArgs } from "./types/tauri";
 import { tauriInvoke } from "./utils/tauriInvoke";
+import { isWindows } from "./utils/platform";
+
+if (isWindows) document.documentElement.dataset.platform = "windows";
 
 const ERROR_LOG_DEBOUNCE_MS = 2000;
 const recentErrorLogs = new Map<string, number>();

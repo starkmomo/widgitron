@@ -5,7 +5,7 @@ import type {
   SidebarThemePresetId as ConfigSidebarThemePresetId,
   DashboardTheme,
 } from "../types/config";
-import { isMacOS, supportsFloatingGlass } from "./platform";
+import { isMacOS, isWindows, supportsFloatingGlass } from "./platform";
 
 export type SidebarThemePresetId = ConfigSidebarThemePresetId;
 
@@ -97,9 +97,10 @@ export const SIDEBAR_THEME_PRESETS: SidebarThemePreset[] = [
     label: "Glass",
     description: "A glass backdrop with readable module cards.",
     theme: {
-      ...MIDNIGHT_THEME, id: "glass", name: "Glass", preset: "glass",
-      material: "native-glass", background: "#0f172a", header: "#0f172a",
-      background_opacity: 0.10, header_opacity: 0.24, card_opacity: 0.30, blur: 0,
+      ...(isWindows ? LIGHT_THEME : MIDNIGHT_THEME), id: "glass", name: "Glass", preset: "glass",
+      material: "native-glass", background: isWindows ? "#f3f3f3" : "#0f172a", header: isWindows ? "#ffffff" : "#0f172a",
+      background_opacity: isWindows ? 0.04 : 0.10, header_opacity: isWindows ? 0.08 : 0.24,
+      card_opacity: isWindows ? 0.08 : 0.30, blur: 0,
     },
   },
 ];

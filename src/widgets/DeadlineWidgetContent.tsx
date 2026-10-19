@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Trophy, RefreshCw } from "lucide-react";
@@ -166,7 +166,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col" style={{ color: mainText }}>
+    <div data-widget-kind="deadline" className="h-full min-h-0 flex flex-col" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Trophy size={16} style={{ color: highlight }} />} title="Deadlines" color={subText} controls={headerControls}
         actions={<button
             onClick={handleRefresh}
@@ -199,6 +199,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
       <WidgetContentList className="pr-1 w-full">
         {!serviceEnabled ? (
           <div
+            data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center py-10 px-4 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >
@@ -252,6 +253,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
           ))
         ) : (
           <div
+            data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center mt-8 px-4 py-6 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >

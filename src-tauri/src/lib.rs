@@ -66,6 +66,8 @@ mod vscode_secrets;
 mod widget_layout;
 #[cfg(windows)]
 mod windows_glass;
+#[cfg(windows)]
+mod windows_frame;
 
 pub fn run() {
     tauri::Builder::default()

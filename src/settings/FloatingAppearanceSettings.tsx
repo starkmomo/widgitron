@@ -4,12 +4,12 @@ import type { DashboardTheme } from "../types/config";
 import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
 import { MODULE_NAVIGATION } from "../utils/moduleNavigation";
 import { serviceWidgetMeta } from "../utils/widgetLifecycle";
-import { hexToRgba } from "../utils/color";
+import { hexToRgba, isLightColor } from "../utils/color";
 import { resolveWidgetTheme, type WidgetThemeKind } from "../utils/widgetTheme";
 import { assignFloatingPreset, copyFloatingTheme, deleteFloatingTheme, editableFloatingTheme, floatingAppearanceMode, type FloatingPreset } from "../utils/floatingAppearance";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { UiLanguage } from "../utils/localization";
-import { supportsFloatingGlass } from "../utils/platform";
+import { isWindows, supportsFloatingGlass } from "../utils/platform";
 
 const PRESETS: { mode: FloatingPreset; label: string }[] = [
   { mode: "follow", label: "Follow main" }, { mode: "light", label: "Light" },
@@ -25,7 +25,7 @@ const colorValue = (theme: WidgetTheme, role: string, fallback: string, primary 
 // Approximate the native backdrop tint over the preview's reference scene.
 // A CSS preview cannot sample the real desktop behind the application window.
 const previewBackground = (theme: WidgetTheme) => hexToRgba(theme.bg_color,
-  theme.material === "native-glass" ? 1 - (1 - theme.bg_opacity) * 0.78 : theme.bg_opacity);
+  theme.material === "native-glass" && !isWindows ? 1 - (1 - theme.bg_opacity) * 0.78 : theme.bg_opacity);
 
 function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: WidgetThemeKind; label: string }) {
   const glass = theme.material === "native-glass";
@@ -34,34 +34,37 @@ function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: Widge
   const accent = colorValue(theme, "Accent", "#3b82f6", true);
   const highlight = colorValue(theme, "Highlight", accent, true);
   const success = colorValue(theme, "Success", accent, true);
-  return <div className={`relative overflow-hidden rounded-xl border p-4 shadow-lg ${glass ? "glass-surface glass-preview border-transparent" : "border-slate-300/20"}`} style={{
+  return <div data-widget-kind={kind} data-floating-surface={isWindows && glass && isLightColor(theme.bg_color) ? "light" : undefined}
+    className={`relative overflow-hidden rounded-xl border p-4 shadow-lg ${glass ? "glass-surface glass-preview border-transparent" : "border-slate-300/20"}`} style={{
     background: previewBackground(theme), color: main,
   }}>
     <div className="relative z-10">
-    <div className="mb-4 flex items-center gap-2 text-xs font-bold"><span className="h-2 w-2 rounded-full" style={{ background: accent }} /><span>{label}</span></div>
+    <div className="widget-header mb-4 flex items-center gap-2 text-xs font-bold"><span className="h-2 w-2 rounded-full" style={{ background: accent }} /><span>{label}</span></div>
+    <div data-widget-surface="true" className={kind === "arxiv" ? "arxiv-widget" : undefined}>
     {kind === "quota" && <div className="space-y-3 text-[11px]">
-      <div className="font-semibold" data-no-localize>Codex</div>
+      <div data-widget-text="title" className="font-semibold" data-no-localize>Codex</div>
       <div className="flex items-center justify-between"><span style={{ color: sub }}>7-day limit</span><span style={{ color: success }}>72%</span></div>
       <div className="h-1.5 rounded-full bg-slate-400/20"><div className="h-full w-[72%] rounded-full" style={{ background: success }} /></div>
     </div>}
     {kind === "gpu" && <div className="space-y-3 text-[11px]">
-      <div className="flex justify-between font-semibold"><span data-no-localize>localhost</span><span style={{ color: success }}>1 GPU</span></div>
+      <div data-widget-text="title" className="flex justify-between font-semibold"><span data-no-localize>localhost</span><span style={{ color: success }}>1 GPU</span></div>
       <div style={{ color: sub }} data-no-localize>CPU 24% · RAM 12 / 32 GB</div>
       <div className="flex items-center gap-3"><span style={{ color: sub }} data-no-localize>GPU 0</span><div className="h-1.5 flex-1 rounded-full bg-slate-400/20"><div className="h-full w-[46%] rounded-full" style={{ background: accent }} /></div><span style={{ color: accent }}>46%</span></div>
     </div>}
     {kind === "deadline" && <div className="space-y-3 text-[11px]">
-      <div className="flex items-center justify-between font-semibold"><span data-no-localize>CVPR 2027</span><span style={{ color: accent }}>AI</span></div>
+      <div data-widget-text="title" className="flex items-center justify-between font-semibold"><span data-no-localize>CVPR 2027</span><span style={{ color: accent }}>AI</span></div>
       <div style={{ color: sub }} data-no-localize>Abstract submission</div>
       <div className="font-mono text-base font-bold" style={{ color: highlight }} data-no-localize>12d 08h 32m</div>
     </div>}
     {kind === "arxiv" && <div className="space-y-3 text-[11px]">
-      <div className="text-sm font-semibold leading-snug" data-no-localize>Learning to See, Hear and Reason</div>
-      <div className="leading-relaxed" style={{ color: sub }}>An example paper abstract for previewing text and accent colors.</div>
+      <div className="arxiv-paper-title text-sm font-semibold leading-snug" data-no-localize>Learning to See, Hear and Reason</div>
+      <div className="arxiv-abstract-preview leading-relaxed" style={{ color: sub }}>An example paper abstract for previewing text and accent colors.</div>
       <div aria-hidden="true" className="flex gap-2" style={{ color: sub }}>
         <span className="arxiv-reading-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5"><Bookmark size={12} /><span>Bookmark</span></span>
         <span className="arxiv-reading-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5"><EyeOff size={12} /><span>Ignore</span></span>
       </div>
     </div>}
+    </div>
     </div>
   </div>;
 }

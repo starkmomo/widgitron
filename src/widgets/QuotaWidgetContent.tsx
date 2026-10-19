@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Gauge, RefreshCw, AlertCircle, Minus, Plus, Edit2, Globe, Cpu, User } from "lucide-react";
@@ -321,7 +321,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col select-none" style={{ color: mainText }}>
+    <div data-widget-kind="quota" className="h-full min-h-0 flex flex-col select-none" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Gauge size={16} style={{ color: accent }} />} title="Quota Monitor" color={subText} controls={headerControls} status={quotaHeaderHint && <span className="text-[8px] font-bold" style={{ color: quotaHardErrorCount > 0 ? danger : warning }}>{quotaHeaderHint}</span>}
         actions={<button
             onClick={handleRefresh}
@@ -376,6 +376,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
       <WidgetContentList className="pr-1 w-full pb-2">
         {!serviceEnabled ? (
           <div
+            data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >
@@ -551,6 +552,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
             return (
               <div
                 key={q.id}
+                data-widget-surface="true"
                 className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
               >
                 <div className="relative z-10 flex flex-col gap-1.5">
@@ -697,6 +699,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
           })
         ) : (
           <div
+            data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
             style={{ borderColor: `${subText}33`, color: subText }}
           >

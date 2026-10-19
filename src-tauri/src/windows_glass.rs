@@ -1,19 +1,27 @@
-//! Windows backdrop for independent widgets. Use the same accent-blur path as
-//! Tauri's window-vibrancy backend, checking the native return value. Unlike a
-//! system backdrop type, it can be reapplied after WorkerW parenting changes.
-use std::{collections::HashMap, ffi::c_void, sync::Mutex, time::Duration};
+//! Windows clear glass uses the existing transparent WebView plus a CSS tint
+//! and rim. Opt out of system/Accent Acrylic: its heavy diffusion and inactive
+//! fallback are unsuitable for persistent desktop widgets and sidebars.
+use std::{collections::HashMap, ffi::c_void, sync::Mutex};
 
+use crate::glass_shape::GlassDockEdge;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{Emitter, Runtime, WebviewWindow};
-use crate::glass_shape::GlassDockEdge;
 use windows::{
     core::{s, w},
     Win32::{
         Foundation::{HWND, RECT},
-        Graphics::Gdi::{CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR},
+        Graphics::{
+            Dwm::{
+                DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_NONE,
+                DWMWA_SYSTEMBACKDROP_TYPE, DWM_SYSTEMBACKDROP_TYPE,
+            },
+            Gdi::{
+                CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
+            },
+        },
         System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
-        UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::GetWindowRect},
+        UI::{Controls::MARGINS, HiDpi::GetDpiForWindow, WindowsAndMessaging::GetWindowRect},
     },
 };
 
@@ -29,8 +37,7 @@ struct GlassState {
     status: GlassStatus,
     zoom: f64,
     region: Option<(i32, i32, i32, Option<GlassDockEdge>)>,
-    revision: u64,
-    settle: Option<tauri::async_runtime::JoinHandle<()>>,
+    backend: Backdrop,
 }
 
 impl Default for GlassState {
@@ -44,8 +51,7 @@ impl Default for GlassState {
             },
             zoom: 1.0,
             region: None,
-            revision: 0,
-            settle: None,
+            backend: Backdrop::None,
         }
     }
 }
@@ -53,6 +59,25 @@ impl Default for GlassState {
 // Entries are only created for the sidebar and four tracked widgets, and removed
 // when their native windows are destroyed. Never hold this lock across Win32.
 static STATES: Lazy<Mutex<HashMap<String, GlassState>>> = Lazy::new(Default::default);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backdrop {
+    None,
+    Clear,
+}
+
+fn clear_backdrop(hwnd: HWND) {
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            (&DWMSBT_NONE as *const DWM_SYSTEMBACKDROP_TYPE).cast(),
+            4,
+        );
+        let _ = DwmExtendFrameIntoClientArea(hwnd, &MARGINS::default());
+    }
+    let _ = clear_legacy_accent(hwnd);
+}
 
 #[repr(C)]
 struct AccentPolicy {
@@ -69,34 +94,28 @@ struct CompositionAttribute {
     size: usize,
 }
 
-fn set_composition(hwnd: HWND, enabled: bool, dark: bool) -> Result<(), String> {
-    // These layouts and constants match the window-vibrancy implementation
-    // already shipped with Tauri. Do not use the obsolete Vista blur API.
+// Disable an accent left by an earlier material before applying clear glass.
+fn clear_legacy_accent(hwnd: HWND) -> Result<(), String> {
     type SetComposition =
         unsafe extern "system" fn(HWND, *mut CompositionAttribute) -> windows::core::BOOL;
     unsafe {
         let module = GetModuleHandleW(w!("user32.dll")).map_err(|error| error.to_string())?;
         let function = GetProcAddress(module, s!("SetWindowCompositionAttribute"))
-            .ok_or("Windows does not expose accent blur")?;
+            .ok_or("Windows does not expose accent composition")?;
         let set_composition: SetComposition = std::mem::transmute(function);
-        let (r, g, b, a) = if dark {
-            (18_u32, 24_u32, 38_u32, 64_u32)
-        } else {
-            (248_u32, 250_u32, 252_u32, 60_u32)
-        };
         let mut policy = AccentPolicy {
-            state: if enabled { 3 } else { 0 }, // BLURBEHIND / DISABLED
-            flags: 2,
-            color: r | (g << 8) | (b << 16) | (a << 24),
+            state: 0,
+            flags: 0,
+            color: 0,
             animation: 0,
         };
         let mut attribute = CompositionAttribute {
-            attribute: 19, // WCA_ACCENT_POLICY
+            attribute: 19,
             data: (&mut policy as *mut AccentPolicy).cast(),
             size: std::mem::size_of::<AccentPolicy>(),
         };
         if !set_composition(hwnd, &mut attribute).as_bool() {
-            return Err("Windows rejected the widget backdrop".into());
+            return Err("Windows rejected clearing the previous accent".into());
         }
     }
     Ok(())
@@ -124,7 +143,12 @@ fn update_region<R: Runtime>(win: &WebviewWindow<R>) -> Result<(), String> {
         else {
             return Ok(());
         };
-        let diameter = ((if state.status.dock_edge.is_some() { 16.0 } else { 24.0 }) * dpi * state.zoom)
+        let diameter = ((if state.status.dock_edge.is_some() {
+            16.0
+        } else {
+            24.0
+        }) * dpi
+            * state.zoom)
             .round()
             .max(2.0)
             .min(width.min(height) as f64) as i32;
@@ -141,7 +165,9 @@ fn update_region<R: Runtime>(win: &WebviewWindow<R>) -> Result<(), String> {
         let region = CreateRoundRectRgn(0, 0, next.0 + 1, next.1 + 1, next.2, next.2);
         // Fill in the docking edge's two corners, preserving the rounded pair
         // exposed to the desktop. Geometry includes the user's WebView zoom.
-        let combined = if region.is_invalid() { false } else if let Some(edge) = next.3 {
+        let combined = if region.is_invalid() {
+            false
+        } else if let Some(edge) = next.3 {
             let r = next.2;
             let (left, top, right, bottom) = match edge {
                 GlassDockEdge::Left => (0, 0, r, next.1 + 1),
@@ -150,10 +176,15 @@ fn update_region<R: Runtime>(win: &WebviewWindow<R>) -> Result<(), String> {
                 GlassDockEdge::Bottom => (0, (next.1 - r).max(0), next.0 + 1, next.1 + 1),
             };
             let square = CreateRectRgn(left, top, right, bottom);
-            let ok = !square.is_invalid() && CombineRgn(Some(region), Some(region), Some(square), RGN_OR).0 != 0;
-            if !square.is_invalid() { let _ = DeleteObject(square.into()); }
+            let ok = !square.is_invalid()
+                && CombineRgn(Some(region), Some(region), Some(square), RGN_OR).0 != 0;
+            if !square.is_invalid() {
+                let _ = DeleteObject(square.into());
+            }
             ok
-        } else { true };
+        } else {
+            true
+        };
         if !combined || SetWindowRgn(hwnd, Some(region), true) == 0 {
             // Windows takes ownership only after a successful SetWindowRgn.
             if !region.is_invalid() {
@@ -173,6 +204,8 @@ fn update_region<R: Runtime>(win: &WebviewWindow<R>) -> Result<(), String> {
 }
 
 fn apply<R: Runtime>(win: &WebviewWindow<R>) -> Result<bool, String> {
+    let handle = hwnd(win)?;
+    crate::windows_frame::install(handle)?;
     let (status, has_region) = {
         let states = STATES.lock().unwrap_or_else(|error| error.into_inner());
         let Some(state) = states.get(win.label()) else {
@@ -185,25 +218,26 @@ fn apply<R: Runtime>(win: &WebviewWindow<R>) -> Result<bool, String> {
     if !status.enabled && !status.applied && !has_region {
         return Ok(false);
     }
-    let handle = hwnd(win)?;
-    let mut result = set_composition(handle, status.enabled, status.dark);
-    if status.enabled && result.is_ok() {
-        // A system blur otherwise fills the transparent CSS corners too.
-        if let Err(error) = update_region(win) {
-            let _ = set_composition(handle, false, status.dark);
-            result = Err(error);
-        }
-    } else if !status.enabled {
+    clear_backdrop(handle);
+    let backend = if status.enabled {
+        update_region(win)?;
+        Backdrop::Clear
+    } else {
         unsafe {
             SetWindowRgn(handle, None, true);
         }
-    }
-    let applied = status.enabled && result.is_ok();
+        Backdrop::None
+    };
+    let applied = status.enabled;
     let status = GlassStatus { applied, ..status };
     {
         let mut states = STATES.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(state) = states.get_mut(win.label()) {
+            if state.backend != backend {
+                log::info!("Windows backdrop for {}: {:?}", win.label(), backend);
+            }
             state.status = status;
+            state.backend = backend;
             if !status.enabled {
                 state.region = None;
             }
@@ -216,14 +250,7 @@ fn apply<R: Runtime>(win: &WebviewWindow<R>) -> Result<bool, String> {
         "widget_glass_update",
         status,
     );
-    match result {
-        Err(error) if status.enabled => {
-            log::warn!("Glass unavailable for {}: {}", win.label(), error);
-            Ok(false)
-        }
-        Err(error) => Err(error),
-        Ok(()) => Ok(applied),
-    }
+    Ok(applied)
 }
 
 pub async fn set_widget_glass<R: Runtime>(
@@ -239,10 +266,6 @@ pub async fn set_widget_glass<R: Runtime>(
             {
                 let mut states = STATES.lock().unwrap_or_else(|error| error.into_inner());
                 let state = states.entry(win.label().to_string()).or_default();
-                state.revision += 1;
-                if let Some(task) = state.settle.take() {
-                    task.abort();
-                }
                 state.status.enabled = enabled;
                 state.status.dark = dark;
                 state.status.dock_edge = dock_edge;
@@ -272,63 +295,10 @@ pub fn refresh<R: Runtime>(win: &WebviewWindow<R>) {
     });
 }
 
-/// Native blur can make interactive resizing expensive on some Windows builds.
-/// Use the readable fallback while moving, then restore after the last event.
+/// Clear glass does not change on focus or movement. Only its clipping region
+/// needs to follow geometry; never flash an opaque surface while dragging.
 pub fn geometry_changed<R: Runtime>(win: &WebviewWindow<R>) {
-    let (revision, status) = {
-        let mut states = STATES.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(state) = states
-            .get_mut(win.label())
-            .filter(|state| state.status.enabled)
-        else {
-            return;
-        };
-        state.revision += 1;
-        if let Some(task) = state.settle.take() {
-            task.abort();
-        }
-        let previous = state.status;
-        state.status.applied = false;
-        (state.revision, previous)
-    };
-    if status.applied {
-        if let Ok(handle) = hwnd(win) {
-            let _ = set_composition(handle, false, status.dark);
-        }
-        let _ = win.emit_to(
-            tauri::EventTarget::webview_window(win.label()),
-            "widget_glass_update",
-            GlassStatus {
-                applied: false,
-                ..status
-            },
-        );
-    }
     let _ = update_region(win);
-    let settled = win.clone();
-    let task = tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(180)).await;
-        let check = settled.clone();
-        let _ = settled.run_on_main_thread(move || {
-            let current = STATES
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .get(check.label())
-                .is_some_and(|state| state.revision == revision && state.status.enabled);
-            if current {
-                let _ = apply(&check);
-            }
-        });
-    });
-    let mut states = STATES.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(state) = states
-        .get_mut(win.label())
-        .filter(|state| state.revision == revision)
-    {
-        state.settle = Some(task);
-    } else {
-        task.abort();
-    }
 }
 
 pub fn remember_zoom<R: Runtime>(win: &WebviewWindow<R>, zoom: f64) {
@@ -342,13 +312,8 @@ pub fn remember_zoom<R: Runtime>(win: &WebviewWindow<R>, zoom: f64) {
 }
 
 pub fn forget(label: &str) {
-    if let Some(mut state) = STATES
+    STATES
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .remove(label)
-    {
-        if let Some(task) = state.settle.take() {
-            task.abort();
-        }
-    }
+        .remove(label);
 }

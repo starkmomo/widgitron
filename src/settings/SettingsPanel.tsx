@@ -48,7 +48,7 @@ import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel } from "../utils/
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { hexToRgba } from "../utils/color";
 import { providerLogoToneClass } from "../utils/providerLogo";
-import { isMacOS } from "../utils/platform";
+import { isMacOS, isWindows } from "../utils/platform";
 import { resolveLanguage } from "../utils/localization";
 import {
   clearLiveDataSectionErrors,
@@ -2093,7 +2093,7 @@ export function SettingsPanel({
               return (
                 <div
                   key={theme.id}
-                  className={`text-left rounded-xl border overflow-hidden transition-all ${
+                  className={`${isWindows ? "sidebar-theme-preview " : ""}text-left rounded-xl border overflow-hidden transition-all ${
                     selected
                       ? "border-blue-500 ring-2 ring-blue-500/20"
                       : appConfig.theme === "light"
@@ -2111,15 +2111,15 @@ export function SettingsPanel({
                         sidebar_theme: selectSidebarTheme(appConfig.sidebar_theme, theme.id),
                       })
                     }
-                    className="block w-full text-left"
+                    className={isWindows ? "block w-full rounded-t-[11px] border-0 p-0 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500" : "block w-full text-left"}
                   >
                     <div
-                      className="floating-preview-scene relative h-20 overflow-hidden"
+                      className={isWindows ? "floating-preview-scene relative isolate h-20 overflow-hidden rounded-t-[11px]" : "floating-preview-scene relative h-20 overflow-hidden"}
                     >
                       <div
-                        className={`absolute inset-0 p-2 ${theme.material === "native-glass" ? "glass-surface glass-preview glass-sidebar rounded-l-lg" : ""}`}
+                        className={`absolute inset-0 p-2 ${isWindows ? "rounded-t-[11px] " : ""}${theme.material === "native-glass" ? `glass-surface glass-preview glass-sidebar${isWindows ? "" : " rounded-l-lg"}` : ""}`}
                         style={{
-                          backgroundColor: hexToRgba(theme.background, theme.material === "native-glass" ? 0.30 : theme.background_opacity),
+                          backgroundColor: hexToRgba(theme.background, theme.material === "native-glass" && !isWindows ? 0.30 : theme.background_opacity),
                           backdropFilter: theme.blur > 0 ? `blur(${Math.min(theme.blur, 18)}px)` : undefined,
                         }}
                       >

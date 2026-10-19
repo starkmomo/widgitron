@@ -290,11 +290,12 @@ impl DockRuntime {
 
 pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(SIDEBAR_LABEL) {
+        crate::windows_frame::protect(&window)?;
         let _ = window.set_maximizable(false);
         return Ok(window);
     }
 
-    WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App("index.html".into()))
         .title("Widgitron Sidebar")
         .inner_size(DEFAULT_THICKNESS_LOGICAL, 900.0)
         .decorations(false)
@@ -306,7 +307,9 @@ pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .skip_taskbar(true)
         .visible(false)
         .build()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    crate::windows_frame::protect(&window)?;
+    Ok(window)
 }
 
 pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
@@ -625,228 +628,259 @@ fn require_started() -> Result<(), String> {
 }
 
 fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockRuntime>>) {
-    let _ = window.set_always_on_top(true);
-
     loop {
         if !lock_runtime(&runtime).enabled {
             std::thread::sleep(Duration::from_millis(250));
             continue;
         }
-        let now = Instant::now();
-        let cursor = cursor_position();
-        let left_down = is_left_button_down();
-        let pointer_button_down = left_down || is_other_pointer_button_down();
-        let current_rect = native_window_rect(&window);
-        let mut should_persist = false;
-        let mut event_payload = None;
+        // Never hold DockRuntime on a worker while a synchronous HWND/Tauri
+        // call waits for the UI thread: get_state/begin_drag need the same lock.
+        let tick_app = app.clone();
+        let tick_window = window.clone();
+        let tick_runtime = runtime.clone();
+        let (done, completed) = std::sync::mpsc::sync_channel(1);
+        if window.run_on_main_thread(move || {
+            dock_tick(&tick_app, &tick_window, &tick_runtime);
+            let _ = done.send(());
+        }).is_err() || completed.recv().is_err() {
+            break;
+        }
+        // Acknowledge each tick before queuing another: no unbounded UI queue.
+        std::thread::sleep(Duration::from_millis(16));
+    }
+}
 
+fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRuntime>>) {
+    let now = Instant::now();
+    let cursor = cursor_position();
+    let left_down = is_left_button_down();
+    let pointer_button_down = left_down || is_other_pointer_button_down();
+    let current_rect = native_window_rect(&window);
+    let mut should_persist = false;
+    let mut event_payload = None;
+
+    {
+        let mut state = lock_runtime(&runtime);
+        if !state.enabled { return; }
+        let shown_rect = sidebar_rect(
+            state.work_area,
+            state.edge,
+            state.thickness_logical,
+            state.edge_length_logical,
+            state.ui_scale,
+        );
+        if state.native_visible && !native_is_visible(&window) {
+            state.native_visible = false;
+            state.visual_expanded = false;
+        }
+
+        if state.dragging {
+            if let Some(point) = cursor {
+                let activation_distance = (DRAG_ACTIVATION_DISTANCE_LOGICAL
+                    * state.work_area.scale_factor)
+                    .round() as i32;
+                if let Some(start) = state.drag_start {
+                    let delta_x = point.x.saturating_sub(start.x) as i64;
+                    let delta_y = point.y.saturating_sub(start.y) as i64;
+                    let threshold = activation_distance.max(4) as i64;
+                    state.drag_has_moved |=
+                        delta_x * delta_x + delta_y * delta_y >= threshold * threshold;
+                } else {
+                    state.drag_has_moved = true;
+                }
+
+                if state.drag_has_moved {
+                    if let Some(next_area) = work_area_near_point(&app, point) {
+                        let (edge, distance) = nearest_edge(next_area, point);
+                        let snap_distance =
+                            (SNAP_DISTANCE_LOGICAL * next_area.scale_factor).round() as i32;
+                        let preview_edge = (distance <= snap_distance.max(24)).then_some(edge);
+                        let source_rect =
+                            state.managed_rect.or(current_rect).unwrap_or(shown_rect);
+                        let preview_rect = match preview_edge {
+                            Some(edge) => sidebar_rect(
+                                next_area,
+                                edge,
+                                state.thickness_logical,
+                                state.edge_length_logical,
+                                state.ui_scale,
+                            ),
+                            None => floating_drag_preview_rect(
+                                next_area,
+                                point,
+                                state.drag_offset,
+                                source_rect,
+                                state.ui_scale,
+                            ),
+                        };
+
+                        if state.managed_rect != Some(preview_rect) {
+                            if native_set_window_rect(&window, preview_rect).is_ok() {
+                                state.managed_rect = Some(preview_rect);
+                            }
+                        }
+                        state.drag_preview_edge = preview_edge;
+                        state.drag_preview_area = Some(next_area);
+                    }
+                }
+            }
+
+            if !left_down {
+                if let (Some(edge), Some(next_area)) =
+                    (state.drag_preview_edge, state.drag_preview_area)
+                {
+                    state.edge = edge;
+                    state.work_area = next_area;
+                }
+                state.dragging = false;
+                state.drag_start = None;
+                state.drag_has_moved = false;
+                state.drag_offset = None;
+                state.drag_preview_edge = None;
+                state.drag_preview_area = None;
+                state.layout_dirty = true;
+                state.requested_expanded = true;
+                state.grace_until = now + SHOW_GRACE;
+                state.start_reveal_cooldown(now);
+                should_persist = true;
+            }
+        } else if left_down {
+            if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
+                if (actual.width - managed.width).abs() > 2
+                    || (actual.height - managed.height).abs() > 2
+                {
+                    state.resizing = true;
+                }
+            }
+        } else if state.was_left_down && state.resizing {
+            if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
+                let thickness_changed = if state.edge.is_vertical() {
+                    (actual.width - managed.width).abs() > 2
+                } else {
+                    (actual.height - managed.height).abs() > 2
+                };
+                let edge_length_changed = if state.edge.is_vertical() {
+                    (actual.height - managed.height).abs() > 2
+                } else {
+                    (actual.width - managed.width).abs() > 2
+                };
+
+                if thickness_changed {
+                    state.thickness_logical = logical_thickness_for_rect(
+                        state.work_area,
+                        state.edge,
+                        actual,
+                        state.ui_scale,
+                    );
+                }
+                if edge_length_changed {
+                    state.edge_length_logical = Some(logical_edge_length_for_rect(
+                        state.work_area,
+                        state.edge,
+                        actual,
+                        state.ui_scale,
+                    ));
+                }
+                state.layout_dirty = true;
+                should_persist = true;
+            }
+            state.resizing = false;
+        }
+
+        state.was_left_down = left_down;
+
+        let previous_cursor = state.last_cursor;
+        state.last_cursor = cursor;
+        let edge_hovered = cursor
+            .map(|point| cursor_in_edge_trigger(state.work_area, shown_rect, state.edge, point))
+            .unwrap_or(false);
+        let entered_with_intent = match (previous_cursor, cursor) {
+            (Some(previous), Some(current)) => cursor_entered_edge_with_intent(
+                state.work_area,
+                shown_rect,
+                state.edge,
+                previous,
+                current,
+            ),
+            _ => false,
+        };
+        if state.suppress_reveal_until_edge_leave {
+            state.reset_edge_reveal();
+            if !edge_hovered {
+                state.suppress_reveal_until_edge_leave = false;
+            }
+        } else {
+            let reveal_blocked = state.pinned
+                || state.requested_expanded
+                || state.native_visible
+                || state.dragging
+                || pointer_button_down
+                || now < state.reveal_cooldown_until;
+            let reveal_dwell = state.reveal_dwell;
+            if state.edge_reveal_intent.update(
+                now,
+                edge_hovered,
+                entered_with_intent,
+                reveal_blocked,
+                reveal_dwell,
+            ) {
+                state.requested_expanded = true;
+                state.awaiting_pointer_entry = false;
+                state.grace_until = now + SHOW_GRACE;
+                state.leave_at = None;
+            }
+        }
+
+        if state.pinned {
+            state.requested_expanded = true;
+            state.awaiting_pointer_entry = false;
+            state.leave_at = None;
+        } else if state.requested_expanded && !state.dragging && !left_down {
+            let pointer_inside = cursor
+                .map(|point| pointer_inside_sidebar(&window, shown_rect, point))
+                .unwrap_or(false);
+            if pointer_inside {
+                state.awaiting_pointer_entry = false;
+            }
+            if pointer_inside || state.awaiting_pointer_entry || now < state.grace_until {
+                state.leave_at = None;
+            } else if let Some(deadline) = state.leave_at {
+                if now >= deadline {
+                    state.requested_expanded = false;
+                    state.leave_at = None;
+                    state.start_reveal_cooldown(now);
+                }
+            } else {
+                state.leave_at = Some(now + state.hide_leave_delay);
+            }
+        }
+
+        if state.requested_expanded
+            && state.native_visible
+            && !state.dragging
+            && !state.resizing
         {
-            let mut state = lock_runtime(&runtime);
-            if !state.enabled { continue; }
-            let shown_rect = sidebar_rect(
+            if current_rect.is_none_or(|actual| !rects_close(actual, shown_rect)) {
+                state.layout_dirty = true;
+            }
+        }
+
+        if state.layout_dirty && !state.dragging && !left_down {
+            let target = sidebar_rect(
                 state.work_area,
                 state.edge,
                 state.thickness_logical,
                 state.edge_length_logical,
                 state.ui_scale,
             );
-            if state.native_visible && !native_is_visible(&window) {
-                state.native_visible = false;
-                state.visual_expanded = false;
+            if native_set_window_rect(&window, target).is_ok() {
+                state.managed_rect = Some(target);
+                state.layout_dirty = false;
             }
+        }
 
-            if state.dragging {
-                if let Some(point) = cursor {
-                    let activation_distance = (DRAG_ACTIVATION_DISTANCE_LOGICAL
-                        * state.work_area.scale_factor)
-                        .round() as i32;
-                    if let Some(start) = state.drag_start {
-                        let delta_x = point.x.saturating_sub(start.x) as i64;
-                        let delta_y = point.y.saturating_sub(start.y) as i64;
-                        let threshold = activation_distance.max(4) as i64;
-                        state.drag_has_moved |=
-                            delta_x * delta_x + delta_y * delta_y >= threshold * threshold;
-                    } else {
-                        state.drag_has_moved = true;
-                    }
-
-                    if state.drag_has_moved {
-                        if let Some(next_area) = work_area_near_point(&app, point) {
-                            let (edge, distance) = nearest_edge(next_area, point);
-                            let snap_distance =
-                                (SNAP_DISTANCE_LOGICAL * next_area.scale_factor).round() as i32;
-                            let preview_edge = (distance <= snap_distance.max(24)).then_some(edge);
-                            let source_rect =
-                                state.managed_rect.or(current_rect).unwrap_or(shown_rect);
-                            let preview_rect = match preview_edge {
-                                Some(edge) => sidebar_rect(
-                                    next_area,
-                                    edge,
-                                    state.thickness_logical,
-                                    state.edge_length_logical,
-                                    state.ui_scale,
-                                ),
-                                None => floating_drag_preview_rect(
-                                    next_area,
-                                    point,
-                                    state.drag_offset,
-                                    source_rect,
-                                    state.ui_scale,
-                                ),
-                            };
-
-                            if state.managed_rect != Some(preview_rect) {
-                                if native_set_window_rect(&window, preview_rect).is_ok() {
-                                    state.managed_rect = Some(preview_rect);
-                                }
-                            }
-                            state.drag_preview_edge = preview_edge;
-                            state.drag_preview_area = Some(next_area);
-                        }
-                    }
-                }
-
-                if !left_down {
-                    if let (Some(edge), Some(next_area)) =
-                        (state.drag_preview_edge, state.drag_preview_area)
-                    {
-                        state.edge = edge;
-                        state.work_area = next_area;
-                    }
-                    state.dragging = false;
-                    state.drag_start = None;
-                    state.drag_has_moved = false;
-                    state.drag_offset = None;
-                    state.drag_preview_edge = None;
-                    state.drag_preview_area = None;
-                    state.layout_dirty = true;
-                    state.requested_expanded = true;
-                    state.grace_until = now + SHOW_GRACE;
-                    state.start_reveal_cooldown(now);
-                    should_persist = true;
-                }
-            } else if left_down {
-                if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
-                    if (actual.width - managed.width).abs() > 2
-                        || (actual.height - managed.height).abs() > 2
-                    {
-                        state.resizing = true;
-                    }
-                }
-            } else if state.was_left_down && state.resizing {
-                if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
-                    let thickness_changed = if state.edge.is_vertical() {
-                        (actual.width - managed.width).abs() > 2
-                    } else {
-                        (actual.height - managed.height).abs() > 2
-                    };
-                    let edge_length_changed = if state.edge.is_vertical() {
-                        (actual.height - managed.height).abs() > 2
-                    } else {
-                        (actual.width - managed.width).abs() > 2
-                    };
-
-                    if thickness_changed {
-                        state.thickness_logical = logical_thickness_for_rect(
-                            state.work_area,
-                            state.edge,
-                            actual,
-                            state.ui_scale,
-                        );
-                    }
-                    if edge_length_changed {
-                        state.edge_length_logical = Some(logical_edge_length_for_rect(
-                            state.work_area,
-                            state.edge,
-                            actual,
-                            state.ui_scale,
-                        ));
-                    }
-                    state.layout_dirty = true;
-                    should_persist = true;
-                }
-                state.resizing = false;
-            }
-
-            state.was_left_down = left_down;
-
-            let previous_cursor = state.last_cursor;
-            state.last_cursor = cursor;
-            let edge_hovered = cursor
-                .map(|point| cursor_in_edge_trigger(state.work_area, shown_rect, state.edge, point))
-                .unwrap_or(false);
-            let entered_with_intent = match (previous_cursor, cursor) {
-                (Some(previous), Some(current)) => cursor_entered_edge_with_intent(
-                    state.work_area,
-                    shown_rect,
-                    state.edge,
-                    previous,
-                    current,
-                ),
-                _ => false,
-            };
-            if state.suppress_reveal_until_edge_leave {
-                state.reset_edge_reveal();
-                if !edge_hovered {
-                    state.suppress_reveal_until_edge_leave = false;
-                }
-            } else {
-                let reveal_blocked = state.pinned
-                    || state.requested_expanded
-                    || state.native_visible
-                    || state.dragging
-                    || pointer_button_down
-                    || now < state.reveal_cooldown_until;
-                let reveal_dwell = state.reveal_dwell;
-                if state.edge_reveal_intent.update(
-                    now,
-                    edge_hovered,
-                    entered_with_intent,
-                    reveal_blocked,
-                    reveal_dwell,
-                ) {
-                    state.requested_expanded = true;
-                    state.awaiting_pointer_entry = false;
-                    state.grace_until = now + SHOW_GRACE;
-                    state.leave_at = None;
-                }
-            }
-
-            if state.pinned {
-                state.requested_expanded = true;
-                state.awaiting_pointer_entry = false;
-                state.leave_at = None;
-            } else if state.requested_expanded && !state.dragging && !left_down {
-                let pointer_inside = cursor
-                    .map(|point| pointer_inside_sidebar(&window, shown_rect, point))
-                    .unwrap_or(false);
-                if pointer_inside {
-                    state.awaiting_pointer_entry = false;
-                }
-                if pointer_inside || state.awaiting_pointer_entry || now < state.grace_until {
-                    state.leave_at = None;
-                } else if let Some(deadline) = state.leave_at {
-                    if now >= deadline {
-                        state.requested_expanded = false;
-                        state.leave_at = None;
-                        state.start_reveal_cooldown(now);
-                    }
-                } else {
-                    state.leave_at = Some(now + state.hide_leave_delay);
-                }
-            }
-
-            if state.requested_expanded
-                && state.native_visible
-                && !state.dragging
-                && !state.resizing
-            {
-                if current_rect.is_none_or(|actual| !rects_close(actual, shown_rect)) {
-                    state.layout_dirty = true;
-                }
-            }
-
-            if state.layout_dirty && !state.dragging && !left_down {
+        if state.requested_expanded {
+            if !state.native_visible || state.raise_requested {
                 let target = sidebar_rect(
                     state.work_area,
                     state.edge,
@@ -854,63 +888,45 @@ fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockR
                     state.edge_length_logical,
                     state.ui_scale,
                 );
-                if native_set_window_rect(&window, target).is_ok() {
-                    state.managed_rect = Some(target);
-                    state.layout_dirty = false;
-                }
-            }
-
-            if state.requested_expanded {
-                if !state.native_visible || state.raise_requested {
-                    let target = sidebar_rect(
-                        state.work_area,
-                        state.edge,
-                        state.thickness_logical,
-                        state.edge_length_logical,
-                        state.ui_scale,
-                    );
-                    match show_sidebar_window(&window, target, state.focus_requested) {
-                        Ok(()) => {
-                            state.managed_rect = Some(target);
-                            state.native_visible = true;
-                            state.visual_expanded = true;
-                            state.raise_requested = false;
-                        }
-                        Err(error) => log::warn!("Failed to show Windows sidebar: {error}"),
+                match show_sidebar_window(&window, target, state.focus_requested) {
+                    Ok(()) => {
+                        state.managed_rect = Some(target);
+                        state.native_visible = true;
+                        state.visual_expanded = true;
+                        state.raise_requested = false;
                     }
-                } else if !state.visual_expanded {
-                    state.visual_expanded = true;
+                    Err(error) => log::warn!("Failed to show Windows sidebar: {error}"),
                 }
+            } else if !state.visual_expanded {
+                state.visual_expanded = true;
+            }
 
-                if state.focus_requested && state.native_visible {
-                    let _ = window.set_focus();
-                    state.focus_requested = false;
-                }
-            } else {
+            if state.focus_requested && state.native_visible {
+                let _ = window.set_focus();
                 state.focus_requested = false;
-                state.raise_requested = false;
-                state.visual_expanded = false;
-                if state.native_visible {
-                    native_hide(&window);
-                    state.native_visible = false;
-                }
             }
-
-            let payload = state.payload();
-            if state.last_emitted.as_ref() != Some(&payload) {
-                state.last_emitted = Some(payload.clone());
-                event_payload = Some(payload);
+        } else {
+            state.focus_requested = false;
+            state.raise_requested = false;
+            state.visual_expanded = false;
+            if state.native_visible {
+                native_hide(&window);
+                state.native_visible = false;
             }
         }
 
-        if should_persist {
-            persist_runtime_config(&app);
+        let payload = state.payload();
+        if state.last_emitted.as_ref() != Some(&payload) {
+            state.last_emitted = Some(payload.clone());
+            event_payload = Some(payload);
         }
-        if let Some(payload) = event_payload {
-            let _ = app.emit("sidebar_state_update", payload);
-        }
+    }
 
-        std::thread::sleep(Duration::from_millis(16));
+    if should_persist {
+        persist_runtime_config(&app);
+    }
+    if let Some(payload) = event_payload {
+        let _ = app.emit("sidebar_state_update", payload);
     }
 }
 

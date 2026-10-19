@@ -591,6 +591,9 @@ async fn create_widget_impl_with_options(
         }
     };
 
+    #[cfg(windows)]
+    crate::windows_frame::protect(&win)?;
+
     // Frameless widgets use their own drag/resize affordances. Keeping the
     // native maximize capability enabled also opts them into Windows Aero
     // Snap, which can unexpectedly maximize a widget near a screen edge.
