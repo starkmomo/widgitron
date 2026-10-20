@@ -1,5 +1,69 @@
 use tauri::{AppHandle, Manager};
 
+/// Keep desktop tools available on ordinary Spaces without covering full-screen apps.
+#[cfg(target_os = "macos")]
+pub fn configure_macos_desktop_spaces(native: &objc2_app_kit::NSWindow) {
+    use objc2_app_kit::NSWindowCollectionBehavior;
+    let conflicting = NSWindowCollectionBehavior::MoveToActiveSpace
+        | NSWindowCollectionBehavior::Stationary
+        | NSWindowCollectionBehavior::Transient
+        | NSWindowCollectionBehavior::ParticipatesInCycle
+        | NSWindowCollectionBehavior::FullScreenPrimary
+        | NSWindowCollectionBehavior::FullScreenAuxiliary;
+    let behavior = (native.collectionBehavior() & !conflicting)
+        | NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::Managed
+        | NSWindowCollectionBehavior::IgnoresCycle
+        | NSWindowCollectionBehavior::FullScreenNone;
+    native.setCollectionBehavior(behavior);
+}
+
+/// Dragging a desktop child uses a temporary top-level window. Restore its
+/// desktop layer after the native move loop, independently of position locking.
+#[tauri::command]
+pub async fn begin_widget_drag(app: AppHandle, label: String) -> Result<(), String> {
+    if !crate::widget_layout::is_tracked_widget(&label) {
+        return Err(format!("Unsupported widget label: {label}"));
+    }
+    let win = app.get_webview_window(&label).ok_or("Widget window not found")?;
+    #[cfg(windows)]
+    {
+        use windows::Win32::{
+            Foundation::{HWND, LPARAM, POINT, WPARAM},
+            UI::{
+                Input::KeyboardAndMouse::ReleaseCapture,
+                WindowsAndMessaging::{GetCursorPos, SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN},
+            },
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        win.clone().run_on_main_thread(move || {
+            let desktop = is_desktop_mode(&app, &label);
+            crate::widget_layout::suppress_layout_event_persist(&app, &label);
+            let result = (|| -> Result<(), String> {
+                if desktop {
+                    set_desktop_mode_now(&app, &label, false)?;
+                }
+                let hwnd = HWND(win.hwnd().map_err(|error| error.to_string())?.0 as *mut _);
+                unsafe {
+                    let mut point = POINT::default();
+                    GetCursorPos(&mut point).map_err(|error| error.to_string())?;
+                    let _ = ReleaseCapture();
+                    let position = ((point.y as u16 as u32) << 16) | point.x as u16 as u32;
+                    SendMessageW(hwnd, WM_NCLBUTTONDOWN, Some(WPARAM(HTCAPTION as usize)), Some(LPARAM(position as isize)));
+                }
+                crate::widget_layout::persist_layout_now(&app, &label)
+            })();
+            let restored = if desktop { set_desktop_mode_now(&app, &label, true) } else { Ok(()) };
+            let _ = sender.send(result.and(restored));
+        }).map_err(|error| error.to_string())?;
+        receiver.await.map_err(|error| error.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        win.start_dragging().map_err(|error| error.to_string())
+    }
+}
+
 /// Both modes join ordinary Spaces; pinning changes only the window level.
 /// This is an AppKit window, not a WidgetKit extension.
 #[cfg(target_os = "macos")]
@@ -7,7 +71,7 @@ pub async fn set_macos_widget_level(
     win: &tauri::WebviewWindow,
     topmost: bool,
 ) -> Result<(), String> {
-    use objc2_app_kit::{NSFloatingWindowLevel, NSWindow, NSWindowCollectionBehavior};
+    use objc2_app_kit::{NSFloatingWindowLevel, NSWindow};
     use objc2_core_graphics::{CGWindowLevelForKey, CGWindowLevelKey};
 
     let win = win.clone();
@@ -32,18 +96,7 @@ pub async fn set_macos_widget_level(
                 // Don't leave widgets stationary over the Spaces transition.
                 // Managed lets WindowServer animate them with the desktop.
                 // Full-screen applications keep their own Space undisturbed.
-                let conflicting = NSWindowCollectionBehavior::MoveToActiveSpace
-                    | NSWindowCollectionBehavior::Stationary
-                    | NSWindowCollectionBehavior::Transient
-                    | NSWindowCollectionBehavior::ParticipatesInCycle
-                    | NSWindowCollectionBehavior::FullScreenPrimary
-                    | NSWindowCollectionBehavior::FullScreenAuxiliary;
-                let behavior = (native.collectionBehavior() & !conflicting)
-                    | NSWindowCollectionBehavior::CanJoinAllSpaces
-                    | NSWindowCollectionBehavior::Managed
-                    | NSWindowCollectionBehavior::IgnoresCycle
-                    | NSWindowCollectionBehavior::FullScreenNone;
-                native.setCollectionBehavior(behavior);
+                configure_macos_desktop_spaces(native);
                 native.setLevel(level);
                 Ok(())
             })();
@@ -190,11 +243,17 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
             use windows::Win32::UI::WindowsAndMessaging::{
                 EnumWindows, FindWindowExW, FindWindowW, GetWindowLongW, SendMessageTimeoutW,
                 SetParent, SetWindowLongW, GWL_EXSTYLE, GWL_STYLE, SMTO_NORMAL, WS_CHILD,
-                WS_EX_TOPMOST, WS_POPUP,
+                WS_EX_TOPMOST, WS_POPUP, SET_WINDOW_POS_FLAGS, SWP_SHOWWINDOW,
             };
 
             let hwnd_raw = win.hwnd().map_err(|e| e.to_string())?;
             let hwnd = HWND(hwnd_raw.0 as *mut _);
+            // Reparenting and DPI repairs must not reveal temporarily hidden widgets.
+            let visibility_flags = if win.is_visible().unwrap_or(false) {
+                SWP_SHOWWINDOW
+            } else {
+                SET_WINDOW_POS_FLAGS(0)
+            };
 
             if enabled {
                 log::info!("Enabling desktop mode for {}", label);
@@ -314,7 +373,7 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                         // 2. Adjust Styles BEFORE SetParent
                         let style = GetWindowLongW(hwnd, GWL_STYLE);
                         let clean_style =
-                            (style | WS_CHILD.0 as i32 | 0x04000000 | 0x02000000 | 0x10000000)
+                            (style | WS_CHILD.0 as i32 | 0x04000000 | 0x02000000)
                                 & !(WS_POPUP.0 as i32);
                         let _ = SetWindowLongW(hwnd, GWL_STYLE, clean_style);
 
@@ -332,7 +391,7 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                         // apply the desktop parent's DPI transform and silently enlarge a child
                         // window; setting both size and position here prevents that second scale.
                         use windows::Win32::UI::WindowsAndMessaging::{
-                            SetWindowPos, HWND_TOP, SWP_FRAMECHANGED, SWP_SHOWWINDOW,
+                            SetWindowPos, HWND_TOP, SWP_FRAMECHANGED,
                         };
                         let _ = SetWindowPos(
                             hwnd,
@@ -341,11 +400,8 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                             client_y,
                             width,
                             height,
-                            SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+                            visibility_flags | SWP_FRAMECHANGED,
                         );
-
-                        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOW};
-                        let _ = ShowWindow(hwnd, SW_SHOW);
                     }
 
                     // 5. Compensate WebView zoom for host/parent DPI inheritance.
@@ -374,7 +430,6 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                         use windows::Win32::Foundation::RECT;
                         use windows::Win32::UI::WindowsAndMessaging::{
                             GetWindowRect, SetWindowPos, HWND_TOP, SWP_FRAMECHANGED, SWP_NOZORDER,
-                            SWP_SHOWWINDOW,
                         };
                         let mut parent_rect = RECT::default();
                         let _ = GetWindowRect(parent, &mut parent_rect);
@@ -387,7 +442,7 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                             client_y,
                             width,
                             height,
-                            SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOZORDER,
+                            visibility_flags | SWP_FRAMECHANGED | SWP_NOZORDER,
                         );
                     }
                     let settled_parent = hwnd_dpi_scale(parent);
@@ -423,7 +478,8 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                         let height_delay = height;
                         tauri::async_runtime::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                            if !is_desktop_mode(&app_delay, &label_delay) {
+                            if !is_desktop_mode(&app_delay, &label_delay)
+                                || !win_delay.is_visible().unwrap_or(false) {
                                 return;
                             }
                             let Ok(hwnd_raw) = win_delay.hwnd() else {
@@ -499,7 +555,7 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                     // This complements the restoration above and avoids a DPI-induced jump on
                     // either lock transition.
                     use windows::Win32::UI::WindowsAndMessaging::{
-                        SetWindowPos, HWND_TOP, SWP_FRAMECHANGED, SWP_SHOWWINDOW,
+                        SetWindowPos, HWND_TOP, SWP_FRAMECHANGED,
                     };
                     let _ = SetWindowPos(
                         hwnd,
@@ -508,7 +564,7 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                         rect.top,
                         width,
                         height,
-                        SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+                        visibility_flags | SWP_FRAMECHANGED,
                     );
                 }
 

@@ -66,6 +66,7 @@ mod ui_scale;
 mod utils;
 mod vscode_secrets;
 mod widget_layout;
+mod widget_visibility;
 #[cfg(windows)]
 mod windows_glass;
 #[cfg(windows)]
@@ -95,6 +96,9 @@ pub fn run() {
             commands::create_widget,
             commands::close_widget,
             commands::hide_all_widgets,
+            commands::set_widgets_hidden,
+            commands::toggle_widgets_visibility,
+            desktop::begin_widget_drag,
             commands::toggle_widget,
             desktop::set_desktop_mode,
             commands::save_gpu_config,
@@ -532,9 +536,13 @@ pub fn run() {
             });
 
             tauri::async_runtime::spawn(async move {
-                let active_map = app_config.active_widgets.unwrap_or_default();
-                let default_visible = cfg!(windows);
                 tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                let app_config = config_store::read_config::<models::AppConfig>(&handle_gpu, "app_config.json");
+                if app_config.widgets_hidden.unwrap_or(false) {
+                    return;
+                }
+                let active_map = app_config.active_widgets.unwrap_or_default();
+                let default_visible = false;
 
                 if app_config.gpu_enabled.unwrap_or(true)
                     && *active_map

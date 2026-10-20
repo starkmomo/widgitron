@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Radar, Check, ChevronDown } from "lucide-react";
@@ -57,6 +57,12 @@ export function ArxivWidgetContent({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [keywordMenuOpen, setKeywordMenuOpen] = useState(false);
+  const keywordControlRef = useRef<HTMLDivElement>(null);
+  const keywordTriggerRef = useRef<HTMLButtonElement>(null);
+  const keywordDismissRef = useRef<HTMLButtonElement>(null);
+  const keywordMenuOpenRef = useRef(false);
+  keywordMenuOpenRef.current = keywordMenuOpen;
+  const keywordMenuId = useId();
   const [exitDirection, setExitDirection] = useState<SwipeDirection | undefined>(undefined);
   const [serviceEnabled, setServiceEnabled] = useState(true);
   const [dashboardTheme, setDashboardTheme] = useState<"light" | "dark">("dark");
@@ -68,6 +74,40 @@ export function ArxivWidgetContent({
     : hasOtherArxivMatches ? [...arxivKeywords, UNCATEGORIZED_ARXIV_KEYWORD] : arxivKeywords;
   const visiblePapers = !hasArxivKeywords(arxivConfig.keywords) ? [] : filterArxivPapersByKeywords(papers, selectedKeywords, arxivConfig.keywords);
   const currentPaper = visiblePapers[currentIndex];
+
+  useEffect(() => {
+    if (!keywordMenuOpen) return;
+    const outsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || keywordControlRef.current?.contains(target)
+        || keywordDismissRef.current?.contains(target)) return;
+      setKeywordMenuOpen(false);
+    };
+    const outsideFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !keywordControlRef.current?.contains(event.target)) {
+        setKeywordMenuOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Consume this Escape before the sidebar's window-level hide shortcut.
+      event.preventDefault();
+      event.stopPropagation();
+      setKeywordMenuOpen(false);
+      keywordTriggerRef.current?.focus({ preventScroll: true });
+    };
+    const blur = () => setKeywordMenuOpen(false);
+    document.addEventListener("pointerdown", outsidePointer, true);
+    document.addEventListener("focusin", outsideFocus);
+    document.addEventListener("keydown", escape, true);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerdown", outsidePointer, true);
+      document.removeEventListener("focusin", outsideFocus);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("blur", blur);
+    };
+  }, [keywordMenuOpen]);
 
   useEffect(() => {
     setSelectedKeywords((prev) => prev.filter((keyword) => arxivKeywordOptions.includes(keyword)));
@@ -191,6 +231,7 @@ export function ArxivWidgetContent({
   if (!currentTheme) return null;
 
   const handleAction = async (direction: SwipeDirection) => {
+    if (keywordMenuOpenRef.current) return;
     const paper = currentPaper;
     if (!paper) return;
 
@@ -252,10 +293,13 @@ export function ArxivWidgetContent({
         )}
       />
       {serviceEnabled && arxivKeywordOptions.length > 0 && (
-        <div className="relative z-[60] mb-3 shrink-0" data-no-drag="true">
+        <div ref={keywordControlRef} className="relative z-[60] mb-3 shrink-0" data-no-drag="true"
+          onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
           <button
+            ref={keywordTriggerRef}
             type="button"
             aria-expanded={keywordMenuOpen}
+            aria-controls={keywordMenuOpen ? keywordMenuId : undefined}
             onClick={() => setKeywordMenuOpen((open) => !open)}
             className="arxiv-keyword-control w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
             style={{
@@ -279,8 +323,9 @@ export function ArxivWidgetContent({
           </button>
           {keywordMenuOpen && (
             <div
+              id={keywordMenuId}
               data-glass-tone={keywordMenuGlass ? (isLightAppearance ? "light" : "dark") : undefined}
-              className={`absolute left-0 right-0 top-full z-50 isolate mt-1 max-h-40 overflow-y-auto rounded-lg border ${keywordMenuGlass ? "glass-surface glass-menu" : ""}`}
+              className={`absolute left-0 right-0 top-full z-50 isolate mt-1 max-h-40 touch-pan-y overflow-y-auto overscroll-contain rounded-lg border ${keywordMenuGlass ? "glass-surface glass-menu" : ""}`}
               style={{
                 borderColor: keywordMenuGlass ? "transparent" : keywordMenuBorder,
                 backgroundColor: keywordMenuBackground,
@@ -366,7 +411,8 @@ export function ArxivWidgetContent({
           {currentPaper ? (
             <motion.div
               key={currentPaper.id}
-              drag
+              drag={!keywordMenuOpen}
+              inert={keywordMenuOpen}
               dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
               onDragEnd={(_, info) => {
                 if (info.offset.x < -100) handleAction("left");
@@ -383,7 +429,7 @@ export function ArxivWidgetContent({
               }}
               data-no-drag="true"
               className="widget-paper-card absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-3 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
-              style={widgetCardStyle(currentTheme)}
+              style={{ ...widgetCardStyle(currentTheme), pointerEvents: keywordMenuOpen ? "none" : undefined }}
             >
               <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1">
                 <h3 className="arxiv-paper-title shrink-0 text-[10px] font-bold mb-2 leading-snug break-words">{currentPaper.title}</h3>
@@ -421,6 +467,17 @@ export function ArxivWidgetContent({
           )}
         </AnimatePresence>
         )}
+        {keywordMenuOpen && <button
+          ref={keywordDismissRef}
+          type="button"
+          tabIndex={-1}
+          aria-label="Close keyword filter"
+          data-no-drag="true"
+          className="absolute inset-0 z-20 cursor-default border-0 bg-transparent p-0 outline-none"
+          onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }}
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => { event.stopPropagation(); setKeywordMenuOpen(false); }}
+        />}
       </div>
     </div>
   );

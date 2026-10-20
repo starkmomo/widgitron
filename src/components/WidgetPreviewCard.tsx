@@ -43,8 +43,8 @@ export function WidgetPreviewCard({
         </button>
         <button type="button" onClick={onToggleFloating} disabled={!enabled || loading}
           aria-pressed={floatingVisible}
-          aria-label={floatingVisible ? "Floating window: Shown" : "Floating window: Hidden"}
-          title={floatingVisible ? "Floating window: Shown" : "Floating window: Hidden"}
+          aria-label={floatingVisible ? "Floating window: On" : "Floating window: Off"}
+          title={floatingVisible ? "Floating window: On" : "Floating window: Off"}
           className={stateClass(floatingVisible)}>
           {loading ? <Loader2 size={14} className="mx-auto animate-spin" /> : floatingVisible ? "Window On" : "Window Off"}
         </button>

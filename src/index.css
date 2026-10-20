@@ -537,7 +537,7 @@ html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"],
   color: #047857;
 }
 
-html:is([data-platform="windows"], [data-platform="macos"]) .reading-dialog[data-compact="true"] [tabindex="0"] {
+html:is([data-platform="windows"], [data-platform="macos"]) .abstract-reading-dialog[data-compact="true"] [tabindex="0"] {
   font-size: 14px;
   line-height: 1.5;
 }
@@ -564,30 +564,30 @@ body:has([data-sidebar-edge="bottom"]) {
   --reading-window-radii: 8px 8px 0 0;
 }
 
-.reading-dialog {
+.abstract-reading-dialog {
   clip-path: inset(0 round var(--reading-window-radii, 0px));
   background: rgba(15, 23, 42, 0.4);
 }
 
-.reading-dialog[open] {
+.abstract-reading-dialog[open] {
   display: flex;
 }
 
-.reading-dialog::backdrop {
+.abstract-reading-dialog::backdrop {
   background: transparent;
 }
 
-body:has(.reading-dialog[data-compact="true"][open]) > #root {
+body:has(.abstract-reading-dialog[data-compact="true"][open]) > #root {
   clip-path: inset(0 round var(--reading-window-radii, 0px));
 }
 
 /* Blur the background without allowing the filter to spill beyond its mask. */
-body:has(.reading-dialog[data-translucent="true"][open]) > #root {
+body:has(.abstract-reading-dialog[data-translucent="true"][open]) > #root {
   filter: blur(6px);
   opacity: 0.55;
 }
 
-.reading-dialog[data-translucent="true"] {
+.abstract-reading-dialog[data-translucent="true"] {
   background: rgba(15, 23, 42, 0.08);
 }
 

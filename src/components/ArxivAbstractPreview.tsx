@@ -84,7 +84,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
           data-translucent={overlay?.translucent ? "true" : undefined}
           aria-labelledby={titleId}
           data-no-drag="true"
-          className="reading-dialog fixed inset-0 m-0 h-full max-h-none w-full max-w-none items-center justify-center overflow-hidden border-0 p-4 outline-none"
+          className="reading-dialog abstract-reading-dialog fixed inset-0 m-0 h-full max-h-none w-full max-w-none items-center justify-center overflow-hidden border-0 p-4 outline-none"
           onPointerDownCapture={(event) => event.stopPropagation()}
           onKeyDownCapture={(event) => {
             // Let the dialog handle Escape without hiding the sidebar window.

@@ -19,7 +19,8 @@ import {
   User,
   Plus,
   ChevronDown,
-  EyeOff
+  EyeOff,
+  Eye
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { APP_VERSION, APP_NAME } from "./constants";
@@ -475,7 +476,7 @@ function App() {
     return () => { active = false; unlisten?.(); };
   }, [windowLabel]);
   const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
-  const [isLocked, setIsLocked] = useState(!isMacOS);
+  const [isLocked, setIsLocked] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
@@ -683,6 +684,9 @@ function App() {
   }, [pagedArxivView, pagedArxiv.page, pagedArxiv.data_date, pagedArxiv.loaded]);
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
+  const [widgetsVisibilityBusy, setWidgetsVisibilityBusy] = useState(false);
+  const hasFloatingWidgets = MODULE_NAVIGATION.some(({ field }) =>
+    appConfig[field] !== false && activeWidgets.includes(serviceWidgetMeta(field).id));
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
   const currentTheme = resolveWidgetTheme(themeConfig, windowLabel, undefined, { dashboardTheme: appConfig.theme });
   const themePendingWrites = useRef(0);
@@ -910,13 +914,8 @@ function App() {
           if (windowLabel.startsWith("widget-")) {
             setIsPinned(config.always_on_top?.[windowLabel] ?? false);
           }
-          if (windowLabel === "main") {
-            setActiveWidgets(activeWidgetLabelsFromConfig(config) ?? (isMacOS ? [] : [
-              ...(config.gpu_enabled !== false ? [serviceWidgetMeta("gpu_enabled").id] : []),
-              ...(config.deadline_enabled !== false ? [serviceWidgetMeta("deadline_enabled").id] : []),
-              ...(config.arxiv_enabled !== false ? [serviceWidgetMeta("arxiv_enabled").id] : []),
-              ...(config.quota_enabled !== false ? [serviceWidgetMeta("quota_enabled").id] : []),
-            ]));
+          if (windowLabel === "main" || windowLabel === "tray-menu") {
+            setActiveWidgets(activeWidgetLabelsFromConfig(config) ?? []);
           }
         };
         // Native IPC callbacks run outside React input events. Commit sidebar
@@ -1458,7 +1457,7 @@ function App() {
   };
 
   const handleToggleWidget = async (id: string, title: string) => {
-    if (pendingToggles.has(id)) return;
+    if (pendingToggles.has(id) || widgetsVisibilityBusy) return;
     setPendingToggles((prev) => new Set(prev).add(id));
     setToggleWidgetError(null);
 
@@ -1478,23 +1477,21 @@ function App() {
     }
   };
 
-  const toggleLock = async () => {
-    const nextLocked = !isLocked;
-
-    // When unlocking, we MUST exit desktop mode to allow movement
-    // When locking, if we are NOT pinned, we re-enter desktop mode
-    if (windowLabel.startsWith("widget-") && !isMacOS) {
-      if (!nextLocked) {
-        // Unlocking: Exit desktop mode
-        await tauriInvoke("set_desktop_mode", { label: windowLabel, enabled: false });
-      } else {
-        // Locking: If not pinned, re-embed
-        if (!isPinned) {
-          await tauriInvoke("set_desktop_mode", { label: windowLabel, enabled: true });
-        }
-      }
+  const toggleWidgetsVisibility = async () => {
+    if (widgetsVisibilityBusy || pendingToggles.size > 0) return;
+    setWidgetsVisibilityBusy(true);
+    setToggleWidgetError(null);
+    try {
+      setAppConfig(await tauriInvoke("toggle_widgets_visibility"));
+    } catch (error) {
+      setToggleWidgetError(String(error));
+    } finally {
+      setWidgetsVisibilityBusy(false);
     }
-    setIsLocked(nextLocked);
+  };
+
+  const toggleLock = async () => {
+    setIsLocked(previous => !previous);
   };
 
   const togglePin = async (labelToToggle?: string) => {
@@ -1559,7 +1556,12 @@ function App() {
           await tauriInvoke("begin_sidebar_drag");
           return;
         }
-        await getCurrentWindow().startDragging();
+        if (isWindows && windowLabel.startsWith("widget-")) {
+          e.preventDefault();
+          await tauriInvoke("begin_widget_drag", { label: windowLabel });
+        } else {
+          await getCurrentWindow().startDragging();
+        }
       } catch (e) {
         console.error("Drag failed", e);
       }
@@ -1646,12 +1648,13 @@ function App() {
           />
           <span className="text-[11px] font-bold">Dashboard</span>
         </button>
-        {isMacOS && <button
-          onClick={() => tauriInvoke("hide_all_widgets").then(() => appWindow.hide()).catch(console.error)}
+        {hasFloatingWidgets && <button
+          disabled={widgetsVisibilityBusy}
+          onClick={() => toggleWidgetsVisibility().then(() => appWindow.hide()).catch(console.error)}
           className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
         >
-          <EyeOff size={14} className="text-slate-500 group-hover:text-slate-700 transition-colors" />
-          <span className="text-[11px] font-bold">Hide All Widgets</span>
+          {appConfig.widgets_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
+          <span className="text-[11px] font-bold">{appConfig.widgets_hidden ? "Show Widgets" : "Hide Widgets"}</span>
         </button>}
         <div role="separator" className="mx-2 my-1 border-t border-slate-200" />
         <button
@@ -2312,7 +2315,7 @@ function App() {
               : {}
           }
           onMouseDown={!isLocked ? startDrag : undefined}
-          data-tauri-drag-region={!isLocked ? "true" : "false"}
+          data-tauri-drag-region={!isLocked && !isWindows ? "true" : "false"}
         >
           {isGpu && <GPUWidgetContent headerControls={controls} />}
           {isDeadline && <DeadlineWidgetContent language={resolveLanguage(appConfig.language)} headerControls={controls} />}
@@ -2533,19 +2536,14 @@ function App() {
                       <Activity size={14} />
                       {sidebarDockState.expanded ? "Hide Sidebar" : "Open Sidebar"}
                     </button>
-                    {activeWidgets.length > 0 && <button
+                    {hasFloatingWidgets && <button
                       type="button"
-                      onClick={async () => {
-                        try {
-                          await tauriInvoke("hide_all_widgets");
-                          setActiveWidgets([]);
-                        } catch (error) {
-                          setToggleWidgetError(String(error));
-                        }
-                      }}
-                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-black uppercase tracking-widest transition-colors ${appConfig.theme === "light" ? "bg-white border-slate-200 text-slate-700 hover:bg-slate-50" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"}`}
+                      onClick={toggleWidgetsVisibility}
+                      disabled={widgetsVisibilityBusy || pendingToggles.size > 0}
+                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-black uppercase tracking-widest transition-colors disabled:cursor-wait disabled:opacity-50 ${appConfig.theme === "light" ? "bg-white border-slate-200 text-slate-700 hover:bg-slate-50" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"}`}
                     >
-                      <X size={14} /> Hide All Widgets
+                      {appConfig.widgets_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
+                      {appConfig.widgets_hidden ? "Show Widgets" : "Hide Widgets"}
                     </button>}
                     </div>
                   </div>
@@ -2569,7 +2567,7 @@ function App() {
                           enabled={appConfig[field] !== false}
                           sidebarVisible={appConfig.sidebar_widgets?.[section] !== false}
                           floatingVisible={activeWidgets.includes(id)}
-                          loading={pendingToggles.has(id)}
+                          loading={pendingToggles.has(id) || widgetsVisibilityBusy}
                           onToggleSidebar={() => {
                             saveSidebarWidgetVisibility(section, appConfig.sidebar_widgets?.[section] === false)
                               .catch((error) => setToggleWidgetError(String(error)));

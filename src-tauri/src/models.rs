@@ -137,6 +137,9 @@ pub struct AppConfig {
     /// 1–10. Higher = hides sooner after the pointer leaves (default 8, current feel).
     pub sidebar_hide_sensitivity: Option<u8>,
     pub active_widgets: Option<HashMap<String, bool>>,
+    /// Temporarily hide selected widgets without changing their module switches.
+    #[serde(default)]
+    pub widgets_hidden: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -311,6 +314,7 @@ impl Default for AppConfig {
             sidebar_reveal_sensitivity: Some(crate::sidebar_dock::DEFAULT_REVEAL_SENSITIVITY),
             sidebar_hide_sensitivity: Some(crate::sidebar_dock::DEFAULT_HIDE_SENSITIVITY),
             active_widgets: Some(HashMap::new()),
+            widgets_hidden: Some(false),
             language: None,
             macos_setup_version: None,
         }

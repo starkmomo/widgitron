@@ -141,6 +141,9 @@ export interface TauriCommandMap {
   create_widget: void;
   close_widget: void;
   hide_all_widgets: void;
+  set_widgets_hidden: AppConfig;
+  toggle_widgets_visibility: AppConfig;
+  begin_widget_drag: void;
   restore_widget_position: void;
   open_log_dir: void;
   open_config_dir: void;
@@ -214,6 +217,9 @@ export const TAURI_COMMAND_NAMES = [
   "create_widget",
   "close_widget",
   "hide_all_widgets",
+  "set_widgets_hidden",
+  "toggle_widgets_visibility",
+  "begin_widget_drag",
   "restore_widget_position",
   "open_log_dir",
   "open_config_dir",
@@ -314,6 +320,9 @@ export interface TauriCommandArgs {
   show_main: undefined;
   take_pending_main_navigation: undefined;
   hide_all_widgets: undefined;
+  set_widgets_hidden: { hidden: boolean };
+  toggle_widgets_visibility: undefined;
+  begin_widget_drag: { label: string };
   show_sidebar: undefined;
   hide_sidebar: undefined;
   toggle_sidebar_visibility: undefined;

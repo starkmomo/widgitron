@@ -138,6 +138,7 @@ fn show_without_focus(window: &WebviewWindow) -> Result<(), String> {
                     return Err("macOS sidebar has no native window".to_string());
                 }
                 let native: &NSWindow = unsafe { &*native.cast() };
+                crate::desktop::configure_macos_desktop_spaces(native);
                 native.orderFront(None);
                 Ok(())
             })();
@@ -168,9 +169,22 @@ pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     // the requested button (for example, expanding a conference timeline).
     #[cfg(target_os = "macos")]
     let builder = builder.accept_first_mouse(true);
-    builder
+    let window = builder
         .build()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let native_window = window.clone();
+        window.run_on_main_thread(move || {
+            if let Ok(pointer) = native_window.ns_window() {
+                if !pointer.is_null() {
+                    let native: &objc2_app_kit::NSWindow = unsafe { &*pointer.cast() };
+                    crate::desktop::configure_macos_desktop_spaces(native);
+                }
+            }
+        }).map_err(|error| error.to_string())?;
+    }
+    Ok(window)
 }
 
 pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {

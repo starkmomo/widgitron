@@ -309,6 +309,7 @@ pub async fn update_widget_visibility_config(
     let mut active = config.active_widgets.unwrap_or_default();
     active.insert(id.to_string(), visible);
     config.active_widgets = Some(active);
+    crate::widget_visibility::reset_hidden_when_empty(&mut config);
     write_config(app, "app_config.json", &config)?;
     let _ = app.emit(
         "widget_visibility_changed",
@@ -318,5 +319,7 @@ pub async fn update_widget_visibility_config(
         },
     );
     let _ = app.emit("app_config_update", &config);
+    #[cfg(target_os = "macos")]
+    crate::macos_tray::refresh(app);
     Ok(())
 }

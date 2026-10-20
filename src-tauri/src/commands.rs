@@ -153,6 +153,8 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     // Floating-window visibility is owned by the window commands. Frontend
     // config snapshots can lag behind a recent hide/show event.
     config.active_widgets = previous.active_widgets.clone();
+    config.widgets_hidden = previous.widgets_hidden;
+    crate::widget_visibility::reset_hidden_when_empty(&mut config);
     let previous_scale = crate::ui_scale::from_config(&previous);
     let next_scale = crate::ui_scale::from_config(&config);
     let scale_changed = (previous_scale - next_scale).abs() >= 0.001;
@@ -555,7 +557,7 @@ async fn create_widget_impl_with_options(
         .as_ref()
         .and_then(|values| values.get(&id))
         .copied()
-        .unwrap_or(cfg!(windows));
+        .unwrap_or(false);
     #[cfg(target_os = "macos")]
     let desktop_fixed = !keep_on_top;
     let win = if let Some(win) = app.get_webview_window(&id) {
@@ -568,6 +570,7 @@ async fn create_widget_impl_with_options(
             .resizable(true)
             .maximizable(false)
             .transparent(true)
+            .visible(false)
             .shadow(false)
             .always_on_top(keep_on_top)
             .skip_taskbar(true);
@@ -612,17 +615,20 @@ async fn create_widget_impl_with_options(
     }
     #[cfg(target_os = "macos")]
     crate::desktop::set_macos_widget_level(&win, keep_on_top).await?;
-    let _ = win.show();
+    let temporarily_hidden = config.widgets_hidden.unwrap_or(false);
+    if !temporarily_hidden {
+        win.show().map_err(|error| error.to_string())?;
+    }
     #[cfg(target_os = "macos")]
-    if focus_window && !desktop_fixed {
+    if focus_window && !desktop_fixed && !temporarily_hidden {
         let _ = win.set_focus();
     }
     #[cfg(not(target_os = "macos"))]
-    if focus_window {
+    if focus_window && !temporarily_hidden {
         let _ = win.set_focus();
     }
 
-    let _ = config_store::update_widget_visibility_config(&app, &id, true).await;
+    config_store::update_widget_visibility_config(&app, &id, true).await?;
     Ok(())
 }
 
@@ -672,10 +678,51 @@ pub async fn hide_all_widgets(
     app: AppHandle,
     state: tauri::State<'_, GlobalState>,
 ) -> Result<(), String> {
-    for id in crate::widget_layout::TRACKED_WIDGET_IDS {
-        close_widget(app.clone(), state.clone(), id.to_string()).await?;
+    set_widgets_hidden(app, state, true).await.map(|_| ())
+}
+
+async fn apply_widgets_hidden(app: &AppHandle, hidden: bool) -> Result<AppConfig, String> {
+    let mut config = config_store::read_config::<AppConfig>(app, "app_config.json");
+    config.widgets_hidden = Some(hidden);
+    crate::widget_visibility::reset_hidden_when_empty(&mut config);
+    config_store::write_config(app, "app_config.json", &config)?;
+    let _ = app.emit("app_config_update", &config);
+    #[cfg(target_os = "macos")]
+    crate::macos_tray::refresh(app);
+
+    if hidden {
+        for id in crate::widget_layout::TRACKED_WIDGET_IDS {
+            if let Some(win) = app.get_webview_window(id) {
+                crate::widget_layout::persist_layout_now(app, id)?;
+                win.hide().map_err(|error| error.to_string())?;
+            }
+        }
+    } else {
+        for (id, title) in crate::widget_visibility::selected_widgets(&config) {
+            create_widget_impl_background(app.clone(), id.into(), title.into()).await?;
+        }
     }
-    Ok(())
+    Ok(config_store::read_config::<AppConfig>(app, "app_config.json"))
+}
+
+#[tauri::command]
+pub async fn set_widgets_hidden(
+    app: AppHandle,
+    state: tauri::State<'_, GlobalState>,
+    hidden: bool,
+) -> Result<AppConfig, String> {
+    let _lock = state.widget_toggle_lock.lock().await;
+    apply_widgets_hidden(&app, hidden).await
+}
+
+#[tauri::command]
+pub async fn toggle_widgets_visibility(
+    app: AppHandle,
+    state: tauri::State<'_, GlobalState>,
+) -> Result<AppConfig, String> {
+    let _lock = state.widget_toggle_lock.lock().await;
+    let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    apply_widgets_hidden(&app, !config.widgets_hidden.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -689,32 +736,30 @@ pub async fn toggle_widget(
 
     // Read the current visibility from config to prevent `win.is_visible()` sync issues
     // or OS-level visibility glitches (e.g. desktop child mode).
-    let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    let previous_hidden = config.widgets_hidden;
+    crate::widget_visibility::reset_hidden_when_empty(&mut config);
+    if previous_hidden != config.widgets_hidden {
+        config_store::write_config(&app, "app_config.json", &config)?;
+        let _ = app.emit("app_config_update", &config);
+    }
     let is_currently_visible = config
         .active_widgets
-        .and_then(|m| m.get(&id).cloned())
+        .as_ref()
+        .and_then(|m| m.get(&id).copied())
         .unwrap_or(false);
 
     let new_visible = !is_currently_visible;
 
-    if let Some(win) = app.get_webview_window(&id) {
-        if new_visible {
-            // Existing widgets may be desktop children. Restore their saved
-            // geometry through the top-level path before ShowWindow can apply
-            // the desktop parent's DPI transform.
-            let _ = crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id);
-            let _ = win.show();
-            let _ = win.set_focus();
-        } else {
+    if new_visible {
+        create_widget_impl(app.clone(), id.clone(), title).await?;
+    } else {
+        if let Some(win) = app.get_webview_window(&id) {
             let _ = crate::widget_layout::persist_layout_now(&app, &id);
             let _ = win.hide();
         }
-    } else {
-        if new_visible {
-            let _ = create_widget_impl(app.clone(), id.clone(), title).await?;
-        }
+        config_store::update_widget_visibility_config(&app, &id, false).await?;
     }
-    let _ = config_store::update_widget_visibility_config(&app, &id, new_visible).await;
     Ok(ToggleWidgetResponse {
         visible: new_visible,
     })
