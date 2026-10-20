@@ -5,6 +5,8 @@ import { Radar, Check, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
 import type { ArxivConfig, ArxivPaper } from "../types/config";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { widgetCardStyle } from "../utils/glassCardBackground";
+import { widgetKeywordSurface } from "../utils/widgetOverlaySurface";
 import { hexToRgba, isLightColor } from "../utils/color";
 import { handleWidgetAppConfigUpdate } from "../utils/widgetLifecycle";
 import { listenBackendServiceError } from "../utils/backendServiceError";
@@ -20,7 +22,6 @@ import { useArxivLibrary } from "../hooks/useArxivLibrary";
 import { ArxivReadingActions } from "../components/ArxivReadingActions";
 import { ArxivPaperActions } from "../components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
-import { isWindows } from "../utils/platform";
 
 type SwipeDirection = "left" | "right" | "up";
 
@@ -219,21 +220,10 @@ export function ArxivWidgetContent({
   const isLightAppearance = appearance
     ? appearance === "light"
     : isLightColor(currentTheme.bg_color);
-  const keywordMenuGlass = currentTheme.material === "native-glass";
-  const keywordMenuTranslucent = keywordMenuGlass || currentTheme.bg_opacity < 0.5;
-  // Translucent menus share the widget's tint. Glass can stay lighter because
-  // it also has a native backdrop; plain transparency needs a stronger tint.
-  const keywordMenuBackground = keywordMenuGlass
-    ? hexToRgba(currentTheme.bg_color, Math.min(1, Math.max(0.30, currentTheme.bg_opacity + 0.12)))
-    : hexToRgba(isLightAppearance ? "#ffffff" : currentTheme.bg_color,
-        keywordMenuTranslucent ? Math.min(1, Math.max(0.65, currentTheme.bg_opacity + 0.12)) : 1);
-  const keywordMenuBlur = keywordMenuTranslucent ? "blur(24px) saturate(125%)" : undefined;
-  // Foreground glyphs stay opaque even when the menu surface is translucent.
-  const keywordMenuText = isLightAppearance ? "#334155" : "#f1f5f9";
+  const { glass: keywordMenuGlass, translucent: keywordMenuTranslucent,
+    backgroundColor: keywordMenuBackground, backdropFilter: keywordMenuBlur,
+    color: keywordMenuText, borderColor: keywordMenuBorder } = widgetKeywordSurface(currentTheme, isLightAppearance);
   const keywordMenuActiveText = keywordMenuTranslucent ? keywordMenuText : accent;
-  const keywordMenuBorder = isLightAppearance
-    ? "rgba(100, 116, 139, 0.28)"
-    : "rgba(148, 163, 184, 0.24)";
   const keywordMenuCheckboxBorder = isLightAppearance
     ? "rgba(71, 85, 105, 0.42)"
     : "rgba(148, 163, 184, 0.38)";
@@ -269,13 +259,7 @@ export function ArxivWidgetContent({
             className="arxiv-keyword-control w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
             style={{
               borderColor: keywordMenuOpen ? accent : keywordMenuBorder,
-              backgroundColor: keywordMenuOpen
-                ? isLightAppearance
-                  ? "rgba(236, 72, 153, 0.08)"
-                  : "rgba(236, 72, 153, 0.12)"
-                : isLightAppearance
-                  ? isWindows && keywordMenuGlass ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.62)"
-                  : "rgba(255, 255, 255, 0.04)",
+              backgroundColor: keywordMenuBackground,
               color: selectedKeywords.length > 0 ? accent : keywordMenuText,
             }}
             title={selectedKeywords.length === 0 ? "All keywords" : selectedKeywords.map(formatArxivKeywordLabel).join(", ")}
@@ -294,6 +278,7 @@ export function ArxivWidgetContent({
           </button>
           {keywordMenuOpen && (
             <div
+              data-glass-tone={keywordMenuGlass ? (isLightAppearance ? "light" : "dark") : undefined}
               className={`absolute left-0 right-0 top-full z-50 isolate mt-1 max-h-40 overflow-y-auto rounded-lg border ${keywordMenuGlass ? "glass-surface glass-menu" : ""}`}
               style={{
                 borderColor: keywordMenuGlass ? "transparent" : keywordMenuBorder,
@@ -370,7 +355,7 @@ export function ArxivWidgetContent({
           <div
             data-widget-surface="empty"
             className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
             <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
@@ -397,10 +382,11 @@ export function ArxivWidgetContent({
               }}
               data-no-drag="true"
               className="widget-paper-card absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-3 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
+              style={widgetCardStyle(currentTheme)}
             >
               <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1">
                 <h3 className="arxiv-paper-title shrink-0 text-[10px] font-bold mb-2 leading-snug break-words">{currentPaper.title}</h3>
-                <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} />
+                <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} theme={currentTheme} />
               </div>
               <div className="shrink-0 pt-2 border-t border-white/5 space-y-1.5">
                 <div className="flex flex-wrap gap-1">
@@ -436,7 +422,7 @@ export function ArxivWidgetContent({
               />
             </motion.div>
           ) : (
-            <div className="h-full min-h-0 flex flex-col items-center justify-center text-center p-4 space-y-2">
+            <div data-widget-surface="empty" style={widgetCardStyle(currentTheme)} className="h-full min-h-0 flex flex-col items-center justify-center text-center p-4 space-y-2">
               <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
                 <Check size={22} className="text-emerald-500" />
               </div>

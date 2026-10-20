@@ -153,7 +153,7 @@ pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         return Ok(window);
     }
 
-    WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App("index.html".into()))
         .title("Widgitron Sidebar")
         .inner_size(DEFAULT_THICKNESS_LOGICAL, 900.0)
         .decorations(false)
@@ -163,7 +163,12 @@ pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
-        .visible(false)
+        .visible(false);
+    // Edge reveal must not steal focus, but the first click should still reach
+    // the requested button (for example, expanding a conference timeline).
+    #[cfg(target_os = "macos")]
+    let builder = builder.accept_first_mouse(true);
+    builder
         .build()
         .map_err(|err| err.to_string())
 }

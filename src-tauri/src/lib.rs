@@ -40,6 +40,8 @@ mod macos_setup;
 #[cfg(target_os = "macos")]
 mod macos_glass;
 #[cfg(target_os = "macos")]
+mod macos_widget_hover;
+#[cfg(target_os = "macos")]
 mod macos_tray;
 #[cfg(target_os = "macos")]
 mod macos_widget_snapshot;

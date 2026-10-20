@@ -1,13 +1,13 @@
 use tauri::{AppHandle, Manager};
 
-/// Keep a macOS widget above desktop icons but below ordinary app windows.
-/// This is a desktop-level AppKit window, not a WidgetKit extension.
+/// Both modes join ordinary Spaces; pinning changes only the window level.
+/// This is an AppKit window, not a WidgetKit extension.
 #[cfg(target_os = "macos")]
-pub async fn set_macos_desktop_fixed(
+pub async fn set_macos_widget_level(
     win: &tauri::WebviewWindow,
-    enabled: bool,
+    topmost: bool,
 ) -> Result<(), String> {
-    use objc2_app_kit::{NSNormalWindowLevel, NSWindow, NSWindowCollectionBehavior};
+    use objc2_app_kit::{NSFloatingWindowLevel, NSWindow, NSWindowCollectionBehavior};
     use objc2_core_graphics::{CGWindowLevelForKey, CGWindowLevelKey};
 
     let win = win.clone();
@@ -21,21 +21,30 @@ pub async fn set_macos_desktop_fixed(
                 }
                 // Tauri documents borrowing this pointer only on the main thread.
                 let native: &NSWindow = unsafe { &*native.cast() };
-                let desktop_flags = NSWindowCollectionBehavior::CanJoinAllSpaces
-                    | NSWindowCollectionBehavior::Stationary
-                    | NSWindowCollectionBehavior::IgnoresCycle;
-                if enabled {
-                    let icon_level =
-                        CGWindowLevelForKey(CGWindowLevelKey::DesktopIconWindowLevelKey);
-                    // Finder's desktop icon window covers the entire screen,
-                    // including its visually empty areas. Below it the widget
-                    // remains visible but Finder consumes clicks and drags.
-                    native.setLevel((icon_level + 1) as isize);
-                    native.setCollectionBehavior(native.collectionBehavior() | desktop_flags);
+                let level = if topmost {
+                    NSFloatingWindowLevel
                 } else {
-                    native.setLevel(NSNormalWindowLevel);
-                    native.setCollectionBehavior(native.collectionBehavior() & !desktop_flags);
-                }
+                    let icon_level = CGWindowLevelForKey(CGWindowLevelKey::DesktopIconWindowLevelKey);
+                    // Below Finder's full-screen icon window, clicks and drags
+                    // go to Finder even though the widget remains visible.
+                    (icon_level + 1) as isize
+                };
+                // Don't leave widgets stationary over the Spaces transition.
+                // Managed lets WindowServer animate them with the desktop.
+                // Full-screen applications keep their own Space undisturbed.
+                let conflicting = NSWindowCollectionBehavior::MoveToActiveSpace
+                    | NSWindowCollectionBehavior::Stationary
+                    | NSWindowCollectionBehavior::Transient
+                    | NSWindowCollectionBehavior::ParticipatesInCycle
+                    | NSWindowCollectionBehavior::FullScreenPrimary
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary;
+                let behavior = (native.collectionBehavior() & !conflicting)
+                    | NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::Managed
+                    | NSWindowCollectionBehavior::IgnoresCycle
+                    | NSWindowCollectionBehavior::FullScreenNone;
+                native.setCollectionBehavior(behavior);
+                native.setLevel(level);
                 Ok(())
             })();
             let _ = sender.send(result);

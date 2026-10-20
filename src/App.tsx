@@ -73,6 +73,8 @@ import { QuotaVisualizations } from "./components/QuotaVisualizations";
 import { StatCard } from "./components/StatCard";
 import { SectionEmptyState } from "./components/SectionEmptyState";
 import { FloatingWindowControls } from "./components/FloatingWindowControls";
+import { SidebarWidgetHeaderContext } from "./components/WidgetHeader";
+import { WidgetResizeHandle } from "./components/WidgetResizeHandle";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
 import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
@@ -309,6 +311,7 @@ function SidebarWidgetSection({
   accentColor,
   theme,
   isLight,
+  showHeader,
   onClose,
   onMoveStart,
   onResizeStart,
@@ -320,6 +323,7 @@ function SidebarWidgetSection({
   accentColor: string;
   theme: ResolvedSidebarTheme;
   isLight: boolean;
+  showHeader: boolean;
   onClose: () => void;
   onMoveStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onResizeStart: (
@@ -329,6 +333,7 @@ function SidebarWidgetSection({
   children: ReactNode;
 }) {
   const sectionRef = useRef<HTMLElement>(null);
+  const [headerTarget, setHeaderTarget] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     if (sectionKey === "arxiv") return;
     const section = sectionRef.current;
@@ -340,7 +345,7 @@ function SidebarWidgetSection({
       ref={sectionRef}
       className="group/sidebar-tile h-full min-h-0 rounded-md border overflow-hidden flex flex-col relative"
       style={{
-        backgroundColor: isLight
+        backgroundColor: theme.material === "native-glass" && theme.card_background ? "transparent" : isLight
           ? hexToRgba("#ffffff", theme.card_opacity)
           : hexToRgba(theme.background, theme.card_opacity),
         borderColor: hexToRgba(accentColor, isLight ? 0.28 : 0.22),
@@ -350,7 +355,7 @@ function SidebarWidgetSection({
       }}
     >
       <div
-        className="h-5 shrink-0 px-1.5 flex items-center justify-between border-b cursor-grab active:cursor-grabbing touch-none"
+        className={`${showHeader ? "h-7" : "h-5"} shrink-0 px-1.5 flex items-center gap-1 border-b cursor-grab active:cursor-grabbing touch-none`}
         style={{
           backgroundColor: hexToRgba(
             accentColor,
@@ -365,12 +370,13 @@ function SidebarWidgetSection({
             size={9}
             className={isLight ? "text-slate-400" : "text-slate-500"}
           />
-          <span
+          {!showHeader && <span
             className="w-1.5 h-1.5 rounded-full"
             style={{ backgroundColor: accentColor }}
-          />
+          />}
           <span className="sr-only">Move {title}</span>
         </div>
+        <div ref={setHeaderTarget} className="min-w-0 flex-1" />
         <div className="flex items-center gap-1" onPointerDown={(event) => event.stopPropagation()}>
           <button
             type="button"
@@ -386,7 +392,9 @@ function SidebarWidgetSection({
           </button>
         </div>
       </div>
-      <div className="flex-1 min-h-0 p-2 overflow-hidden">{children}</div>
+      <div className="flex-1 min-h-0 p-2 overflow-hidden">
+        <SidebarWidgetHeaderContext.Provider value={{ target: headerTarget, onMoveStart }}>{children}</SidebarWidgetHeaderContext.Provider>
+      </div>
       {SIDEBAR_RESIZE_HANDLES.map((handle) => (
         <button
           key={handle.direction}
@@ -691,7 +699,7 @@ function App() {
   const [sidebarViewportHeight, setSidebarViewportHeight] = useState(() => window.innerHeight);
   const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, expanded: boolean) => {
     if (!expanded) sidebarExpandedResizeOverrides.current.delete(key);
-    setSidebarContentHeights((previous) => Math.abs((previous[key]?.height ?? 0) - height) < 2 && previous[key]?.expanded === expanded
+    setSidebarContentHeights((previous) => previous[key]?.height === height && previous[key]?.expanded === expanded
       ? previous : { ...previous, [key]: { height, expanded, collapsedHeight: expanded ? (previous[key]?.collapsedHeight ?? height) : height } });
   }, []);
   useEffect(() => {
@@ -2050,7 +2058,7 @@ function App() {
     return (
       <div
         data-sidebar-theme={sidebarTheme.id}
-        data-glass-tone={isWindows ? (sidebarIsLight ? "light" : "dark") : undefined}
+        data-glass-tone={isWindows || sidebarGlass ? (sidebarIsLight ? "light" : "dark") : undefined}
         data-native-glass={sidebarGlass && nativeGlass ? "true" : undefined}
         className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarGlass ? "glass-surface glass-sidebar" : ""} ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
@@ -2106,6 +2114,7 @@ function App() {
             <button
               type="button"
               aria-label={sidebarDockState.pinned ? "Unpin sidebar" : "Pin sidebar open"}
+              aria-pressed={sidebarDockState.pinned}
               title={sidebarDockState.pinned ? "Unpin sidebar and enable auto-hide" : "Pin sidebar open"}
               onClick={() => {
                 tauriInvoke("set_sidebar_pinned", { pinned: !sidebarDockState.pinned })
@@ -2114,7 +2123,7 @@ function App() {
               }}
               className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${sidebarIsLight ? "bg-slate-100 text-slate-700 hover:bg-slate-200" : "bg-white/10 text-white hover:bg-white/20"}`}
             >
-              {sidebarDockState.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+              {sidebarDockState.pinned ? <Pin size={14} /> : <PinOff size={14} />}
             </button>
             <button
               type="button"
@@ -2217,6 +2226,7 @@ function App() {
                       accentColor={section.accentColor}
                       theme={sidebarTheme}
                       isLight={sidebarIsLight}
+                      showHeader={!hideSidebarWidgetHeaders}
                       onClose={() => saveSidebarWidgetVisibility(section.key, false)}
                       onMoveStart={(event) => startSidebarTileMove(event, section.key)}
                       onResizeStart={(event, direction) =>
@@ -2311,21 +2321,7 @@ function App() {
           {windowLabel.includes("arxiv") && <ArxivWidgetContent headerControls={controls} />}
           {isQuota && <QuotaWidgetContent headerControls={controls} />}
         </div>
-        {(isMacOS || isWindows) && <button
-          type="button"
-          data-no-drag="true"
-          aria-label="Resize widget"
-          title="Resize widget"
-          onPointerDown={(event) => {
-            if (isWindows && event.button !== 0) return;
-            event.preventDefault();
-            event.stopPropagation();
-            appWindow.startResizeDragging("SouthEast").catch(console.error);
-          }}
-          className="absolute bottom-0 right-0 z-50 flex h-5 w-5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity items-center justify-center rounded-md text-slate-400/70 hover:bg-white/10 hover:text-white cursor-se-resize"
-        >
-          <Maximize2 size={12} />
-        </button>}
+        {(isMacOS || isWindows) && <WidgetResizeHandle />}
       </div>
     );
   }

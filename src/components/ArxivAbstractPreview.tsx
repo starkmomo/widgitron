@@ -1,13 +1,17 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Maximize2, X } from "lucide-react";
+import type { CSSProperties } from "react";
 import type { ArxivPaper } from "../types/config";
+import type { WidgetTheme } from "../types/theme";
+import { widgetOverlaySurface } from "../utils/widgetOverlaySurface";
 
-export function ArxivAbstractPreview({ paper, compact = false, isLight, textColor }: {
+export function ArxivAbstractPreview({ paper, compact = false, isLight, textColor, theme }: {
   paper: Pick<ArxivPaper, "title" | "summary">;
   compact?: boolean;
   isLight: boolean;
   textColor?: string;
+  theme?: WidgetTheme;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -17,6 +21,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
   const [previewLines, setPreviewLines] = useState(6);
   const [reading, setReading] = useState(false);
   const titleId = useId();
+  const overlay = theme ? widgetOverlaySurface(theme, isLight) : null;
 
   useLayoutEffect(() => {
     const box = previewBoxRef.current;
@@ -75,9 +80,17 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
         <dialog
           ref={dialogRef}
           data-compact={compact ? "true" : undefined}
+          data-translucent={overlay?.translucent ? "true" : undefined}
+          data-glass-tone={overlay?.glass ? (isLight ? "light" : "dark") : undefined}
           aria-labelledby={titleId}
           data-no-drag="true"
-          className={`reading-dialog m-auto w-[calc(100%_-_2rem)] max-w-2xl max-h-[calc(100dvh_-_2rem)] overflow-hidden rounded-2xl border p-0 shadow-2xl backdrop:bg-slate-950/40 ${isLight ? "border-slate-200 bg-white text-slate-900" : "border-slate-700 bg-slate-900 text-slate-100"}`}
+          className={`reading-dialog m-auto w-[calc(100%_-_2rem)] max-w-2xl max-h-[calc(100dvh_-_2rem)] overflow-hidden rounded-2xl border p-0 shadow-2xl ${overlay?.translucent ? overlay.glass ? "glass-surface glass-menu" : "" : "backdrop:bg-slate-950/40"} ${isLight ? "border-slate-200 bg-white text-slate-900" : "border-slate-700 bg-slate-900 text-slate-100"}`}
+          style={overlay?.translucent ? {
+            backgroundColor: overlay.backgroundColor,
+            borderColor: overlay.glass ? "transparent" : overlay.borderColor,
+            color: overlay.color, backdropFilter: overlay.backdropFilter,
+            WebkitBackdropFilter: overlay.backdropFilter, "--glass-radius": "16px",
+          } as CSSProperties : undefined}
           onPointerDownCapture={(event) => event.stopPropagation()}
           onKeyDownCapture={(event) => {
             // Let the dialog handle Escape without hiding the sidebar window.
@@ -112,7 +125,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
                 <X size={18} aria-hidden="true" />
               </button>
             </header>
-            <div tabIndex={0} className={`min-h-0 overflow-y-auto overscroll-contain ${compact ? "px-3 pb-3 text-xs leading-[1.6]" : "px-5 pb-5 text-sm leading-7"} ${isLight ? "text-slate-600" : "text-slate-300"}`}>
+            <div tabIndex={0} className={`min-h-0 overflow-y-auto overscroll-contain ${compact ? "px-3 pb-3 text-sm leading-[1.5]" : "px-5 pb-5 text-sm leading-7"} ${overlay?.translucent ? "" : isLight ? "text-slate-600" : "text-slate-300"}`}>
               <p data-no-localize className="whitespace-pre-line break-words">{paper.summary}</p>
             </div>
           </div>

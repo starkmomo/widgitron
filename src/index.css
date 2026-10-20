@@ -94,6 +94,30 @@ body {
   clip-path: inset(0 round 12px);
 }
 
+/* Reveal refresh and window controls together. Pointer clicks don't leave
+   them stuck open; keyboard navigation still reveals focused controls. */
+.floating-window .widget-header-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+html:not([data-platform="macos"]) .floating-window:hover .widget-header-actions,
+.floating-window .widget-header-actions:has(:focus-visible),
+html[data-widget-hovered="true"] .floating-window .widget-header-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+html[data-widget-hovered="true"] .floating-window .widget-resize-handle {
+  opacity: 1;
+}
+
+/* Opening a conference timeline must not change its card's available width. */
+.widget-content-list {
+  overflow-y: scroll;
+}
+
 /* White translucent cards need a darker outline on an opaque light surface.
    Transparent and dark themes retain their existing glass styling. */
 .floating-window[data-floating-surface="light"] :is(.widget-item-card, .widget-item-surface, .widget-paper-card) {
@@ -176,19 +200,11 @@ html[data-platform="windows"] .sidebar-theme-preview .glass-surface {
 
 .glass-surface .arxiv-reading-action {
   color: #f8fafc;
-  background-color: rgba(15, 23, 42, 0.35);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   font-weight: 600;
 }
 
 .glass-surface .arxiv-reading-action[aria-pressed="true"] {
   color: #dbeafe;
-  background-color: rgba(37, 99, 235, 0.38);
-  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.55);
-}
-
-.glass-surface .arxiv-reading-action:hover:not(:disabled) {
-  background-color: rgba(15, 23, 42, 0.52);
 }
 
 .glass-surface :is(.arxiv-paper-action, .arxiv-abstract-action) {
@@ -234,6 +250,78 @@ html[data-platform="windows"] .sidebar-theme-preview .glass-surface {
     linear-gradient(135deg, #466a83 5%, #638da0 32%, #d3b28a 57%, #a56956 76%, #4c4565);
 }
 
+/* Keep the Mac window clear rather than whitening the wallpaper. A small
+   dark scrim belongs to each content card, with no second sidebar tint. */
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) {
+  text-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.65),
+    0 0 1px rgba(0, 0, 0, 0.65);
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) button {
+  text-shadow: inherit;
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is(.widget-item-card, .widget-paper-card, [data-widget-surface="server"], [data-widget-surface="empty"], [data-widget-surface="preview"]) {
+  background-color: rgba(0, 0, 0, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) .widget-item-card:hover {
+  background-color: rgba(0, 0, 0, 0.16);
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is([data-widget-surface="server"], [data-widget-surface="preview"]) {
+  border-radius: 10px;
+  padding: 8px;
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) svg {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
+}
+
+/* Aqua glass uses dark foregrounds on a lightly tinted native backdrop.
+   Keep the light palette scoped to glass, including menus and previews. */
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) {
+  text-shadow: 0 0.5px 0.75px rgba(255, 255, 255, 0.5);
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) [data-floating-controls] button {
+  color: #475569;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action {
+  color: #1e293b;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action[aria-pressed="true"] {
+  color: #1e40af;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action) {
+  color: #1d4ed8;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action):hover {
+  color: #1e40af;
+}
+
+html[data-platform="macos"] :is(.floating-window, .glass-preview).glass-surface[data-floating-surface="light"] :is(.widget-item-card, .widget-item-surface, .widget-paper-card) {
+  background-color: rgba(255, 255, 255, 0.04);
+  border-color: rgba(100, 116, 139, 0.20);
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-red-400 {
+  color: #b91c1c;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-blue-400 {
+  color: #1d4ed8;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-emerald-400 {
+  color: #047857;
+}
+
 /* Windows clear glass keeps the desktop sharp, including while inactive.
    These selectors never change the macOS material, preview, or highlights. */
 html[data-platform="windows"] .glass-surface {
@@ -271,7 +359,6 @@ html[data-platform="windows"] :is([data-floating-surface="light"], [data-glass-t
 
 html[data-platform="windows"] :is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action {
   color: #1e293b;
-  background-color: rgba(255, 255, 255, 0.06);
 }
 
 html[data-platform="windows"] :is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action) {
@@ -351,6 +438,22 @@ html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="d
   font-size: 11px;
 }
 
+[data-widget-kind="deadline"] :is(.deadline-widget-location, .deadline-widget-stage p, .deadline-widget-countdown) {
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: normal;
+}
+
+[data-widget-kind="deadline"] .deadline-widget-countdown {
+  font-weight: 700;
+}
+
+[data-widget-kind="deadline"] .deadline-widget-category {
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
 html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="gpu"] .widget-item-surface {
   min-height: 40px;
 }
@@ -382,12 +485,16 @@ html[data-platform="windows"] .glass-surface[data-floating-surface="light"] .wid
 
 html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action[aria-pressed="true"] {
   color: #1e40af;
-  background-color: rgba(37, 99, 235, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.5);
 }
 
-html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action:hover:not(:disabled) {
-  background-color: rgba(255, 255, 255, 0.12);
+/* Match the lightweight author label; selection is conveyed by text and icon. */
+.arxiv-widget :is(.arxiv-paper-meta, .arxiv-reading-action) {
+  background-color: rgba(255, 255, 255, 0.05);
+  box-shadow: none;
+}
+
+.arxiv-widget .arxiv-reading-action:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.09);
 }
 
 html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action):hover {
@@ -432,7 +539,18 @@ html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"],
 
 html:is([data-platform="windows"], [data-platform="macos"]) .reading-dialog[data-compact="true"] [tabindex="0"] {
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.5;
+}
+
+/* Dialogs are portalled outside #root. Blur the underlying widget, matching
+   translucent keyword menus without blurring the foreground reading text. */
+body:has(.reading-dialog[data-translucent="true"][open]) > #root {
+  filter: blur(6px);
+  opacity: 0.55;
+}
+
+.reading-dialog[data-translucent="true"]::backdrop {
+  background: rgba(15, 23, 42, 0.08);
 }
 
 /* Widget headers remain distinct from their larger body labels. */

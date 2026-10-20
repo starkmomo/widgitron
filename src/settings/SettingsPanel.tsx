@@ -14,7 +14,6 @@ import type {
   QuotaVisualizationConfig,
   ServerConfig,
   ServerGpuData,
-  SidebarThemeDefinition,
 } from "../types/config";
 import type { UpdateInfo, SshConfigHostEntry } from "../types/tauri";
 import { FilterStatus, type FilterSaveResult, type FilterStatusState } from "../components/FilterStatus";
@@ -30,7 +29,8 @@ import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { MasterSwitch } from "../components/MasterSwitch";
 import { providerSupportsQuotaVisualizations } from "../components/QuotaVisualizations";
-import { FloatingAppearanceSettings } from "./FloatingAppearanceSettings";
+import { ColorControl, FloatingAppearanceSettings } from "./FloatingAppearanceSettings";
+import { widgetCardStyle, resolveGlassCardBackground } from "../utils/glassCardBackground";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { updateConferencePreferences } from "../utils/deadlineKeys";
 import { listenBackendServiceError } from "../utils/backendServiceError";
@@ -46,7 +46,7 @@ import {
 } from "../utils/sectionLiveData";
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
-import { hexToRgba } from "../utils/color";
+import { hexToRgba, isLightColor } from "../utils/color";
 import { providerLogoToneClass } from "../utils/providerLogo";
 import { isMacOS, isWindows } from "../utils/platform";
 import { resolveLanguage } from "../utils/localization";
@@ -1074,7 +1074,11 @@ export function SettingsPanel({
   const pendingQuotaReorderRef = useRef<QuotaConfig | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [deleteSidebarThemeId, setDeleteSidebarThemeId] = useState<string | null>(null);
-  useEffect(() => { setDeleteSidebarThemeId(null); }, [activeSection]);
+  const [editingSidebarThemeId, setEditingSidebarThemeId] = useState<string | null>(null);
+  useEffect(() => {
+    setDeleteSidebarThemeId(null);
+    setEditingSidebarThemeId(null);
+  }, [activeSection]);
   const [openProviderId, setOpenProviderId] = useState<string | null>(null);
   const [quotaProviderPickerOpen, setQuotaProviderPickerOpen] = useState(false);
   const [quotaItemSettingsId, setQuotaItemSettingsId] = useState<string | null>(null);
@@ -1742,6 +1746,7 @@ export function SettingsPanel({
       >
         {(() => {
           const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme, appConfig.theme);
+          const sidebarCardBackground = resolveGlassCardBackground(sidebarTheme);
           const sidebarThemes = sidebarThemeOptions(appConfig.sidebar_theme, appConfig.theme);
           const sidebarWidgets = appConfig.sidebar_widgets || {};
           const saveSidebarWidget = (
@@ -1765,11 +1770,9 @@ export function SettingsPanel({
             (theme) => theme.id === sidebarTheme.id
           );
           const sidebarThemeColorFields: Array<{
-            key: "background" | "header" | "quota" | "gpu" | "deadlines" | "arxiv";
+            key: "quota" | "gpu" | "deadlines" | "arxiv";
             label: string;
           }> = [
-            { key: "background", label: "Surface" },
-            { key: "header", label: "Header" },
             { key: "quota", label: "Quota" },
             { key: "gpu", label: "GPU" },
             { key: "deadlines", label: "Deadlines" },
@@ -2063,7 +2066,7 @@ export function SettingsPanel({
                 Hide Widget Headers
               </div>
               <p className="text-[9px] text-slate-400">
-                Hide each widget's icon, title, status, and refresh row for a denser layout.
+                Hide module titles and actions in the colored bars.
               </p>
             </div>
             <MasterSwitch
@@ -2105,21 +2108,23 @@ export function SettingsPanel({
                     type="button"
                     aria-label={theme.name}
                     aria-pressed={selected}
-                    onClick={() =>
+                    onClick={() => {
+                      setEditingSidebarThemeId(null);
                       onSaveApp({
                         ...appConfig,
                         sidebar_theme: selectSidebarTheme(appConfig.sidebar_theme, theme.id),
-                      })
-                    }
+                      });
+                    }}
                     className={isWindows ? "block w-full rounded-t-[11px] border-0 p-0 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500" : "block w-full text-left"}
                   >
                     <div
                       className={isWindows ? "floating-preview-scene relative isolate h-20 overflow-hidden rounded-t-[11px]" : "floating-preview-scene relative h-20 overflow-hidden"}
                     >
                       <div
+                        data-glass-tone={theme.material === "native-glass" ? (isLightColor(theme.background) ? "light" : "dark") : undefined}
                         className={`absolute inset-0 p-2 ${isWindows ? "rounded-t-[11px] " : ""}${theme.material === "native-glass" ? `glass-surface glass-preview glass-sidebar${isWindows ? "" : " rounded-l-lg"}` : ""}`}
                         style={{
-                          backgroundColor: hexToRgba(theme.background, theme.material === "native-glass" && !isWindows ? 0.30 : theme.background_opacity),
+                          backgroundColor: hexToRgba(theme.background, theme.material === "native-glass" && !isWindows ? (isMacOS ? 0.14 : 0.30) : theme.background_opacity),
                           backdropFilter: theme.blur > 0 ? `blur(${Math.min(theme.blur, 18)}px)` : undefined,
                         }}
                       >
@@ -2133,7 +2138,8 @@ export function SettingsPanel({
                               key={`${color}-${index}`}
                               className="rounded-md border"
                               style={{
-                                backgroundColor: hexToRgba(theme.background, theme.card_opacity),
+                                backgroundColor: hexToRgba(theme.background, isMacOS && theme.material === "native-glass" && !isLightColor(theme.background) ? 0.12 : theme.card_opacity),
+                                ...widgetCardStyle(theme),
                                 borderColor: hexToRgba(color, 0.65),
                                 boxShadow: `inset 0 3px 0 ${hexToRgba(color, 0.55)}`,
                               }}
@@ -2165,12 +2171,15 @@ export function SettingsPanel({
                       {!builtIn && (
                         <button
                           type="button"
-                          onClick={() =>
+                          aria-expanded={selected && editingSidebarThemeId === theme.id}
+                          aria-controls="sidebar-theme-editor"
+                          onClick={() => {
+                            setEditingSidebarThemeId(theme.id);
                             onSaveApp({
                               ...appConfig,
                               sidebar_theme: selectSidebarTheme(appConfig.sidebar_theme, theme.id),
-                            })
-                          }
+                            });
+                          }}
                           className="flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-wider text-blue-500 hover:bg-blue-500/10"
                         >
                           <Pencil size={10} /> Edit
@@ -2180,6 +2189,7 @@ export function SettingsPanel({
                         type="button"
                         onClick={() => {
                           const duplicate = duplicateSidebarTheme(appConfig.sidebar_theme, theme.id, appConfig.theme);
+                          setEditingSidebarThemeId(duplicate.theme.id);
                           onSaveApp({ ...appConfig, sidebar_theme: duplicate.config });
                         }}
                         className="flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-wider text-slate-500 hover:text-blue-500 hover:bg-blue-500/10"
@@ -2197,14 +2207,15 @@ export function SettingsPanel({
               onCancel={() => setDeleteSidebarThemeId(null)}
               onConfirm={() => {
                 onSaveApp({ ...appConfig, sidebar_theme: removeSidebarTheme(appConfig.sidebar_theme, deleteSidebarThemeId) });
+                setEditingSidebarThemeId(null);
                 setDeleteSidebarThemeId(null);
               }}>
               <span className="font-semibold" data-no-localize>{sidebarThemes.find(theme => theme.id === deleteSidebarThemeId)?.name}</span>
               <p className="mt-2">If this theme is in use, the sidebar will switch to Light.</p>
             </ConfirmDialog>
           )}
-          {selectedThemeIsEditable ? (
-            <div className={`rounded-xl border p-4 space-y-4 ${
+          {selectedThemeIsEditable && editingSidebarThemeId === sidebarTheme.id ? (
+            <div id="sidebar-theme-editor" className={`rounded-xl border p-4 space-y-4 ${
               appConfig.theme === "light" ? "bg-white border-slate-200" : "bg-black/25 border-white/10"
             }`}>
               <div className="flex items-center justify-between gap-3">
@@ -2216,13 +2227,24 @@ export function SettingsPanel({
                   </div>
                   <p className="mt-1 text-[9px] text-slate-400">Changes update the sidebar immediately.</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setDeleteSidebarThemeId(sidebarTheme.id)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider text-red-400 hover:bg-red-500/10"
-                >
-                  <Trash2 size={11} /> Delete
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteSidebarThemeId(sidebarTheme.id)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider text-red-400 hover:bg-red-500/10"
+                  >
+                    <Trash2 size={11} /> Delete
+                  </button>
+                  <button
+                    type="button"
+                    aria-expanded={true}
+                    aria-controls="sidebar-theme-editor"
+                    onClick={() => setEditingSidebarThemeId(null)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold text-blue-500 hover:bg-blue-500/10"
+                  >
+                    <ChevronDown size={12} className="rotate-180" /> Collapse editor
+                  </button>
+                </div>
               </div>
               <label className="block space-y-1.5">
                 <span className="text-[9px] font-black uppercase tracking-wider text-slate-500">Name</span>
@@ -2245,93 +2267,67 @@ export function SettingsPanel({
                   }`}
                 />
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {sidebarThemeColorFields.map((field) => {
-                  const color = sidebarTheme[field.key];
-                  const colorInput = /^#[0-9a-f]{6}$/i.test(color) ? color : "#000000";
-                  const saveColor = (value: string) =>
-                    onSaveApp({
-                      ...appConfig,
-                      sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, {
-                        [field.key]: value,
-                      } as Partial<Omit<SidebarThemeDefinition, "id">>),
-                    });
-                  return (
-                    <label key={field.key} className="flex items-center gap-2 rounded-lg border border-white/10 px-2.5 py-2">
-                      <input
-                        type="color"
-                        value={colorInput}
-                        onChange={(event) => saveColor(event.target.value)}
-                        className="h-6 w-6 cursor-pointer rounded border-0 bg-transparent p-0"
-                      />
-                      <span className="min-w-0 flex-1 text-[9px] font-black uppercase tracking-wider text-slate-500">{field.label}</span>
-                      <input
-                        key={`${sidebarTheme.id}-${field.key}`}
-                        type="text"
-                        defaultValue={color}
-                        onBlur={(event) => saveColor(event.target.value.trim() || color)}
-                        className={`w-20 bg-transparent text-right text-[10px] font-mono outline-none ${
-                          appConfig.theme === "light" ? "text-slate-700" : "text-slate-200"
-                        }`}
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {[
-                  { key: "background_opacity", label: "Surface opacity", value: sidebarTheme.background_opacity },
-                  { key: "header_opacity", label: "Header opacity", value: sidebarTheme.header_opacity },
-                  { key: "card_opacity", label: "Card opacity", value: sidebarTheme.card_opacity },
-                ].map((field) => (
-                  <label key={field.key} className="space-y-1.5">
-                    <span className="flex justify-between text-[9px] font-black uppercase tracking-wider text-slate-500">
-                      <span>{field.label}</span><span>{Math.round(field.value * 100)}%</span>
+              <div className="space-y-3 border-t border-[var(--dashboard-border)] pt-4">
+                <h4 className="text-xs font-semibold text-slate-500">Surfaces</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {([
+                    { color: "background", opacity: "background_opacity", label: "Background" },
+                    { color: "header", opacity: "header_opacity", label: "Header" },
+                  ] as const).map(field => <ColorControl key={field.color} label={field.label}
+                    value={sidebarTheme[field.color]} opacity={sidebarTheme[field.opacity]}
+                    onColor={value => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, { [field.color]: value }) })}
+                    onOpacity={value => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, { [field.opacity]: value }) })} />)}
+                  {sidebarTheme.material === "native-glass" && <ColorControl label="Card background"
+                    value={sidebarCardBackground.color} opacity={sidebarCardBackground.opacity}
+                    onColor={color => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, {
+                      card_background: { ...sidebarCardBackground, color }, card_opacity: 0,
+                    }) })}
+                    onOpacity={opacity => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, {
+                      card_background: { ...sidebarCardBackground, opacity }, card_opacity: 0,
+                    }) })} />}
+                  {[
+                    ...(sidebarTheme.material !== "native-glass" ? [{ key: "card_opacity" as const, label: "Card opacity", max: 100, factor: 100, unit: "%" }] : []),
+                    { key: "blur" as const, label: "Frosted blur", max: 40, factor: 1, unit: "px" },
+                  ].map(field => <label key={field.key} className="space-y-3 rounded-xl border border-[var(--dashboard-border)] p-3">
+                    <span className="flex h-6 items-center justify-between gap-2">
+                      <span className="text-xs font-medium">{field.label}</span>
+                      <span className="text-[10px] tabular-nums text-slate-500">{Math.round(sidebarTheme[field.key] * field.factor)}{field.unit}</span>
                     </span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={Math.round(field.value * 100)}
-                      onChange={(event) =>
-                        onSaveApp({
-                          ...appConfig,
-                          sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, {
-                            [field.key]: Number(event.target.value) / 100,
-                          } as Partial<Omit<SidebarThemeDefinition, "id">>),
-                        })
-                      }
-                      className="w-full accent-blue-500"
-                    />
-                  </label>
-                ))}
-                <label className="space-y-1.5">
-                  <span className="flex justify-between text-[9px] font-black uppercase tracking-wider text-slate-500">
-                    <span>Frosted blur</span><span>{Math.round(sidebarTheme.blur)}px</span>
-                  </span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="40"
-                    value={sidebarTheme.blur}
-                    onChange={(event) =>
-                      onSaveApp({
-                        ...appConfig,
-                        sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, {
-                          blur: Number(event.target.value),
-                        }),
-                      })
-                    }
-                    className="w-full accent-blue-500"
-                  />
-                </label>
+                    <input type="range" min="0" max={field.max} step="1" aria-label={field.label}
+                      value={Math.round(sidebarTheme[field.key] * field.factor)}
+                      onChange={event => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, {
+                        [field.key]: Number(event.target.value) / field.factor,
+                      }) })}
+                      className="h-1.5 w-full cursor-pointer accent-blue-600" />
+                  </label>)}
+                </div>
+              </div>
+              <div className="space-y-3 border-t border-[var(--dashboard-border)] pt-4">
+                <h4 className="text-xs font-semibold text-slate-500">Module colors</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {sidebarThemeColorFields.map(field => {
+                    const color = sidebarTheme[field.key];
+                    const saveColor = (value: string) => onSaveApp({ ...appConfig,
+                      sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, { [field.key]: value }),
+                    });
+                    return <label key={field.key} className="flex items-center gap-2 rounded-xl border border-[var(--dashboard-border)] p-3">
+                      <input type="color" aria-label={field.label} value={/^#[0-9a-f]{6}$/i.test(color) ? color : "#000000"}
+                        onChange={event => saveColor(event.target.value)}
+                        className="h-6 w-6 shrink-0 cursor-pointer rounded-md border border-slate-400/30 bg-transparent p-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none" />
+                      <span className="min-w-0 flex-1 text-xs font-medium">{field.label}</span>
+                      <input key={`${sidebarTheme.id}-${field.key}`} type="text" defaultValue={color} data-no-localize
+                        onBlur={event => saveColor(event.target.value.trim() || color)}
+                        className={`w-16 bg-transparent text-right text-[10px] font-mono outline-none ${appConfig.theme === "light" ? "text-slate-700" : "text-slate-200"}`} />
+                    </label>;
+                  })}
+                </div>
               </div>
             </div>
-          ) : (
+          ) : !selectedThemeIsEditable ? (
             <div className="rounded-xl border border-dashed border-white/10 px-3 py-2.5 text-[9px] text-slate-400">
               Use <span className="font-black text-slate-300">Copy</span> on a built-in theme to make an editable personal version.
             </div>
-          )}
+          ) : null}
         </div>
 
             </>

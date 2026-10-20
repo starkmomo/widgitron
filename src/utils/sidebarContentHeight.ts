@@ -8,12 +8,22 @@ export function observeSidebarContentHeight(section: HTMLElement, onHeight: (hei
 
   const measure = () => {
     if (!active || !content || !viewport) return;
+    const px = (value: string) => Number.parseFloat(value) || 0;
+    const viewportStyle = getComputedStyle(viewport);
+    let bottomInset = 0;
+    for (let node: HTMLElement | null = viewport; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      bottomInset += px(style.paddingBottom) + px(style.borderBottomWidth);
+      if (node === section) break;
+      bottomInset += px(style.marginBottom);
+    }
     // The scroll area's top is stable while its contents scroll. Measuring
     // the content's top would incorrectly shrink a scrolled card's limit.
     const height = Math.ceil(viewport.getBoundingClientRect().top - section.getBoundingClientRect().top
-      + content.getBoundingClientRect().height + 18);
+      + px(viewportStyle.borderTopWidth) + px(viewportStyle.paddingTop)
+      + content.getBoundingClientRect().height + bottomInset);
     const expanded = Boolean(section.querySelector("details[open]"));
-    if (previousHeight !== undefined && Math.abs(height - previousHeight) < 2 && expanded === previousExpanded) return;
+    if (height === previousHeight && expanded === previousExpanded) return;
     previousHeight = height;
     previousExpanded = expanded;
     onHeight(height, expanded);

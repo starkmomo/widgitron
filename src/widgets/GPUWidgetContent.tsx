@@ -4,6 +4,7 @@ import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Cpu, Activity, RefreshCw, List } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { widgetCardStyle } from "../utils/glassCardBackground";
 import { hexToRgba } from "../utils/color";
 import { orderGpuServersByConfig, sortGpuJobGroups } from "../utils/gpuDisplay";
 import { handleWidgetAppConfigUpdate } from "../utils/widgetLifecycle";
@@ -380,7 +381,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
           <div
             data-widget-surface="empty"
             className="flex w-full flex-col items-center justify-center text-center py-10 px-4 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
             <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
@@ -420,6 +421,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
                 key={idx}
                 data-widget-surface="server"
                 className={`${isCompact ? "space-y-4" : "space-y-2"} min-w-0 max-w-full`}
+                style={widgetCardStyle(currentTheme)}
               >
                 <div
                   className={`widget-server-header flex items-center border-l-2 border-white/10 pl-2 ${
@@ -814,7 +816,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
           <div
             data-widget-surface="empty"
             className="flex w-full flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <Cpu size={20} style={{ color: accent, opacity: 0.5 }} className="mb-3" />
             <span className="text-[10px] font-black uppercase tracking-widest mb-1">

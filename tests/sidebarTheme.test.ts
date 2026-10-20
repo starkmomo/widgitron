@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { duplicateSidebarTheme, removeSidebarTheme, resolveSidebarTheme, selectSidebarTheme } from "../src/utils/sidebarTheme.ts";
+import { duplicateSidebarTheme, removeSidebarTheme, resolveSidebarTheme, selectSidebarTheme, updateSidebarTheme } from "../src/utils/sidebarTheme.ts";
 
 test("follow tracks main appearance while explicit and legacy choices stay independent", () => {
   const follow = selectSidebarTheme(undefined, "follow");
@@ -25,4 +25,17 @@ test("copying follow freezes the displayed appearance rather than the main windo
   const copied = duplicateSidebarTheme({ active_theme_id: "follow" }, "follow", "dark");
   assert.equal(resolveSidebarTheme(copied.config, "light").background, "#050814");
   assert.equal(resolveSidebarTheme(copied.config, "light").preset, "custom");
+});
+
+test("sidebar glass saves card background independently and preserves zero opacity", () => {
+  const copied = duplicateSidebarTheme({ active_theme_id: "glass" }, "glass");
+  const edited = updateSidebarTheme(copied.config, copied.theme.id, {
+    card_background: { color: "#123456", opacity: 0 }, card_opacity: 0,
+  });
+  const restored = resolveSidebarTheme(JSON.parse(JSON.stringify(edited)));
+  assert.deepEqual(restored.card_background, { color: "#123456", opacity: 0 });
+  const duplicate = duplicateSidebarTheme(edited, restored.id);
+  assert.deepEqual(duplicate.theme.card_background, restored.card_background);
+  duplicate.theme.card_background!.opacity = 0.75;
+  assert.equal(restored.card_background!.opacity, 0);
 });

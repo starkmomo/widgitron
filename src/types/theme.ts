@@ -4,6 +4,11 @@ export interface ColorConfig {
   opacity?: number;
 }
 
+export interface CardBackground {
+  color: string;
+  opacity: number;
+}
+
 export interface WidgetTheme {
   id: string;
   name: string;
@@ -14,6 +19,7 @@ export interface WidgetTheme {
   primary_colors: ColorConfig[];
   widget_scope?: string;
   material?: "native-glass";
+  card_background?: CardBackground;
 }
 
 export interface WidgetThemeConfig {

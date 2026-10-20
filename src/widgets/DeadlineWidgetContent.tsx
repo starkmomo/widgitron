@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
-import { Trophy, RefreshCw } from "lucide-react";
+import { Trophy, RefreshCw, MapPin, ChevronDown } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { widgetCardStyle } from "../utils/glassCardBackground";
 import { hexToRgba } from "../utils/color";
 import { DeadlineCountdown } from "../components/DeadlineCountdown";
 import { DeadlineStageDetails } from "../components/DeadlineStageDetails";
@@ -201,7 +202,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
           <div
             data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center py-10 px-4 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
             <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
@@ -211,38 +212,40 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
             <div
               key={deadlineConferenceKey(dl)}
               className="widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10"
+              style={widgetCardStyle(currentTheme)}
             >
-              <div className="flex items-start justify-between relative z-10 gap-2">
-                <div className="flex flex-col min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black truncate">
-                      {dl.title} {dl.year}
-                    </span>
-                    <span
-                      className="text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-md bg-white/5"
-                      style={{ color: subText }}
-                    >
-                      {dl.sub}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <span className="text-[8px] font-bold truncate" style={{ color: subText }}>
-                      📍 {dl.place || "Online"}
-                    </span>
-                  </div>
+              <div className="relative z-10 min-w-0">
+                <div className="flex items-start gap-2">
+                  <span className="min-w-0 flex-1 break-words text-[13px] font-bold leading-snug">
+                    {dl.title} {dl.year}
+                  </span>
+                  <span
+                    className="deadline-widget-category shrink-0 font-bold px-1.5 py-0.5 rounded-md bg-white/5"
+                    style={{ color: subText }}
+                  >
+                    {dl.sub}
+                  </span>
+                </div>
+                <div className="deadline-widget-location flex min-w-0 items-center gap-1 mt-1" style={{ color: subText }}>
+                  <MapPin size={11} className="shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 truncate">
+                    {dl.place || "Online"}
+                  </span>
+                </div>
+                <div className="deadline-widget-stage">
                   <DeadlineStageDetails deadline={dl} compact color={subText} isLight={dashboardTheme === "light"} />
                 </div>
-                <div className="text-right flex-shrink-0 pl-2">
-                  <div
-                    className="text-[10px] font-black tabular-nums bg-white/5 px-2 py-1 rounded-lg border border-white/5"
-                    style={{ color: highlight }}
-                  >
-                    {dl.deadline_utc ? <DeadlineCountdown date={dl.deadline_utc} /> : "TBD"}
-                  </div>
-                </div>
               </div>
-              <details className="relative z-10 mt-2 text-[9px]" data-no-drag="true">
-                <summary className="cursor-pointer" style={{ color: subText }}>View timeline</summary>
+              <details className="group/timeline relative z-10 mt-2 text-[11px]" data-no-drag="true">
+                <summary className="flex list-none cursor-pointer items-center justify-between gap-2 [&::-webkit-details-marker]:hidden" style={{ color: subText }}>
+                  <span className="inline-flex min-w-0 items-center gap-1">
+                    <ChevronDown size={11} className="shrink-0 transition-transform group-open/timeline:rotate-180" aria-hidden="true" />
+                    <span>View timeline</span>
+                  </span>
+                  <span className="deadline-widget-countdown shrink-0 whitespace-nowrap tabular-nums" style={{ color: highlight }}>
+                    {dl.deadline_utc ? <DeadlineCountdown date={dl.deadline_utc} /> : "TBD"}
+                  </span>
+                </summary>
                 <DeadlineTimeline deadline={dl} now={now} language={language} compact />
               </details>
               <div
@@ -255,7 +258,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
           <div
             data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center mt-8 px-4 py-6 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <Trophy size={18} style={{ color: highlight, opacity: 0.5 }} className="mb-2" />
             <span className="text-[10px] font-black uppercase tracking-widest mb-1">

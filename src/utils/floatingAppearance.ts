@@ -51,6 +51,7 @@ export function copyFloatingTheme(config: WidgetThemeConfig, widgetId: string, d
     is_default: false, widget_scope: widgetId,
     text_colors: active.text_colors.map(color => ({ ...color })),
     primary_colors: active.primary_colors.map(color => ({ ...color })),
+    card_background: active.card_background ? { ...active.card_background } : undefined,
   };
   return { theme, config: { ...config, themes: [...config.themes, theme],
     assignments: { ...config.assignments, [widgetId]: theme.id } } };

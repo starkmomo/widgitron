@@ -9,7 +9,8 @@ import { resolveWidgetTheme, type WidgetThemeKind } from "../utils/widgetTheme";
 import { assignFloatingPreset, copyFloatingTheme, deleteFloatingTheme, editableFloatingTheme, floatingAppearanceMode, type FloatingPreset } from "../utils/floatingAppearance";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { UiLanguage } from "../utils/localization";
-import { isWindows, supportsFloatingGlass } from "../utils/platform";
+import { isMacOS, isWindows, supportsFloatingGlass } from "../utils/platform";
+import { widgetCardStyle, resolveWidgetCardBackground } from "../utils/glassCardBackground";
 
 const PRESETS: { mode: FloatingPreset; label: string }[] = [
   { mode: "follow", label: "Follow main" }, { mode: "light", label: "Light" },
@@ -25,7 +26,9 @@ const colorValue = (theme: WidgetTheme, role: string, fallback: string, primary 
 // Approximate the native backdrop tint over the preview's reference scene.
 // A CSS preview cannot sample the real desktop behind the application window.
 const previewBackground = (theme: WidgetTheme) => hexToRgba(theme.bg_color,
-  theme.material === "native-glass" && !isWindows ? 1 - (1 - theme.bg_opacity) * 0.78 : theme.bg_opacity);
+  theme.material === "native-glass" && !isWindows
+    ? 1 - (1 - theme.bg_opacity) * (isMacOS ? 0.88 : 0.78)
+    : theme.bg_opacity);
 
 function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: WidgetThemeKind; label: string }) {
   const glass = theme.material === "native-glass";
@@ -34,29 +37,35 @@ function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: Widge
   const accent = colorValue(theme, "Accent", "#3b82f6", true);
   const highlight = colorValue(theme, "Highlight", accent, true);
   const success = colorValue(theme, "Success", accent, true);
-  return <div data-widget-kind={kind} data-floating-surface={isWindows && glass && isLightColor(theme.bg_color) ? "light" : undefined}
-    className={`relative overflow-hidden rounded-xl border p-4 shadow-lg ${glass ? "glass-surface glass-preview border-transparent" : "border-slate-300/20"}`} style={{
+  const cardBackground = resolveWidgetCardBackground(theme);
+  const lightSurface = (theme.bg_opacity >= 0.5 || glass) && isLightColor(theme.bg_color);
+  return <div data-widget-kind={kind} data-floating-surface={lightSurface ? "light" : undefined}
+    className={`relative h-44 overflow-hidden rounded-xl border p-3 shadow-lg ${glass ? "glass-surface glass-preview border-transparent" : "border-slate-300/20"}`} style={{
     background: previewBackground(theme), color: main,
   }}>
-    <div className="relative z-10">
-    <div className="widget-header mb-4 flex items-center gap-2 text-xs font-bold"><span className="h-2 w-2 rounded-full" style={{ background: accent }} /><span>{label}</span></div>
-    <div data-widget-surface="true" className={kind === "arxiv" ? "arxiv-widget" : undefined}>
-    {kind === "quota" && <div className="space-y-3 text-[11px]">
+    <div className="relative z-10 flex h-full min-h-0 flex-col">
+    <div className="widget-header mb-2 flex shrink-0 items-center gap-2 text-xs font-bold"><span className="h-2 w-2 rounded-full" style={{ background: accent }} /><span>{label}</span></div>
+    <div data-widget-surface="preview" style={{
+      backgroundColor: hexToRgba(cardBackground.color, cardBackground.opacity),
+      borderColor: lightSurface ? "rgba(100, 116, 139, 0.22)" : "rgba(255, 255, 255, 0.1)",
+      ...widgetCardStyle(theme),
+    }} className={`min-h-0 overflow-y-auto rounded-xl border p-2 ${kind === "arxiv" ? "arxiv-widget" : ""}`}>
+    {kind === "quota" && <div className="space-y-2 text-[11px]">
       <div data-widget-text="title" className="font-semibold" data-no-localize>Codex</div>
       <div className="flex items-center justify-between"><span style={{ color: sub }}>7-day limit</span><span style={{ color: success }}>72%</span></div>
       <div className="h-1.5 rounded-full bg-slate-400/20"><div className="h-full w-[72%] rounded-full" style={{ background: success }} /></div>
     </div>}
-    {kind === "gpu" && <div className="space-y-3 text-[11px]">
+    {kind === "gpu" && <div className="space-y-2 text-[11px]">
       <div data-widget-text="title" className="flex justify-between font-semibold"><span data-no-localize>localhost</span><span style={{ color: success }}>1 GPU</span></div>
       <div style={{ color: sub }} data-no-localize>CPU 24% · RAM 12 / 32 GB</div>
       <div className="flex items-center gap-3"><span style={{ color: sub }} data-no-localize>GPU 0</span><div className="h-1.5 flex-1 rounded-full bg-slate-400/20"><div className="h-full w-[46%] rounded-full" style={{ background: accent }} /></div><span style={{ color: accent }}>46%</span></div>
     </div>}
-    {kind === "deadline" && <div className="space-y-3 text-[11px]">
+    {kind === "deadline" && <div className="space-y-2 text-[11px]">
       <div data-widget-text="title" className="flex items-center justify-between font-semibold"><span data-no-localize>CVPR 2027</span><span style={{ color: accent }}>AI</span></div>
       <div style={{ color: sub }} data-no-localize>Abstract submission</div>
       <div className="font-mono text-base font-bold" style={{ color: highlight }} data-no-localize>12d 08h 32m</div>
     </div>}
-    {kind === "arxiv" && <div className="space-y-3 text-[11px]">
+    {kind === "arxiv" && <div className="space-y-2 text-[11px]">
       <div className="arxiv-paper-title text-sm font-semibold leading-snug" data-no-localize>Learning to See, Hear and Reason</div>
       <div className="arxiv-abstract-preview leading-relaxed" style={{ color: sub }}>An example paper abstract for previewing text and accent colors.</div>
       <div aria-hidden="true" className="flex gap-2" style={{ color: sub }}>
@@ -69,7 +78,7 @@ function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: Widge
   </div>;
 }
 
-function ColorControl({ label, value, opacity, onColor, onOpacity }: {
+export function ColorControl({ label, value, opacity, onColor, onOpacity }: {
   label: string; value: string; opacity: number; onColor: (value: string) => void; onOpacity: (value: number) => void;
 }) {
   return <div role="group" aria-label={label} className="space-y-3 rounded-xl border border-[var(--dashboard-border)] p-3">
@@ -106,6 +115,7 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
   const widgetId = serviceWidgetMeta(module.field).id;
   const kind: WidgetThemeKind = selected === "deadlines" ? "deadline" : selected as WidgetThemeKind;
   const activeTheme = resolveWidgetTheme(themeConfig, widgetId, undefined, { dashboardTheme });
+  const cardBackground = activeTheme ? resolveWidgetCardBackground(activeTheme) : { color: "#ffffff", opacity: 0.05 };
   const mode = floatingAppearanceMode(themeConfig, widgetId);
   const isLight = dashboardTheme === "light";
   const presets = PRESETS.filter(preset => preset.mode !== "glass" || supportsFloatingGlass);
@@ -182,7 +192,7 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
       </div>
       {activeTheme && <div className="space-y-2">
         <div className="flex justify-between text-[10px] font-medium text-slate-500"><span>Preview</span><span>Example data</span></div>
-        <div className="floating-preview-scene relative isolate overflow-hidden rounded-2xl border border-slate-400/20 p-5">
+        <div className="floating-preview-scene relative isolate overflow-hidden rounded-2xl border border-slate-400/20 p-3">
           <div className="mx-auto w-full max-w-sm"><WidgetPreview theme={activeTheme} kind={kind} label={module.label} /></div>
         </div>
       </div>}
@@ -215,6 +225,9 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
           <div className="grid gap-3 sm:grid-cols-2">
             <ColorControl label="Background" value={activeTheme.bg_color} opacity={activeTheme.bg_opacity}
               onColor={value => update(theme => ({ ...theme, bg_color: value }))} onOpacity={value => update(theme => ({ ...theme, bg_opacity: value }))} />
+            <ColorControl label="Card background" value={cardBackground.color} opacity={cardBackground.opacity}
+              onColor={color => update(theme => ({ ...theme, card_background: { ...resolveWidgetCardBackground(theme), color } }))}
+              onOpacity={opacity => update(theme => ({ ...theme, card_background: { ...resolveWidgetCardBackground(theme), opacity } }))} />
             {activeTheme.text_colors.map((color, index) => <ColorControl key={color.name} label={color.name} value={color.value} opacity={color.opacity ?? 1}
               onColor={value => updateColor("text_colors", index, { value })} onOpacity={opacity => updateColor("text_colors", index, { opacity })} />)}
             {activeTheme.primary_colors.map((color, index) => <ColorControl key={color.name} label={color.name} value={color.value} opacity={color.opacity ?? 1}

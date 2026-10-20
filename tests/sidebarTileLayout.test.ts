@@ -8,9 +8,10 @@ import {
 test("a single monitor cannot leave a long blank card, while longer lists may scroll", () => {
   const short = sidebarTileHeightLimits("quota", 800, 148);
   const long = sidebarTileHeightLimits("quota", 800, 2200);
-  assert.equal(short.max, 160);
-  assert.equal(long.max, 2212);
-  assert.equal(sidebarTileHeightLimits("gpu", 400, 2000).max, 2012);
+  assert.deepEqual(short, { min: 148, max: 148 });
+  assert.equal(resizeSidebarTileRect({ x: 0, y: 0, w: 1, h: 148 }, "s", 0, 2000, 400, short).h, 148);
+  assert.equal(long.max, 2200);
+  assert.equal(sidebarTileHeightLimits("gpu", 400, 2000).max, 2000);
 });
 
 test("an asynchronously loading widget cannot use the full screen as a blank height limit", () => {
@@ -50,7 +51,7 @@ test("old tiny or oversized cards are clamped and following cards close up witho
   const limits = Object.fromEntries(keys.map(key => [key, sidebarTileHeightLimits(key, 800, 150)])) as SidebarTileHeightLimitMap;
   const next = constrainSidebarTileHeights(layout, keys, limits);
   assert.equal(next.arxiv.h, 300);
-  assert.equal(next.quota.h, 162);
+  assert.equal(next.quota.h, 150);
   assert.equal(next.gpu.y, next.quota.h + 6);
   for (const [index, key] of keys.entries()) {
     assert.ok(next[key].h >= limits[key].min && next[key].h <= limits[key].max);
@@ -71,8 +72,8 @@ test("timeline growth is temporary and adds only the newly expanded content", ()
     sidebarTileHeightLimits(key as SidebarSectionKey, 800, key === "deadlines" ? 500 : 150),
   ])) as SidebarTileHeightLimitMap;
   const opened = constrainSidebarTileHeights(layout, keys, limits, { deadlines: 350 });
-  assert.equal(opened.deadlines.h, 512);
-  assert.equal(opened.arxiv.y, 518);
+  assert.equal(opened.deadlines.h, 500);
+  assert.equal(opened.arxiv.y, 506);
   assert.equal(opened.arxiv.h, 400);
   assert.equal(layout.deadlines.h, 176);
   const collapsed = constrainSidebarTileHeights(layout, keys, { ...limits, deadlines: sidebarTileHeightLimits("deadlines", 800, 150) });
@@ -83,7 +84,7 @@ test("timeline growth is temporary and adds only the newly expanded content", ()
   const many = constrainSidebarTileHeights(layout, ["quota"], { ...limits, quota: sidebarTileHeightLimits("quota", 800, 3000) });
   assert.equal(many.quota.h, 2000); // a long list may be expanded beyond one screen
   const few = constrainSidebarTileHeights(many, ["quota"], { ...limits, quota: sidebarTileHeightLimits("quota", 800, 150) });
-  assert.equal(few.quota.h, 162);
+  assert.equal(few.quota.h, 150);
 
   const manyConferences = constrainSidebarTileHeights(layout, keys, { ...limits, deadlines: sidebarTileHeightLimits("deadlines", 800, 1200) }, { deadlines: 200 });
   assert.equal(manyConferences.deadlines.h, 376); // do not open the entire collapsed conference list

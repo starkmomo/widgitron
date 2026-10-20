@@ -29,7 +29,8 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
         sidebarLight, sidebarGlass: sidebarTheme.material === "native-glass", dashboardTheme: latestAppConfig?.theme,
       });
       setCurrentTheme(win.label === "sidebar" && sidebarTheme.material === "native-glass" && resolved
-        ? { ...resolved, material: "native-glass", bg_color: sidebarTheme.background, bg_opacity: sidebarTheme.background_opacity }
+        ? { ...resolved, material: "native-glass", bg_color: sidebarTheme.background, bg_opacity: sidebarTheme.background_opacity,
+          card_background: sidebarTheme.card_background }
         : resolved);
     };
 

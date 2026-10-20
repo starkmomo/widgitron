@@ -14,17 +14,26 @@ class FakeObserver {
 test("observes a list inserted after async theme loading, measures replacement, and cleans up", () => {
   const previousResize = globalThis.ResizeObserver;
   const previousMutation = globalThis.MutationObserver;
+  const previousStyle = globalThis.getComputedStyle;
   globalThis.ResizeObserver = FakeObserver as unknown as typeof ResizeObserver;
   globalThis.MutationObserver = FakeObserver as unknown as typeof MutationObserver;
   FakeObserver.instances = [];
   try {
-    const viewport = { getBoundingClientRect: () => ({ top: 150 }) };
+    let viewportHeight = 500;
+    const viewport = { parentElement: null as unknown, getBoundingClientRect: () => ({ top: 150, height: viewportHeight }) };
     let content: { parentElement: typeof viewport; getBoundingClientRect: () => { height: number } } | null = null;
     let expanded = false;
     const section = {
       querySelector: (selector: string) => selector === "details[open]" ? expanded ? {} : null : content,
       getBoundingClientRect: () => ({ top: 100 }),
     } as unknown as HTMLElement;
+    const body = { parentElement: section };
+    viewport.parentElement = body;
+    globalThis.getComputedStyle = ((node: unknown) => ({
+      paddingBottom: node === viewport || node === body ? "8px" : "0px",
+      borderBottomWidth: node === section ? "2px" : "0px",
+      paddingTop: "0px", borderTopWidth: "0px", marginBottom: "0px",
+    })) as typeof getComputedStyle;
     const heights: number[] = [];
     const stop = observeSidebarContentHeight(section, (height) => { heights.push(height); });
     const [resize, mutation] = FakeObserver.instances;
@@ -36,11 +45,15 @@ test("observes a list inserted after async theme loading, measures replacement, 
     mutation.callback();
     assert.deepEqual(heights, [148]);
     assert.ok(resize.targets.includes(content));
+    viewportHeight = 1800;
     resize.callback();
     assert.deepEqual(heights, [148]); // viewport dragging does not inflate intrinsic height
+    intrinsicHeight = 81;
+    resize.callback();
+    assert.deepEqual(heights, [148, 149]); // don't clip a one-pixel increase
     intrinsicHeight = 180;
     resize.callback();
-    assert.deepEqual(heights, [148, 248]);
+    assert.deepEqual(heights, [148, 149, 248]);
     expanded = true;
     intrinsicHeight = 360;
     mutation.callback();
@@ -67,5 +80,6 @@ test("observes a list inserted after async theme loading, measures replacement, 
   } finally {
     globalThis.ResizeObserver = previousResize;
     globalThis.MutationObserver = previousMutation;
+    globalThis.getComputedStyle = previousStyle;
   }
 });

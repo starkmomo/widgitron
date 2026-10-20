@@ -19,7 +19,7 @@ const SIDEBAR_THEME_IDS: Record<WidgetThemeKind, string> = {
   quota: "theme-quota-default",
 };
 
-function windowsGlassPrimaryColors(theme: WidgetTheme, kind: WidgetThemeKind) {
+function lightGlassPrimaryColors(theme: WidgetTheme, kind: WidgetThemeKind) {
   const accents = { gpu: "#1d4ed8", deadline: "#6d28d9", arxiv: "#be185d", quota: "#0e7490" };
   const colors: Record<string, string> = {
     Accent: accents[kind], Highlight: "#92400e", Success: "#047857", Warning: "#92400e", Danger: "#b91c1c",
@@ -28,7 +28,7 @@ function windowsGlassPrimaryColors(theme: WidgetTheme, kind: WidgetThemeKind) {
     ? { ...color, value: colors[color.name], opacity: 1 } : color);
 }
 
-function windowsGlassTextColor(role: "Main Text" | "Sub Text", kind: WidgetThemeKind) {
+function lightGlassTextColor(role: "Main Text" | "Sub Text", kind: WidgetThemeKind) {
   if (kind === "arxiv") return role === "Main Text" ? "#0f172a" : "#334155";
   return role === "Main Text" ? "#0b1220" : "#1e293b";
 }
@@ -66,17 +66,17 @@ export function resolveWidgetTheme(
     const base = config.themes.find((theme) => theme.id === SIDEBAR_THEME_IDS[kind]);
     if (!base) return null;
     if (!options?.sidebarLight && !options?.sidebarGlass) return base;
-    const lightWindowsGlass = isWindows && options?.sidebarGlass && options.sidebarLight;
-    const brightGlassText = options?.sidebarGlass && !lightWindowsGlass;
+    const lightGlass = (isWindows || isMacOS) && options?.sidebarGlass && options.sidebarLight;
+    const brightGlassText = options?.sidebarGlass && !lightGlass;
     return {
       ...base,
-      primary_colors: lightWindowsGlass
-        ? windowsGlassPrimaryColors(base, kind) : base.primary_colors,
+      primary_colors: lightGlass
+        ? lightGlassPrimaryColors(base, kind) : base.primary_colors,
       text_colors: base.text_colors.map((color) =>
         color.name === "Main Text"
-          ? { ...color, value: brightGlassText ? "#ffffff" : lightWindowsGlass ? windowsGlassTextColor("Main Text", kind) : "#0f172a", opacity: 1 }
+          ? { ...color, value: brightGlassText ? "#ffffff" : lightGlass ? lightGlassTextColor("Main Text", kind) : "#0f172a", opacity: 1 }
           : color.name === "Sub Text"
-            ? { ...color, value: brightGlassText ? "#f1f5f9" : lightWindowsGlass ? windowsGlassTextColor("Sub Text", kind) : "#475569", opacity: 1 }
+            ? { ...color, value: brightGlassText ? "#f1f5f9" : lightGlass ? lightGlassTextColor("Sub Text", kind) : "#475569", opacity: 1 }
             : color
       ),
     };
@@ -93,19 +93,20 @@ export function resolveWidgetTheme(
     const widgetKind = kind ?? widgetThemeKindFromLabel(windowLabel);
     return {
       ...theme,
-      // Windows uses light clear glass. macOS uses a lighter slate tint over
-      // its native material; custom themes retain their chosen colors.
-      bg_color: isWindows ? "#f3f3f3" : isMacOS ? "#334155" : "#0f172a",
-      bg_opacity: isWindows ? 0.04 : isMacOS ? 0.06 : 0.10,
-      primary_colors: isWindows ? windowsGlassPrimaryColors(theme, kind ?? widgetThemeKindFromLabel(windowLabel)) : theme.primary_colors,
+      // Mac glass keeps the whole window nearly clear; bright foregrounds
+      // and local content scrims provide contrast on light and dark wallpaper.
+      // Custom themes retain their chosen palette.
+      bg_color: isWindows ? "#f3f3f3" : isMacOS ? "#18181b" : "#0f172a",
+      bg_opacity: isWindows ? 0.04 : isMacOS ? 0.02 : 0.10,
+      primary_colors: isWindows ? lightGlassPrimaryColors(theme, widgetKind) : theme.primary_colors,
       text_colors: theme.text_colors.map(color => {
         // Secondary labels must stay opaque too: desktop colors already show
         // through the material, so fading the glyphs compounds the contrast loss.
         if (color.name === "Main Text") {
-          return { ...color, value: isWindows ? windowsGlassTextColor("Main Text", widgetKind) : "#ffffff", opacity: 1 };
+          return { ...color, value: isWindows ? lightGlassTextColor("Main Text", widgetKind) : "#ffffff", opacity: 1 };
         }
         if (color.name === "Sub Text") {
-          return { ...color, value: isWindows ? windowsGlassTextColor("Sub Text", widgetKind) : "#f1f5f9", opacity: 1 };
+          return { ...color, value: isWindows ? lightGlassTextColor("Sub Text", widgetKind) : isMacOS ? "#f4f4f5" : "#f1f5f9", opacity: 1 };
         }
         return color;
       }),

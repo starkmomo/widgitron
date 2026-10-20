@@ -6,6 +6,8 @@ import type {
   DashboardTheme,
 } from "../types/config";
 import { isMacOS, isWindows, supportsFloatingGlass } from "./platform";
+import { normalizeCardBackground } from "./glassCardBackground";
+import type { CardBackground } from "../types/theme";
 
 export type SidebarThemePresetId = ConfigSidebarThemePresetId;
 
@@ -30,6 +32,7 @@ export type ResolvedSidebarTheme = SidebarThemeAppearance & {
   name: string;
   preset: SidebarThemeKind;
   material?: "native-glass";
+  card_background?: CardBackground;
 };
 
 type SidebarThemePreset = {
@@ -98,10 +101,11 @@ export const SIDEBAR_THEME_PRESETS: SidebarThemePreset[] = [
     description: "A glass backdrop with readable module cards.",
     theme: {
       ...(isWindows ? LIGHT_THEME : MIDNIGHT_THEME), id: "glass", name: "Glass", preset: "glass",
-      material: "native-glass", background: isWindows ? "#f3f3f3" : isMacOS ? "#334155" : "#0f172a",
-      header: isWindows ? "#ffffff" : isMacOS ? "#334155" : "#0f172a",
-      background_opacity: isWindows ? 0.04 : isMacOS ? 0.06 : 0.10, header_opacity: isWindows ? 0.08 : 0.24,
-      card_opacity: isWindows ? 0.08 : 0.30, blur: 0,
+      material: "native-glass", background: isWindows ? "#f3f3f3" : isMacOS ? "#18181b" : "#0f172a",
+      header: isWindows ? "#ffffff" : isMacOS ? "#18181b" : "#0f172a",
+      background_opacity: isWindows ? 0.04 : isMacOS ? 0.02 : 0.10, header_opacity: isWindows ? 0.08 : isMacOS ? 0.08 : 0.24,
+      // Module cards supply local contrast; don't darken them a second time.
+      card_opacity: isWindows ? 0.08 : isMacOS ? 0 : 0.30, blur: 0,
     },
   },
 ];
@@ -131,7 +135,7 @@ function readBlur(value: unknown, fallback: number) {
 }
 
 function cloneTheme(theme: ResolvedSidebarTheme): ResolvedSidebarTheme {
-  return { ...theme };
+  return { ...theme, card_background: normalizeCardBackground(theme.card_background) };
 }
 
 function normalizeCustomTheme(theme: SidebarThemeDefinition): ResolvedSidebarTheme {
@@ -151,6 +155,7 @@ function normalizeCustomTheme(theme: SidebarThemeDefinition): ResolvedSidebarThe
     card_opacity: readOpacity(theme.card_opacity, MIDNIGHT_THEME.card_opacity),
     blur: readBlur(theme.blur, MIDNIGHT_THEME.blur),
     material: theme.material === "native-glass" ? "native-glass" : undefined,
+    card_background: normalizeCardBackground(theme.card_background),
   };
 }
 
@@ -276,6 +281,7 @@ function asCustomTheme(theme: ResolvedSidebarTheme, name: string): SidebarThemeD
     card_opacity: theme.card_opacity,
     blur: theme.blur,
     material: theme.material,
+    card_background: normalizeCardBackground(theme.card_background),
   };
 }
 

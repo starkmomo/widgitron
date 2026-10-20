@@ -319,16 +319,11 @@ pub async fn set_widget_display_mode(
     #[cfg(target_os = "macos")]
     {
         if let Some(win) = app.get_webview_window(&label) {
-            win.set_always_on_top(false)
-                .map_err(|error| error.to_string())?;
-            crate::desktop::set_macos_desktop_fixed(
+            crate::desktop::set_macos_widget_level(
                 &win,
-                matches!(mode, WidgetDisplayMode::Desktop),
+                matches!(mode, WidgetDisplayMode::Topmost),
             )
             .await?;
-            if matches!(mode, WidgetDisplayMode::Topmost) {
-                win.set_always_on_top(true).map_err(|error| error.to_string())?;
-            }
         }
         let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
         mode.apply_preferences(&mut config, &label);
@@ -579,7 +574,13 @@ async fn create_widget_impl_with_options(
         // An inactive macOS window otherwise consumes the first click just to
         // activate itself, making every widget button appear to require two.
         #[cfg(target_os = "macos")]
-        let builder = builder.accept_first_mouse(true);
+        let builder = builder.accept_first_mouse(true).on_page_load(|window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                if let Err(error) = crate::macos_widget_hover::install(&window) {
+                    log::warn!("Failed to initialize widget hover: {error}");
+                }
+            }
+        });
 
         match builder.build() {
             Ok(win) => win,
@@ -598,6 +599,7 @@ async fn create_widget_impl_with_options(
     // native maximize capability enabled also opts them into Windows Aero
     // Snap, which can unexpectedly maximize a widget near a screen edge.
     let _ = win.set_maximizable(false);
+    #[cfg(not(target_os = "macos"))]
     let _ = win.set_always_on_top(keep_on_top);
 
     if let Err(err) = crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
@@ -609,9 +611,7 @@ async fn create_widget_impl_with_options(
         );
     }
     #[cfg(target_os = "macos")]
-    if desktop_fixed {
-        crate::desktop::set_macos_desktop_fixed(&win, true).await?;
-    }
+    crate::desktop::set_macos_widget_level(&win, keep_on_top).await?;
     let _ = win.show();
     #[cfg(target_os = "macos")]
     if focus_window && !desktop_fixed {
@@ -1028,8 +1028,7 @@ pub async fn restore_widget_position(
         #[cfg(target_os = "macos")]
         {
             let desktop_fixed = !always_on_top;
-            let _ = win.set_always_on_top(always_on_top && !desktop_fixed);
-            let _ = crate::desktop::set_macos_desktop_fixed(&win, desktop_fixed).await;
+            let _ = crate::desktop::set_macos_widget_level(&win, always_on_top).await;
             if !desktop_fixed {
                 let _ = win.set_focus();
             }

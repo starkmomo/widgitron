@@ -40,7 +40,7 @@ export function FloatingWindowControls({
 
   const iconClass = `flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 ${light ? "text-slate-500 hover:bg-slate-900/10 hover:text-slate-900" : "text-slate-400 hover:bg-white/10 hover:text-white"}`;
   return (
-    <div data-no-drag="true" data-floating-controls className="relative z-50 flex shrink-0 items-center gap-0.5 transition-opacity opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
+    <div data-no-drag="true" data-floating-controls className="relative z-50 flex shrink-0 items-center gap-0.5">
         <button type="button" className={iconClass} onClick={() => run(onToggleLock)} disabled={busy}
           aria-pressed={locked} title={locked ? "Unlock to move" : "Lock position"} aria-label={locked ? "Unlock to move" : "Lock position"}>
           {locked ? <Lock size={13} /> : <Unlock size={13} />}

@@ -110,14 +110,18 @@ fn configure_corners(glass: &NSVisualEffectView, edge: Option<GlassDockEdge>) {
 }
 
 fn configure(glass: &NSVisualEffectView, dark: bool) {
-    // A HUD is an independent floating utility surface. Always use its active
-    // material without activating the app, changing key windows, or polling.
-    glass.setMaterial(NSVisualEffectMaterial::HUDWindow);
+    // A thin dark backdrop avoids the white veil of a light popover. Content
+    // contrast comes from local web surfaces rather than a heavy window tint.
+    glass.setMaterial(if dark {
+        NSVisualEffectMaterial::HUDWindow
+    } else {
+        NSVisualEffectMaterial::Popover
+    });
     glass.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
     glass.setState(NSVisualEffectState::Active);
-    // Let more wallpaper color through the dark HUD material. The sibling
-    // web content stays fully opaque, including secondary labels.
-    glass.setAlphaValue(0.45);
+    // Keep the material thin in both appearances. Sibling foreground content
+    // stays opaque and the activity state stays fixed when focus changes.
+    glass.setAlphaValue(if dark { 0.16 } else { 0.12 });
     // Keep the native material and web text in the same appearance, including
     // when the user chooses an app theme different from the macOS appearance.
     let name = unsafe {

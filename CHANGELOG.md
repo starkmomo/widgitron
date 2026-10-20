@@ -4,101 +4,79 @@
 
 ### 中文
 
-- **平台玻璃外观调整**：macOS 减轻原生深色材质浓度，玻璃预设改用更浅、透明度更高的灰蓝底色；放大浮窗、侧边栏及外观预览中的标题、正文和操作标签，增加 GPU 卡片所需高度，摘要按可用空间调整行数。Windows 使用轻透背景与深色文字，并修复激活、切换焦点后重新出现系统标题栏的问题。
+#### arXiv 雷达
 
-- **arXiv 下拉菜单**：按浮窗或侧边栏主题匹配菜单配色；玻璃与透明主题使用通透背景，展开时虚化、淡化后方论文卡片，收起后恢复，避免菜单选项和摘要文字重叠。玻璃菜单复用边缘高光。
+- **浏览与筛选**：提供“全部 / 待看 / 已收藏”和 UTC 提交日期选择，支持每页 100 篇翻页与缓存。全部不受关键词影响；待看仅收集关键词匹配项，无关键词时为空。区分无论文与请求失败，刷新失败保留缓存。
+- **关键词输入**：改为可添加、删除的标签，支持回车及中英文逗号、分号、换行分隔。收起页面筛选或离开设置栏目后自动保存并更新，提供加载、成功及失败反馈。
+- **收藏与忽略**：卡片可直接收藏、忽略，各列表支持批量操作。已忽略内容通过小字入口打开管理弹窗，可恢复或收藏；忽略记录仅保留当前批次，收藏长期保存，兼容原有记录。
+- **阅读与下载**：完整显示标题，摘要预览随可用高度调整，完整摘要在独立面板中阅读。打开 arXiv 页面与下载 PDF 分为两个按钮，下载不覆盖同名文件；浮窗和侧边栏的收藏、忽略按钮使用轻底色，关键词下拉同步卡片背景设置。
 
-- **侧边栏外观**：增加跟随主界面和玻璃，与浅色、深色一起独立选择；跟随模式同步主界面的明暗变化。玻璃复用浮窗的原生模糊与边缘高光，内部模块卡片提高不透明度并保持清晰文字；四条停靠边分别裁剪圆角，不支持模糊时保留可读背景。复制玻璃样式可继续自定义，已有主题选择保持兼容。删除自定义主题前显示确认弹窗，取消保留主题，删除当前主题后回到浅色。
+#### 会议截止
 
-- **浮窗操作统一**：macOS 浮窗使用与 Windows 相同的锁定、置顶、隐藏按钮，移除普通浮窗模式。默认显示在桌面层，取消置顶后返回桌面层，保留已有置顶选择。
-- **玻璃外观试用**：Windows 和 macOS 独立浮窗增加可选的模糊背景与自绘圆角高光、内侧暗边，模拟轻微透镜感。macOS 背景固定激活外观；Windows 使用保持壁纸清晰的轻透背景与深色文字，桌面层/置顶切换后重新应用，按 DPI 与缩放裁剪圆角。系统不支持时自动回退；亮色文字单独叠在上层，arXiv 操作按钮增加对比度。设置预览复用边缘光效，并使用冷暖参考背景展示通透程度。此效果不扭曲窗外桌面，切回普通主题会移除材质，现有自定义主题兼容。
+- **会议时间线**：每届会议显示一张卡片，倒计时自动跟随最近的未截止阶段，展开可查看完整时间线。阶段名称与备注保留英文，截止时间按本地时区显示，日期格式跟随界面语言。
+- **搜索与关注**：支持缩写、全称、年份搜索及研究领域、CCF、CORE 筛选。置顶和提醒合并为“关注”，保留旧选择；关注、忽略按届次保存，支持批量管理、过期清理和撤销。关注的会议同步显示于侧边栏、浮窗和系统小组件。
+- **数据刷新**：更新截止日期数据源，增加备用源与压缩响应支持，修复解析失败；刷新失败继续显示缓存并提示原因。
 
-- **侧边栏卡片尺寸**：按模块设置最小高度，arXiv 保留完整阅读与操作区域；额度、GPU、会议卡片保留手动调整高度，上限为完整内容所需高度；内容多时可拉长看全，缩短后在卡片内滚动，少量内容不会拉出大块空白。旧的过小、过高布局会自动修正，后续卡片随之紧凑排列；修复异步主题加载后未绑定内容测量、导致卡片仍能被拉长的问题，测量前采用紧凑上限。展开会议时间线时卡片只增加时间线所需高度，收起后恢复；展开期间仍可手动调整。修正 macOS 桌面层浮窗位于 Finder 图标层下方而无法点击、拖动的问题；补齐主窗口左侧顶部空白区的双击最大化/恢复，与右侧一致。
+#### 浮窗与侧边栏
 
-- **侧边栏与浮窗整理**：侧边栏标题明确为“Widgitron 侧边栏”；侧边栏及独立 arXiv 浮窗移除“已忽略”管理入口，主界面仍可查看和恢复。浮窗按模块设置原生最小尺寸，兼顾 DPI、缩放和旧布局恢复；压缩内边距、页头和模块间距。macOS 浮窗的控制按钮在悬停或键盘聚焦时显示，使用锁定、置顶、隐藏按钮，默认固定到桌面，并去掉总览中重复的桌面按钮；修正圆角外灰色残角，接收未激活浮窗的首次点击，避免按钮需要点两次；浅色浮窗内部卡片使用淡灰底和细描边，明确内容分组，透明主题保留玻璃效果。
+- **外观设置**：四个浮窗的主题集中管理，提供跟随主界面、浅色、深色、透明和玻璃，以及多个自定义主题。支持新建、复制、删除确认和卡片背景自定义，使用紧凑等高预览；侧边栏主题独立选择，编辑面板可展开、收起。
+- **玻璃与阅读**：优化两平台的玻璃配色、文字对比度和圆角高光，减少重复底色与失焦变色。关键词菜单和完整摘要匹配当前主题，玻璃、透明面板虚化后方内容；收紧摘要行距，保留滚动阅读。
+- **尺寸与排版**：侧边栏模块标题与操作合入彩色顶栏。额度、GPU、会议卡片可调整至完整内容高度，避免过小裁切或拉出空白；会议时间线展开时自动增高。统一普通浮窗最小高度，为 arXiv 保留更大阅读区域，调整大小时显示尺寸。
+- **显示与操作**：两平台统一锁定、置顶、隐藏按钮，悬停或键盘聚焦时显示。macOS 默认桌面层，置顶前后均支持普通桌面切换，修复闪现及无法点击、拖动的问题。侧边栏可彻底停用，钉选与设置同步；压缩会议卡片排版，修复时间线展开时宽度跳动。
 
-- **浮窗外观与侧边栏停用**：四个独立浮窗的外观集中到设置中的同一栏目，提供跟随主界面、浅色、深色、透明预设及示例预览；支持多个自定义主题、新建、复制及删除确认弹窗。侧边栏增加独立的启用开关，停用后隐藏内容、停止边缘检测并注销 Windows 快捷键，重启后保留；主动打开可重新启用。临时收起统一标为“隐藏侧边栏”。
+#### 额度与 GPU 监控
 
-- **会议设置与侧边栏同步**：研究领域按钮保持原样，修正与数据源分类编码的匹配；设置中的会议关注支持搜索缩写、英文全称和年份，从完整缓存数据中选择具体届次。对齐 arXiv 代理配置；修复 macOS 侧边栏钉选状态未及时同步到设置开关的问题。
-- **SSH 主机选择器**：统一应用内下拉样式，适配浅色和深色主题，支持搜索别名、键盘选择及空结果提示。
-- **关键词标签**：arXiv 关键词改为标签输入，回车添加、叉号删除；支持粘贴中英文逗号、分号及换行分隔的多个词，保留短语空格并自动去重。兼容旧配置，仍在收起筛选或离开设置栏目后统一更新论文；筛选说明统一使用与 GPU 设置相同的即时问号浮层。
-- **额度卡片**：按内容区宽度排列卡片，为周期名称、剩余额度和重置时间分行留出空间，避免窄卡片截断周期文字或挤压百分比；同步中英文。
-- **服务器配置与筛选布局**：SSH 和 Slurm 说明收进问号提示；可从 SSH 配置中选择主机别名并填入已有连接字段，支持嵌套 Include、通配符和带空格的路径，并限制循环与过深递归。CCF 与 CORE 使用相同按钮宽度，研究领域在最小窗口宽度下仍完整显示为一行，无局部滚动。
-- **筛选布局与总览**：CCF、CORE 分行排列，等级、研究领域及 arXiv 分类使用等高等宽选项，明确选中状态；会议图标内的研究领域文字加大、加粗并提高对比度。关键词、滑动提示和预设说明精简，中英文同步。总览有会议关注时显示当前未过期的关注数量，无关注时显示可浏览会议总数；arXiv 有关键词时显示待看数量，无关键词时显示所选分类最近批次的论文总数，并支持直接进入对应论文列表；统计文案简化为“已关注 / 待看 / 近期”，无关注的会议只显示数字，英文同步。
-- **单行工具栏**：论文和会议的批量入口简化为“Select / Done”（中文“批量选择 / 完成”），保留完整悬停与无障碍说明；页签、选择、忽略入口及日期/搜索始终单行显示。主窗口最小宽度调整为 1040，防止英文控件互相遮挡，并修正旧窗口尺寸恢复后过窄的问题。
-- **待看与筛选反馈**：arXiv 的“最新”改为“待看”，只收集关键词匹配的论文；未设置关键词时保持为空，清理旧的无关键词待看缓存并保留收藏。“全部”继续按分类和日期分页浏览。分类和会议筛选点击后自动生效；关键词在页面收起筛选、切换设置栏目或离开设置页时统一保存并更新，无需额外确认。保留草稿、正在保存/更新及失败提示，成功提示 4 秒后消失，并同步中英文说明。
-- **导航与总览**：主导航、设置导航、总览统计和模块设置统一为额度、GPU、会议、arXiv 的顺序及名称；额度使用仪表盘图标，arXiv 使用雷达图标。英文会议导航缩为“Conference DDL”，避免换行；总览补充大标题，并为统计数字显示单位。
-- **窗口与会议筛选**：顶部改为融入背景的窄拖动区，去掉重复页名和分隔线，保留各平台的窗口按钮。内容区上移：macOS 页头与左侧应用图标对齐，Windows 保留靠上的应用图标及右侧窗口按钮下方的间距。会议页的“截止日期设置”改为“筛选会议 / 收起筛选”，展开面板仅显示研究方向、CCF 和 CORE 等级筛选。arXiv 同步使用“筛选论文 / 收起筛选”，仅展开分类与关键词；更新频率、操作提示和代理配置保留在完整设置页。
-- **页面切换**：移除主导航切页时旧页面与新页面同时占位的退出动画，新页面直接从顶部显示，避免从页面底部闪现后跳回。
-- **论文筛选与批量操作**：arXiv 卡片可直接收藏或忽略，已忽略内容改为小字入口和标题列表弹窗，支持放回待看及收藏；忽略记录仅属于当前批次并设数量上限，收藏长期保留，兼容旧记录。全部、待看、收藏及忽略弹窗支持批量管理；分页全选仅作用于当前页，页签数量优先读取缓存并在切换后保留。会议已忽略列表同样改为小字弹窗，保留按届次恢复、关注、批量处理和过期清理；主导航与设置中的模块名称统一为“会议截止”。提供独立标识和名称的“Widgitron 测试版”构建。
-- **研究页面布局**：论文截止日期与 arXiv 共用页头和紧凑页签，统一标题、设置、刷新、服务开关及搜索/日期筛选的位置和窄窗口排列。批量选择入口紧随页签，搜索与日期筛选保留右侧，工具栏保持单行；批量操作及清理选项按需展开。撤销改为可关闭的短暂提示，8 秒后自动消失，鼠标悬停或键盘聚焦时暂停计时，不再常驻工具栏。
-- **macOS 小组件跳转**：点击额度、GPU 或截止日期小组件时打开对应模块页面；应用尚未启动时保留跳转请求，界面就绪后执行。
-- **截止日期语言**：时间线和会议卡片中的日期格式跟随界面语言切换，英文界面不再沿用系统的中文日期格式；保持本地时区显示。
-- **页面内设置与摘要阅读**：页面展开的设置使用淡蓝色底、强调边线和标题分隔；主题与样式、额度账号与套餐显示、GPU 紧凑样式及恢复位置仅保留在完整设置页；额度与 GPU 页面展开后直接管理监控项和服务器。侧边栏和浮窗中的完整摘要使用更紧凑的字号、行距和内边距，并保留滚动阅读。
-- **会议搜索与关注**：支持按会议缩写、英文全称及年份搜索，使用“全部 / 已关注”页签和独立的已忽略列表弹窗；按“会议＋年份”保存选择，不自动延续到下一届。增加批量关注、忽略、取消关注、恢复、清空和已过期条目清理，可撤销批量操作；过期选择保留供管理，未知日期不误判为过期。合并重复的置顶和提醒操作为“关注”，自动保留旧选择。关注的会议按最近截止节点显示在侧边栏、浮窗和 macOS 小组件；忽略与关注互斥，已忽略会议可恢复。点击后立即反馈并按顺序保存，避免连续操作覆盖；macOS 主窗口接受未激活时的首次点击。
-- **会议时间线**：每个会议年份合并为一张卡片，收录摘要、正文、ARR、rebuttal 和 decision 等数据源节点；倒计时自动跟随最近的未截止节点，展开可查看包含已过期节点的完整时间线。阶段标签和原始备注保持英文；已关注会议会跨阶段保留，侧边栏、浮窗和 macOS 小组件同步跟随下一节点。按 UTC 偏移、AoE 和 PT 夏令时正确换算截止时间，界面明确展示本地时间。
-- **macOS 窗口边缘**：主窗口统一使用系统圆角、轮廓与阴影，修正网页描边与原生圆角叠加时四角轮廓断开的外观。
-- **arXiv 日期与翻页**：提供“全部 / 待看 / 已收藏”页签及提交日期（UTC）月历，区分无论文和网络错误；待看按关键词分组，选日期时查询当天匹配论文。“全部”不按关键词筛选，默认显示最近投稿日。每页 100 篇，使用上一页/下一页切换，按分类、关键词、日期和页码缓存已浏览内容，刷新失败时保留当前页。
-- **截止日期刷新**：更新数据源到当前 HTTPS 地址，支持 gzip 响应并在请求或解析失败时尝试 GitHub 备用源；手动刷新和后台更新共用处理逻辑，失败时保留缓存，并记录具体错误原因。
-- **arXiv 论文卡片**：标题完整换行显示，卡片列数按内容区域宽度调整；摘要按卡片剩余高度自动调整预览行数，避免短标题卡片留出大块空白；可点击“完整摘要”打开独立阅读面板，不改变卡片布局；分别提供打开 arXiv 页面和下载 PDF 的图标按钮。PDF 保存到系统下载目录，避免覆盖同名文件，并显示下载结果。侧边栏和浮窗使用相同操作。
-- **侧边栏启动修复**：状态查询不再触发窗口创建，初始化只由应用启动流程负责，并防止并发或重入创建重复控制器。增加设置保存、通知接收和界面更新的诊断记录。
-- **Windows 侧边栏**：将主题和模块开关的同步独立于服务初始化，避免其他配置加载失败导致订阅缺失；防止旧请求覆盖新的配置和展开状态，并即时提交侧边栏显示更新。保留原有模糊外观。拖动结束后及时清除移动提示，自定义标题栏颜色也会应用到侧边栏。
-- **设置修复**：设置页选中框打开时不再滑入；主页面的“添加额度监控”和“添加服务器”仅展开设置，额度服务商在明确选择后才新增，不再自动创建 Antigravity。浅色界面的 Cursor 图标现在清晰可见。
-- **修复**：Windows 侧边栏通过 Tauri 同步窗口显示状态，保留屏幕边缘悬停唤出与离开收起；修正可能完全不可见的问题。Windows 托盘左键打开主界面，右键打开菜单；侧边栏卡片尺寸只保存卡片布局，不覆盖缩放设置。论文截止日期浮窗仅显示已关注的会议，同一会议年份只显示一个投稿轮次。
-- **自动构建**：GitHub Actions 支持主分支推送、面向 main 的拉取请求及手动触发，检查 Windows x64 安装包与包含 WidgetKit 扩展的 macOS 应用；仅文档或网页变更跳过完整打包。macOS 使用临时签名，无需上传 Apple 凭证。
-- **macOS 系统小组件**：新增额度、GPU 和论文截止日期小组件；GPU 中号小组件可显示三台服务器，直接标出平均使用率，没有 GPU 时显示明确状态。截止日期仅显示用户已关注的近期会议，点击小组件可打开主界面。正常签名的应用通过 App Group 共享展示数据；GitHub 临时签名构建在 macOS 拒绝 App Group 写入时，通过本机回环地址更新小组件。
-- **界面与操作**：macOS 主窗口恢复原生红黄绿按钮，修正最小窗口尺寸、总览与设置页布局；主显示器上的侧边栏支持鼠标靠边唤出、离开收起。额度监控、服务器和会议可在对应页面添加或配置，侧边栏与设置面板按钮可再次点击关闭，主界面操作侧边栏时保持焦点。菜单栏图标改为随系统明暗自动着色的单色图标，左键打开主界面，右键使用原生系统菜单；退出项简化为“退出”，并用分隔线隔开。完善中英文界面文案。
-- **主机监控**：本机和远程 Linux 服务器显示 CPU、内存用量；没有 GPU 时仍正常显示在线状态。支持解析 SSH 配置中的嵌套 `Include` 文件。
-- **arXiv 空状态**：未设置关键词时，待看保持为空，可通过“全部”浏览所选分类的近期论文。
+- **额度卡片**：优化窄卡片中的周期、重置时间和百分比排布，修复浅色背景下的 Cursor 图标。添加入口仅打开配置，选择服务商后才新增，不再自动创建 Antigravity。
+- **主机与 SSH**：本机和远程 Linux 主机显示 CPU、内存用量，无 GPU 时仍可显示在线状态。支持搜索 SSH 配置别名并填入连接信息，解析嵌套 Include、通配符和带空格的路径，防止循环引用；SSH、Slurm 说明收进帮助提示。
+
+#### 界面与平台修复
+
+- **导航与页面**：统一模块顺序、名称、图标、研究页面工具栏与筛选布局，精简中英文说明和总览统计。页面内设置聚焦常用操作，外观等选项保留在完整设置页；修复切页闪动、设置选中框滑入和英文控件重叠，撤销及成功提示自动消退。
+- **Windows**：修复侧边栏主题、模块开关不即时生效、窗口不可见及拖动提示不消失的问题；调整卡片尺寸不再覆盖缩放设置，切换焦点不再出现多余标题栏。托盘左键打开主界面，右键打开菜单。
+- **macOS 窗口**：恢复原生窗口按钮、圆角与阴影，补齐顶部拖动和双击最大化区域，修复未激活窗口需要点击两次的问题。菜单栏使用适应系统明暗的单色图标和原生菜单。
+- **macOS 系统小组件**：新增额度、GPU、会议截止小组件，GPU 中号支持三台服务器，会议仅显示已关注项目。点击跳转到对应模块，支持冷启动跳转及临时签名构建的数据更新。
+
+#### 构建与测试
+
+- **构建流程**：支持 main 推送、面向 main 的 PR 和手动构建，产出 Windows x64 安装包及包含 WidgetKit 的 macOS 应用；仅文档、网页改动跳过完整打包。提供独立名称和标识的“Widgitron 测试版”，macOS 构建无需 Apple 签名凭证。
 
 ### English
 
-- **Platform glass refinements**: Reduce macOS native material intensity and use a lighter, more transparent slate tint for built-in floating and sidebar glass. Increase titles, body text and action labels in Mac widgets, sidebars and appearance previews, with taller GPU cells and abstract lines adapting to available space. Windows uses clear surfaces and dark labels, with fixes for native captions reappearing on activation or focus changes.
+#### arXiv Radar
 
-- **arXiv keyword menus**: Match the floating widget or sidebar appearance. Glass and transparent menus use translucent surfaces and temporarily blur and fade the paper behind them, restoring it on close so option text stays separate from the abstract. Glass menus share the rim highlights.
+- **Browsing and filters**: Add All / To read / Saved views, a UTC submission-date picker, and cached pages of 100 papers. All ignores keywords; To read contains keyword matches and stays empty without keywords. Distinguish empty results from request failures and retain cached papers on refresh errors.
+- **Keyword input**: Use removable tags with Enter and English/Chinese comma, semicolon, or newline separators. Save and refresh when filters close or the Settings section is left, with loading, success, and error feedback.
+- **Saving and ignoring**: Add card actions and bulk management across lists. Open ignored papers in a separate dialog to restore or save them. Keep ignore records within the current batch, retain saved papers, and preserve existing selections.
+- **Reading and downloads**: Show full titles, adapt abstract previews to available space, and open full abstracts in a separate reading panel. Separate arXiv page and PDF download actions and avoid overwriting files. Use lighter save/ignore buttons in widgets and the sidebar, with keyword dropdowns following card background settings.
 
-- **Sidebar appearance**: Add Follow main and Glass alongside Light and Dark, with separate choices from floating widgets. Follow main updates with the dashboard appearance. Glass shares the native backdrop and edge highlights while using more opaque module cards and clear text; clip the exposed corners for each docking edge and fall back to a readable surface when blur is unavailable. Copied glass themes remain editable and existing selections stay compatible. Confirm before deleting a custom theme; cancel preserves it and deleting the active theme restores Light.
+#### Conference Deadlines
 
-- **Consistent floating controls**: Use the same lock, pin and hide buttons on macOS and Windows. Remove normal floating mode on macOS; default to the desktop layer and return there when unpinned, preserving existing always-on-top choices.
-- **Glass appearance preview**: Add Windows clear surfaces and macOS native blur with custom curved highlights and an inner shadow to suggest a subtle lens. macOS keeps its material active. Windows keeps the desktop sharp, reapplies its clear surface after desktop/pin transitions, and clips corners using DPI and zoom. Unsupported systems fall back safely, with readable web content and higher-contrast arXiv actions. Settings previews share the rim effects over a warm and cool reference scene. This effect does not distort the desktop. Switching back removes the native material, preserving existing custom themes.
+- **Conference timelines**: Show one card per edition, count down to the next upcoming stage, and expand the complete timeline. Keep stage names and notes in English, convert deadlines to local time, and format dates in the interface language.
+- **Search and following**: Search acronyms, full names, and years; filter by research area, CCF, and CORE. Combine pin and reminder actions into Follow while preserving existing choices. Manage following and ignoring per edition, with bulk actions, expired-item cleanup, and Undo. Synchronize followed conferences across sidebar, floating, and system widgets.
+- **Data refresh**: Update the deadline source, add a fallback and compressed-response support, and fix parsing failures. Preserve cached data on errors and show the reason.
 
-- **Sidebar card sizing**: Added module-specific minimum heights, preserving a usable reading and action area for arXiv. Quota, GPU, and conference cards retain manual resizing up to their complete content height: long lists can be expanded beyond one screen or scrolled in a shorter card, while short lists cannot leave large blank areas. Restored undersized or oversized cards are clamped and following cards close up. Content measurement attaches after asynchronous theme loading; cards use compact bounds until measurement is ready. Conference cards temporarily grow by the newly opened timeline height and restore their collapsed height when it is closed; manual resizing remains available while expanded. Fixed macOS desktop-layer widgets sitting below Finder's icon window and losing clicks and drags. Added native drag and double-click zoom/restore to the dashboard's upper-left blank area.
+#### Floating Widgets and Sidebar
 
-- **Sidebar and floating windows**: Renamed the sidebar header to “Widgitron Sidebar”. Removed ignored-paper management from the sidebar and floating arXiv cards; it remains available in the dashboard. Added native minimum sizes per module, accounting for DPI, UI zoom, and restored layouts, and tightened padding, headers, and spacing. macOS controls appear on hover or keyboard focus; lock, pin and hide buttons match Windows, with the desktop layer as the default. Removed the duplicate desktop button from Overview. Clipped grey artifacts outside floating-window corners and enabled first-click actions on inactive macOS widgets. Light floating windows use subtle grey card fills and outlines to distinguish content groups; transparent themes retain their glass styling.
+- **Appearance settings**: Manage all four widgets together with Follow main, Light, Dark, Transparent, Glass, and multiple custom themes. Support creation, copying, deletion confirmation, card backgrounds, and compact equal-height previews. Keep sidebar themes independent, with a collapsible editor.
+- **Glass and reading**: Refine platform-specific glass colors, text contrast, and edge highlights; reduce stacked fills and focus-related appearance changes. Match keyword menus and full abstracts to the selected theme, blur underlying content for translucent panels, and use tighter, scrollable abstract text.
+- **Sizing and layout**: Move sidebar titles and actions into colored module headers. Resize quota, GPU, and conference cards up to their full content height without clipping or excess blank space; grow conference cards when timelines open. Share a minimum height for regular floating widgets, reserve more space for arXiv, and show dimensions while resizing.
+- **Visibility and controls**: Use consistent lock, pin, and hide controls on hover or keyboard focus. Default macOS widgets to the desktop layer, support ordinary Spaces in both pin states, and fix transition flashes and lost clicks or drags. Allow the sidebar to be fully disabled, synchronize its pin setting, compact conference cards, and prevent width shifts when timelines expand.
 
-- **Floating appearance and sidebar control**: Manage all four floating windows in one Settings section, with live examples, Follow main, Light, Dark, Transparent, and multiple custom themes. Add explicit creation, duplication, and a deletion dialog. A persistent sidebar enable switch stops edge reveal and unregisters the Windows shortcut when disabled; opening it explicitly enables it again. Temporary dismissal is labeled Hide Sidebar.
+#### Quota and GPU Monitoring
 
-- **Conference settings and sidebar sync**: Preserve the research-area controls while matching their values to the source category codes. Search the full cached conference catalog by acronym, full name, or year and follow a specific edition from Settings. Align arXiv proxy settings and synchronize macOS sidebar pin changes with the Settings switch immediately.
-- **SSH host picker**: Use a consistent in-app dropdown in light and dark themes, with alias search, keyboard selection, and empty-result feedback.
-- **Keyword tags**: Enter adds an arXiv keyword and each tag has a remove action. Paste multiple entries separated by English/Chinese commas, semicolons, or newlines, preserving phrase spaces and removing duplicates. Retain existing configurations and update papers when filters close or the settings section is left. Use the same immediate question-mark help as GPU settings.
-- **Quota cards**: Size the grid to the available content width and separate period names, remaining percentages, and reset times to prevent truncation and collisions in narrow cards, in both languages.
-- **Server setup and filter layout**: Move SSH and Slurm explanations into question-mark help. Select local SSH aliases to fill connection fields, with nested Includes, globs, quoted paths, and cycle/depth limits. Give CCF and CORE equal button widths and fit research areas on one row at the minimum window width, without local scrolling.
-- **Filters and overview**: Arrange CCF and CORE on separate rows with consistently sized rank, research-area, and arXiv category choices and accessible selection states. Enlarge and strengthen research-area codes inside conference icons. Shorten keyword, swipe-hint, and preset copy in both languages. Overview shows upcoming followed conferences when any are followed, otherwise browsable conferences; arXiv shows To read with keywords or the selected categories’ latest paper total without them, and opens the corresponding paper view. Use concise followed / to read / recent metrics in both languages and omit the unit for the unfollowed conference total.
-- **Single-row toolbars**: Shorten bulk controls to Select / Done with full tooltips and accessible labels. Keep view tabs, selection, ignored items, and date/search controls on one row. Set a 1040-point minimum window width and clamp restored window sizes to prevent English controls from overlapping.
-- **To read and filter feedback**: Rename arXiv Latest to To read and collect only keyword matches. Leave it empty without keywords, clear legacy unfiltered reading caches, and preserve saved papers. Keep All as paginated browsing by category and date. Apply category and conference choices immediately; save keyword drafts and update papers when closing inline filters, switching settings sections, or leaving Settings, with no extra confirmation. Retain draft, saving/updating, and failure feedback in both languages; dismiss success messages after four seconds.
-- **Navigation and overview**: Share module order, names, and icons across main navigation, Settings, overview statistics, and module controls: Quota, GPU, Conferences, then arXiv. Use a gauge for Quota and a radar icon for arXiv. Shorten the English conference label to Conference DDL to prevent wrapping. Add an Overview heading and concise statistic labels.
-- **Window chrome and conference filters**: Use a compact drag area that blends with the page, removing duplicate section names and the divider while preserving window controls. Move content upward to align page headers with the app icon on macOS; keep the Windows icon near the top and reserve space below its window controls. Rename the conference page action to “Filter conferences / Hide filters”; its inline panel contains only research areas and CCF/CORE rank filters. Use “Filter papers / Hide filters” for arXiv, showing only categories and keywords inline while keeping update intervals, hints, and proxy options in full Settings.
-- **Page navigation**: Remove overlapping exit animations between main sections and reset the scroll viewport on navigation, preventing pages from briefly appearing below the previous section.
-- **Paper triage and bulk actions**: Add bookmarking and ignoring to arXiv cards, with a compact ignored-paper dialog for restoring or bookmarking titles. Scope bounded ignore records to the current batch, retain saved papers, and import legacy selections. Support bulk actions across All, To read, Saved, and the ignored dialog; select only the current page when paginated and retain cached tab counts. Move ignored conferences into a matching dialog with restore, follow, bulk actions, and expired cleanup while retaining edition-scoped preferences. Shorten the Chinese navigation label and add a separately identified test app build.
-- **Research page layout**: Share the header and compact tabs across deadlines and arXiv, aligning titles, settings, refresh, service controls, and search/date filters. Place bulk selection beside view tabs, keep search and date controls on the right in a single-row toolbar, and reveal bulk actions and cleanup controls only when needed. Replace the persistent Undo control with a dismissible notice that expires after eight seconds and pauses while hovered or focused.
-- **macOS widget navigation**: Open the matching quota, GPU, or deadline page when a widget is clicked, retaining the destination until the main interface is ready on a cold launch.
-- **Deadline date language**: Format timeline and conference card dates using the selected interface language instead of the system language, while preserving the local time zone.
-- **Inline settings and abstract reading**: Distinguish expanded page settings with a tinted surface, accent border, and separated header. Keep theme styling, quota account and plan visibility, GPU compact mode, and position restoration in full Settings; inline quota and GPU panels focus on monitors and servers. Use denser type, line spacing, and padding for full abstracts in sidebars and floating widgets while preserving scrolling.
-- **Conference search and following**: Search by acronym, source full name, and year with All and Followed tabs plus a separate ignored-conference dialog. Store preferences per conference edition without automatically following later years. Add bulk follow, ignore, unfollow, restore, clear-all, and expired cleanup with Undo; retain expired selections for management and never treat unknown dates as expired. Combine the overlapping pin and reminder controls into Follow while preserving existing selections. Show followed conferences in sidebar, floating, and macOS widgets ordered by their next deadline. Ignoring removes Follow and can be reversed. Update controls immediately, serialize preference saves to preserve rapid changes, and accept the first click in an inactive macOS main window.
-- **Conference timelines**: Show one card per conference year with every available abstract, paper, ARR, rebuttal, and decision milestone. Count down to the nearest upcoming stage, roll forward locally, and expand to view the complete timeline including past events. Keep stage labels and source notes in English, preserve followed conferences across stage changes, and synchronize sidebar, floating, and macOS widgets. Correctly convert UTC offsets, AoE, and Pacific daylight-saving time, and explicitly display local time.
-- **macOS window edges**: Use the system corner clipping, outline, and shadow for the main window, avoiding broken corner outlines caused by overlapping web and native window borders.
-- **arXiv dates and pagination**: Provide All, To read, and Saved tabs with a submission date (UTC) calendar, consistent toolbars, and distinct empty-date and network-error states. Group To read by keywords; a selected date queries that day's matches. All ignores keywords and defaults to the latest submission day. Display 100 papers per page with Previous/Next navigation, cache browsed pages by categories, keywords, date and page number, and preserve the current page on refresh failure.
-- **Deadline refresh**: Use the current HTTPS data source with gzip support and a GitHub fallback for request or parsing failures. Manual and background refreshes share the same handling, preserve cached data on failure, and log the underlying error.
-- **arXiv paper cards**: Show complete wrapping titles and adapt column count to the available content width. Adapt abstract preview line counts to the available card height, with a full abstract reading dialog that preserves the card layout. Provide separate icon buttons for opening the arXiv page and downloading the PDF to the system Downloads folder, without overwriting existing files, and show download feedback. Sidebar and floating widgets use the same actions.
-- **Sidebar startup fix**: State queries no longer create windows. Application setup owns initialization, with a nonblocking guard against concurrent or reentrant controller creation. Added diagnostics for settings saves, notification delivery, and UI updates.
-- **Windows sidebar**: Subscribe to theme and module settings independently of service initialization, so unrelated loading failures cannot block updates. Prevent stale reads from replacing newer settings or reveal events, and commit sidebar appearance updates immediately. Preserve the original blur styling. Clear the moving overlay when dragging ends, and apply custom header colors.
-- **Settings fixes**: The selected settings tab no longer slides in on open. Dashboard add buttons only reveal the quota or server settings; a quota monitor is created only after a provider is chosen, with no automatic Antigravity entry. The Cursor icon remains visible on light backgrounds.
-- **Fixes**: Synchronized Windows sidebar visibility through Tauri while retaining edge hover reveal and leave to hide behavior; fixed cases where it was completely invisible. Left click on the Windows tray icon opens the dashboard and right click opens the menu. Resizing sidebar cards now saves only card layout, preserving the scale setting. Deadline floating widgets now show only selected conferences and one submission round per conference year.
-- **Continuous builds**: GitHub Actions checks the Windows x64 installer and macOS app with WidgetKit on main pushes, pull requests targeting main, and manual dispatch. Documentation-only and website-only changes skip full packaging. macOS checks use ad-hoc signing without Apple credentials.
-- **Native macOS widgets**: Added quota, GPU, and paper deadline widgets. The medium GPU widget shows up to three servers with explicit average utilization and a clear no-GPU state. Deadline widgets show only upcoming conferences followed by the user; clicking a widget opens the dashboard. Signed apps share display-only snapshots through an App Group; GitHub's ad-hoc builds use a local loopback feed when macOS denies App Group writes.
-- **Interface and controls**: Restored native macOS window controls and improved minimum window sizing, overview layout, and Settings layout. The sidebar on the primary display now opens when the pointer reaches its edge and hides when the pointer leaves. Quota monitors, servers, and conferences can be added or configured from their pages; sidebar and settings controls now toggle closed as well as open without taking focus from the dashboard. The menu bar icon is now monochrome and adapts to the system appearance; a left click opens the dashboard, while a right click opens a native macOS menu. The separated quit item uses the short label “Quit”, and Chinese/English interface copy has been refined.
-- **Host monitoring**: Added CPU and memory usage for localhost and remote Linux servers, with a clear online state when no GPU is present. SSH configuration parsing now follows nested `Include` files.
-- **arXiv empty states**: Leave To read empty without keywords and use All to browse recent papers from the selected categories.
+- **Quota cards**: Improve period, reset-time, and percentage layout in narrow cards, and fix Cursor icons on light backgrounds. Add buttons open configuration first; create a monitor only after a provider is chosen, without automatically adding Antigravity.
+- **Hosts and SSH**: Show CPU and memory for localhost and remote Linux hosts, retaining an online state without GPUs. Search SSH aliases and fill connection fields; support nested Includes, globs, and paths with spaces while preventing cycles. Move SSH and Slurm explanations into help popovers.
+
+#### Interface and Platform Fixes
+
+- **Navigation and pages**: Align module order, names, icons, research toolbars, and filters. Simplify bilingual copy and overview metrics, keep inline settings focused on common actions, and centralize appearance options in Settings. Fix page flashes, sliding settings selections, and overlapping English controls; dismiss Undo and success notices automatically.
+- **Windows**: Fix delayed sidebar theme/module updates, invisible windows, and stuck drag notices. Preserve zoom when resizing sidebar cards and prevent extra native captions after focus changes. Left-clicking the tray icon opens the dashboard; right-clicking opens its menu.
+- **macOS windows**: Restore native window buttons, corners, and shadows; complete the top drag and double-click zoom areas and accept the first click in inactive windows. Use an appearance-aware monochrome menu bar icon and native menu.
+- **macOS system widgets**: Add quota, GPU, and conference widgets. The medium GPU widget supports three servers; conferences show followed entries only. Open the matching module on click, including cold launches, and support data updates in ad-hoc builds.
+
+#### Builds and Testing
+
+- **Build workflow**: Build on main pushes, PRs targeting main, or manual dispatch, producing Windows x64 installers and macOS apps with WidgetKit. Skip full packaging for documentation-only or website-only changes. Provide a separately named and identified test app; macOS builds do not require Apple signing credentials.
 
 ## [0.2.6] - 2026-09-24
 

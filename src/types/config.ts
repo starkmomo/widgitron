@@ -62,6 +62,7 @@ export interface SidebarThemeDefinition {
   card_opacity?: number;
   blur?: number;
   material?: "native-glass";
+  card_background?: import("./theme").CardBackground;
 }
 
 export interface SidebarThemeConfig {

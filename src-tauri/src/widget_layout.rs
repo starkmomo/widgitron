@@ -20,7 +20,7 @@ const SAVE_DEBOUNCE_MS: u64 = 300;
 const PROGRAMMATIC_LAYOUT_SETTLE_MS: u64 = 2500;
 const MONITOR_POLL_INTERVAL_MS: u64 = 2000;
 const MIN_WIDGET_WIDTH: u32 = 300;
-const MIN_WIDGET_HEIGHT: u32 = 180;
+const MIN_WIDGET_HEIGHT: u32 = 220;
 
 // First-run target sizes in logical CSS pixels (before OS DPI / UI scale).
 const DEFAULT_TARGET_WIDTH_LOGICAL: f64 = 400.0;
@@ -517,8 +517,36 @@ fn default_layout_for_widget(
     let right_margin = DEFAULT_RIGHT_MARGIN_FRAC * area_w;
     let bottom_margin = DEFAULT_BOTTOM_MARGIN_FRAC * area_h;
 
-    let min_w = (MIN_WIDGET_WIDTH as f64 * scale).max(1.0);
-    let min_h = (MIN_WIDGET_HEIGHT as f64 * scale).max(1.0);
+    let min_w = (MIN_WIDGET_WIDTH as f64 * dpi * scale).max(1.0);
+    let min_h = (MIN_WIDGET_HEIGHT as f64 * dpi * scale).max(1.0);
+    let tall_min_h = min_h * 2.0;
+
+    // When arXiv plus one short widget cannot fit vertically, use three
+    // columns if there is room. Don't enlarge windows into their neighbours
+    // afterwards just to satisfy the native minimum size.
+    let usable_w = area_w - left - right_margin;
+    let usable_h = area_h - top - bottom_margin;
+    if tall_min_h + min_h + row_gap > usable_h
+        && min_w * 3.0 + column_gap * 2.0 <= usable_w
+    {
+        let width = (DEFAULT_TARGET_WIDTH_LOGICAL * dpi * scale)
+            .min((usable_w - column_gap * 2.0) / 3.0)
+            .max(min_w);
+        let short = ((usable_h - row_gap) / 2.0).max(min_h);
+        let tall = (DEFAULT_TARGET_HEIGHT_TALL_LOGICAL * dpi * scale)
+            .max(tall_min_h).min(usable_h);
+        let (x, y, height) = match label {
+            "widget-gpu-default" => (left, top, short),
+            "widget-quota-default" => (left, top + short + row_gap, short),
+            "widget-deadlines-default" => (left + width + column_gap, top, short),
+            "widget-arxiv-default" => (left + 2.0 * (width + column_gap), top, tall),
+            _ => return None,
+        };
+        return Some(sanitize_layout(NormalizedWidgetLayout {
+            x: x / area_w, y: y / area_h,
+            width: width / scale / area_w, height: height / scale / area_h,
+        }));
+    }
 
     let max_cell_w = ((area_w - left - right_margin - column_gap) / 2.0).max(min_w);
     let available_h = (area_h - top - bottom_margin - row_gap).max(min_h * 2.0);
@@ -539,7 +567,7 @@ fn default_layout_for_widget(
         tall_h *= fit;
         short_h *= fit;
     }
-    tall_h = tall_h.clamp(min_h, available_h);
+    tall_h = tall_h.clamp(tall_min_h, (available_h - min_h).max(tall_min_h));
     short_h = short_h.clamp(min_h, (available_h - tall_h).max(min_h));
 
     let right = left + want_w + column_gap;
@@ -600,8 +628,7 @@ fn widget_minimum_size(
     scale: f64,
 ) -> PhysicalSize<u32> {
     let height = match label {
-        "widget-arxiv-default" => 300,
-        "widget-gpu-default" => 220,
+        "widget-arxiv-default" => MIN_WIDGET_HEIGHT * 2,
         _ => MIN_WIDGET_HEIGHT,
     };
     let dpi = if dpi.is_finite() && dpi > 0.0 {
@@ -835,7 +862,11 @@ mod tests {
         let area = sample_area(2560, 1440);
         assert_eq!(
             widget_minimum_size("widget-quota-default", area, 1.0, 1.0),
-            PhysicalSize::new(300, 180)
+            PhysicalSize::new(300, 220)
+        );
+        assert_eq!(
+            widget_minimum_size("widget-deadlines-default", area, 1.0, 1.0),
+            widget_minimum_size("widget-quota-default", area, 1.0, 1.0)
         );
         assert_eq!(
             widget_minimum_size("widget-gpu-default", area, 2.0, 1.25),
@@ -843,7 +874,7 @@ mod tests {
         );
         assert_eq!(
             widget_minimum_size("widget-arxiv-default", area, 2.0, 1.25),
-            PhysicalSize::new(750, 750)
+            PhysicalSize::new(750, 1100)
         );
     }
 
@@ -879,6 +910,27 @@ mod tests {
             widget_minimum_size("widget-arxiv-default", area, 2.0, 2.0),
             PhysicalSize::new(500, 400)
         );
+    }
+
+    #[test]
+    fn small_screen_defaults_respect_each_widgets_native_minimum_without_overlap() {
+        let area = sample_area(1280, 720);
+        let scale = 1.25;
+        let labels = ["widget-gpu-default", "widget-arxiv-default", "widget-quota-default", "widget-deadlines-default"];
+        let rects: Vec<_> = labels.iter().map(|label| {
+            let layout = default_layout_for_widget(label, area, 1.0, scale).expect("default layout");
+            let minimum = widget_minimum_size(label, area, 1.0, scale);
+            let (position, size) = normalized_to_physical_with_minimum(layout, area, scale, minimum);
+            assert!(size.width >= minimum.width && size.height >= minimum.height);
+            assert!(position.x + size.width as i32 <= area.width as i32);
+            assert!(position.y + size.height as i32 <= area.height as i32);
+            (position.x, position.y, size.width, size.height)
+        }).collect();
+        for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                assert!(!rects_overlap(rects[i], rects[j]), "overlapping defaults: {:?}", rects);
+            }
+        }
     }
 
     #[test]

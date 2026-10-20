@@ -31,7 +31,7 @@ export type SidebarTileHeightLimits = { min: number; max: number };
 export type SidebarTileHeightLimitMap = Record<SidebarSectionKey, SidebarTileHeightLimits>;
 
 const MIN_CONTENT_HEIGHT: Record<SidebarSectionKey, number> = {
-  quota: 136,
+  quota: 148,
   gpu: 160,
   deadlines: 176,
   arxiv: 300,
@@ -49,7 +49,7 @@ export function sidebarTileHeightLimits(
   // including beyond one screen, but cannot be stretched into empty space.
   const contentMax = key === "arxiv" ? cap
     : naturalHeight !== undefined && Number.isFinite(naturalHeight)
-      ? Math.ceil(Math.max(0, naturalHeight)) + 12
+      ? Math.ceil(Math.max(0, naturalHeight))
       : min;
   return { min, max: Math.max(min, contentMax) };
 }

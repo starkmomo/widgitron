@@ -177,6 +177,8 @@ pub struct SidebarThemeDefinition {
     pub blur: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<WidgetMaterial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_background: Option<CardBackground>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -547,6 +549,12 @@ pub struct ColorConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CardBackground {
+    pub color: String,
+    pub opacity: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub enum WidgetMaterial {
     #[serde(alias = "liquid-glass")]
@@ -566,6 +574,8 @@ pub struct WidgetTheme {
     pub widget_scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub material: Option<WidgetMaterial>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub card_background: Option<CardBackground>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -607,6 +617,30 @@ mod widget_material_tests {
         assert_eq!(restored.text_colors[0].value, "#123456");
         assert_eq!(restored.primary_colors[0].value, "#abc123");
         assert_eq!(restored.widget_scope.as_deref(), Some("widget-quota-default"));
+    }
+
+    #[test]
+    fn widget_and_sidebar_glass_preserve_clear_card_backgrounds() {
+        let mut theme = WidgetThemeConfig::default().themes.remove(0);
+        assert!(theme.card_background.is_none());
+        theme.material = Some(WidgetMaterial::NativeGlass);
+        theme.card_background = Some(CardBackground { color: "#123456".into(), opacity: 0.0 });
+        let restored: WidgetTheme = serde_json::from_value(serde_json::to_value(&theme).expect("serialize widget")).expect("restore widget");
+        let background = restored.card_background.expect("widget card background");
+        assert_eq!(background.color, "#123456");
+        assert_eq!(background.opacity, 0.0);
+
+        let config: SidebarThemeConfig = serde_json::from_value(serde_json::json!({
+            "active_theme_id": "custom-glass", "themes": [{
+                "id": "custom-glass", "name": "My glass", "material": "native-glass",
+                "card_background": { "color": "#abcdef", "opacity": 0.0 }
+            }]
+        })).expect("sidebar config");
+        let restored: SidebarThemeConfig = serde_json::from_value(serde_json::to_value(config).expect("serialize sidebar")).expect("restore sidebar");
+        let themes = restored.themes.expect("sidebar themes");
+        let background = themes[0].card_background.as_ref().expect("sidebar card background");
+        assert_eq!(background.color, "#abcdef");
+        assert_eq!(background.opacity, 0.0);
     }
 }
 
@@ -654,6 +688,7 @@ impl Default for WidgetThemeConfig {
             ],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
         let deadline_default = WidgetTheme {
             id: "theme-deadline-default".into(),
@@ -687,6 +722,7 @@ impl Default for WidgetThemeConfig {
             ],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
         let gpu_transparent = WidgetTheme {
             id: "theme-gpu-transparent".into(),
@@ -730,6 +766,7 @@ impl Default for WidgetThemeConfig {
             ],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
         let deadline_transparent = WidgetTheme {
             id: "theme-deadline-transparent".into(),
@@ -763,6 +800,7 @@ impl Default for WidgetThemeConfig {
             ],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
         let arxiv_default = WidgetTheme {
             id: "theme-arxiv-default".into(),
@@ -789,6 +827,7 @@ impl Default for WidgetThemeConfig {
             }],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
         let arxiv_transparent = WidgetTheme {
             id: "theme-arxiv-transparent".into(),
@@ -815,6 +854,7 @@ impl Default for WidgetThemeConfig {
             }],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
         let quota_default = WidgetTheme {
             id: "theme-quota-default".into(),
@@ -858,6 +898,7 @@ impl Default for WidgetThemeConfig {
             ],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
         let quota_transparent = WidgetTheme {
             id: "theme-quota-transparent".into(),
@@ -901,6 +942,7 @@ impl Default for WidgetThemeConfig {
             ],
             widget_scope: None,
             material: None,
+            card_background: None,
         };
 
         // A readable light surface for macOS independent widgets. Keep the

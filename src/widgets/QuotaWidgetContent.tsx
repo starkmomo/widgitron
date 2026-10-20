@@ -4,6 +4,7 @@ import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Gauge, RefreshCw, AlertCircle, Minus, Plus, Edit2, Globe, Cpu, User } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { widgetCardStyle } from "../utils/glassCardBackground";
 import { hexToRgba, adjustColorOpacity, isLightColor } from "../utils/color";
 import { providerLogoToneClass } from "../utils/providerLogo";
 import { isStaleQuotaWarning, quotaHasDisplayValue, orderQuotaByConfig } from "../utils/quotaDisplay";
@@ -378,7 +379,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
           <div
             data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <Gauge size={20} style={{ color: accent, opacity: 0.5 }} className="mb-3" />
             <span className="text-[10px] font-black uppercase tracking-widest mb-1">
@@ -442,6 +443,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                 <div
                   key={q.id}
                   className="widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
+                  style={widgetCardStyle(currentTheme)}
                 >
                   <div className="relative z-10 flex flex-col gap-2">
                     {/* Header: Title + optional shared reset */}
@@ -554,6 +556,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                 key={q.id}
                 data-widget-surface="true"
                 className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
+                style={widgetCardStyle(currentTheme)}
               >
                 <div className="relative z-10 flex flex-col gap-1.5">
                   {/* Title, Provider Icon, and Value */}
@@ -701,7 +704,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
           <div
             data-widget-surface="empty"
             className="flex flex-col items-center justify-center text-center my-2 px-3 py-5 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <Gauge size={20} style={{ color: accent, opacity: 0.5 }} className="mb-3" />
             <span className="text-[10px] font-black uppercase tracking-widest mb-1">
