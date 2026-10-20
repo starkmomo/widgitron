@@ -71,6 +71,12 @@ mod widget_visibility;
 mod windows_glass;
 #[cfg(windows)]
 mod windows_frame;
+#[cfg(windows)]
+mod windows_desktop;
+#[cfg(windows)]
+mod windows_tray;
+#[cfg(windows)]
+mod windows_tray_menu;
 
 pub fn run() {
     tauri::Builder::default()
@@ -289,7 +295,53 @@ pub fn run() {
                 tray.set_show_menu_on_left_click(false)?;
             }
 
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            {
+                let menu = windows_tray::create_menu(&handle)?;
+                let mut tray_builder = TrayIconBuilder::with_id(windows_tray::TRAY_ID)
+                    .tooltip(if cfg!(debug_assertions) { "Widgitron (测试版)" } else { "Widgitron" })
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(windows_tray::handle_menu_event)
+                    .on_tray_icon_event(|tray, event| {
+                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                        match event {
+                            TrayIconEvent::Click {
+                                button: MouseButton::Right,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } => {
+                                // Update items on the persistent menu; never replace
+                                // the HMENU while Windows may be tracking its popup.
+                                windows_tray::refresh(tray.app_handle());
+                            }
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } | TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                                let app = tray.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = commands::show_main(app).await;
+                                });
+                            }
+                            _ => {}
+                        }
+                    });
+                if let Some(icon) = app.default_window_icon() {
+                    tray_builder = tray_builder.icon(icon.clone());
+                }
+                let _tray = tray_builder.build(&handle)?;
+                let refresh_app = handle.clone();
+                tauri::Listener::listen(&handle, "app_config_update", move |_| {
+                    let app = refresh_app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        windows_tray::refresh(&app);
+                    });
+                });
+            }
+
+            #[cfg(not(any(target_os = "macos", windows)))]
             {
                 let mut tray_builder = TrayIconBuilder::new()
                     .show_menu_on_left_click(false)

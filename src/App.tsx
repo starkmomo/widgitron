@@ -14,7 +14,6 @@ import {
   Copy,
   RefreshCw,
   GripVertical,
-  Maximize2,
   Globe,
   User,
   Plus,
@@ -86,22 +85,17 @@ import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
 import { conferencePreferenceIds, isConferenceFollowed, isConferenceIgnored, resolveConferencePreferences, updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
 import { observeSidebarContentHeight } from "./utils/sidebarContentHeight";
+import { findDockedSidebarInsertion, layoutDockedSidebar, reorderDockedSidebar, sidebarCardWidth } from "./utils/sidebarDockLayout";
 import { useFloatingGlass } from "./hooks/useFloatingGlass";
 import {
   compactSidebarTileLayout,
   constrainSidebarTileHeights,
   sidebarTileHeightLimits,
-  findSidebarInsertionGuide,
-  insertSidebarTileAtGuide,
   reconcileSidebarTileVisibility,
-  resolveSidebarTileCollisions,
   resizeSidebarTileRect,
   sidebarRectsOverlap,
-  sidebarRowsFromLayout,
-  sidebarTileWithinBounds,
   SIDEBAR_TILE_GAP,
   SIDEBAR_TILE_MIN_WIDTH_RATIO,
-  type SidebarCollisionAxis,
   type SidebarInsertionGuide,
   type SidebarSectionKey,
   type SidebarResizeDirection,
@@ -191,10 +185,6 @@ const SIDEBAR_RESIZE_HANDLES: Array<{
   { direction: "s", className: "bottom-0 left-2 right-2 h-1.5 cursor-s-resize" },
   { direction: "e", className: "right-0 top-2 bottom-2 w-1.5 cursor-e-resize" },
   { direction: "w", className: "left-0 top-2 bottom-2 w-1.5 cursor-w-resize" },
-  { direction: "ne", className: "right-0 top-0 w-2.5 h-2.5 cursor-ne-resize" },
-  { direction: "nw", className: "left-0 top-0 w-2.5 h-2.5 cursor-nw-resize" },
-  { direction: "sw", className: "left-0 bottom-0 w-2.5 h-2.5 cursor-sw-resize" },
-  { direction: "se", className: "right-0 bottom-0 w-5 h-5 cursor-se-resize" },
 ];
 
 const normalizeSidebarOrder = (order?: string[]): SidebarSectionKey[] => {
@@ -314,6 +304,7 @@ function SidebarWidgetSection({
   theme,
   isLight,
   showHeader,
+  horizontal,
   onClose,
   onMoveStart,
   onResizeStart,
@@ -326,6 +317,7 @@ function SidebarWidgetSection({
   theme: ResolvedSidebarTheme;
   isLight: boolean;
   showHeader: boolean;
+  horizontal: boolean;
   onClose: () => void;
   onMoveStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onResizeStart: (
@@ -397,25 +389,17 @@ function SidebarWidgetSection({
       <div className="flex-1 min-h-0 p-2 overflow-hidden">
         <SidebarWidgetHeaderContext.Provider value={{ target: headerTarget, onMoveStart }}>{children}</SidebarWidgetHeaderContext.Provider>
       </div>
-      {SIDEBAR_RESIZE_HANDLES.map((handle) => (
+      {SIDEBAR_RESIZE_HANDLES.filter((handle) => horizontal
+        ? handle.direction === "e" || handle.direction === "w"
+        : handle.direction === "n" || handle.direction === "s").map((handle) => (
         <button
           key={handle.direction}
           type="button"
           onPointerDown={(event) => onResizeStart(event, handle.direction)}
-          className={`absolute z-30 touch-none transition-colors ${handle.className} ${
-            handle.direction === "se"
-              ? `flex items-center justify-center rounded-md opacity-55 group-hover/sidebar-tile:opacity-100 ${
-                  isLight
-                    ? "text-slate-500 hover:text-slate-900 hover:bg-slate-100/80"
-                    : "text-white/50 hover:text-white hover:bg-white/10"
-                }`
-              : "opacity-0 hover:opacity-100 hover:bg-blue-400/25"
-          }`}
+          className={`absolute z-30 touch-none transition-colors opacity-0 hover:opacity-100 hover:bg-blue-400/25 ${handle.className}`}
           aria-label={`Resize ${title} from ${handle.direction}`}
           title={`Resize ${title}`}
-        >
-          {handle.direction === "se" ? <Maximize2 size={12} /> : null}
-        </button>
+        />
       ))}
     </section>
   );
@@ -701,7 +685,8 @@ function App() {
     useState<Record<SidebarSectionKey, SidebarTileRect> | null>(null);
   const [sidebarContentHeights, setSidebarContentHeights] = useState<Partial<Record<SidebarSectionKey, { height: number; expanded: boolean; collapsedHeight: number }>>>({});
   const sidebarExpandedResizeOverrides = useRef(new Set<SidebarSectionKey>());
-  const [sidebarViewportHeight, setSidebarViewportHeight] = useState(() => window.innerHeight);
+  const [sidebarHorizontalWidthsDraft, setSidebarHorizontalWidthsDraft] = useState<Record<string, number> | null>(null);
+  const [sidebarViewport, setSidebarViewport] = useState(() => ({ width: window.innerWidth - 16, height: window.innerHeight - 80 }));
   const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, expanded: boolean) => {
     if (!expanded) sidebarExpandedResizeOverrides.current.delete(key);
     setSidebarContentHeights((previous) => previous[key]?.height === height && previous[key]?.expanded === expanded
@@ -709,9 +694,18 @@ function App() {
   }, []);
   useEffect(() => {
     if (windowLabel !== "sidebar" || appConfig.sidebar_enabled === false) return;
-    const update = () => setSidebarViewportHeight(window.innerHeight);
+    const viewport = sidebarScrollRef.current;
+    if (!viewport) return;
+    const update = () => {
+      const style = getComputedStyle(viewport);
+      const next = {
+        width: Math.max(1, viewport.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+        height: Math.max(1, viewport.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)),
+      };
+      setSidebarViewport(previous => previous.width === next.width && previous.height === next.height ? previous : next);
+    };
     const observer = new ResizeObserver(update);
-    observer.observe(document.documentElement);
+    observer.observe(viewport);
     window.addEventListener("resize", update);
     update();
     return () => {
@@ -751,6 +745,13 @@ function App() {
   useEffect(() => {
     setSidebarTileLayoutDraft(null);
   }, [appConfig.sidebar_tile_layout, appConfig.sidebar_widgets, appConfig.sidebar_order]);
+  useEffect(() => {
+    setSidebarHorizontalWidthsDraft(null);
+  }, [appConfig.sidebar_horizontal_tile_widths]);
+  useEffect(() => {
+    // Scroll offsets from the other orientation must not hide the first card.
+    sidebarScrollRef.current?.scrollTo(0, 0);
+  }, [sidebarDockState.edge]);
 
   useEffect(() => {
     const prevTab = prevActiveTabRef.current;
@@ -1731,25 +1732,31 @@ function App() {
         ];
     const sidebarWidgets = appConfig.sidebar_widgets || {};
     const hideSidebarWidgetHeaders = appConfig.sidebar_hide_widget_headers === true;
+    const horizontalSidebar = sidebarDockState.edge === "top" || sidebarDockState.edge === "bottom";
+    const horizontalWidths = sidebarHorizontalWidthsDraft ?? appConfig.sidebar_horizontal_tile_widths ?? {};
     const sidebarOrder = normalizeSidebarOrder(appConfig.sidebar_order);
     const visibleSidebarKeys = sidebarOrder.filter(
       (key) => sidebarWidgets[key] !== false
     );
     const heightLimits = Object.fromEntries(DEFAULT_SIDEBAR_ORDER.map((key) => [key,
-      sidebarTileHeightLimits(key, sidebarViewportHeight - 48, sidebarContentHeights[key]?.height),
+      sidebarTileHeightLimits(key, sidebarViewport.height, sidebarContentHeights[key]?.height),
     ])) as SidebarTileHeightLimitMap;
     const deadlineHeight = sidebarContentHeights.deadlines;
     const timelineGrowth = deadlineHeight?.expanded && !sidebarExpandedResizeOverrides.current.has("deadlines")
       ? Math.max(0, deadlineHeight.height - deadlineHeight.collapsedHeight) : 0;
+    const sidebarSavedLayout = sidebarTileLayoutDraft ?? normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys);
     const sidebarBaseLayout = constrainSidebarTileHeights(
-      sidebarTileLayoutDraft ?? normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys),
+      sidebarSavedLayout,
       visibleSidebarKeys, heightLimits,
     );
-    const sidebarTileLayout = constrainSidebarTileHeights(
+    const verticalTileLayout = constrainSidebarTileHeights(
       sidebarBaseLayout, visibleSidebarKeys, heightLimits,
       { deadlines: timelineGrowth },
     );
-    const effectiveTimelineGrowth = sidebarTileLayout.deadlines.h - sidebarBaseLayout.deadlines.h;
+    const dockedLayout = layoutDockedSidebar(horizontalSidebar ? sidebarSavedLayout : verticalTileLayout,
+      visibleSidebarKeys, horizontalSidebar, sidebarViewport.width, sidebarViewport.height, horizontalWidths);
+    const sidebarTileLayout = dockedLayout.layout;
+    const effectiveTimelineGrowth = horizontalSidebar ? 0 : sidebarTileLayout.deadlines.h - sidebarBaseLayout.deadlines.h;
     const withoutTimelineGrowth = (layout: Record<SidebarSectionKey, SidebarTileRect>) =>
       effectiveTimelineGrowth > 0 && !sidebarExpandedResizeOverrides.current.has("deadlines") ? {
         ...layout,
@@ -1795,13 +1802,13 @@ function App() {
       ? sidebarTileDragPreview.rect.y + sidebarTileDragPreview.rect.h + 48
       : 0;
     const boardRows = Math.max(
-      480,
+      sidebarViewport.height,
       dragPreviewBottom,
       ...visibleSidebarKeys.map((key) => sidebarTileLayout[key].y + sidebarTileLayout[key].h)
     );
     // Keep the final tile visibly clear of the window frame. This space belongs
     // to the scrollable content, so it remains present at the end of the list.
-    const boardHeight = boardRows + SIDEBAR_SCROLL_BOTTOM_GAP;
+    const boardHeight = horizontalSidebar ? dockedLayout.height : boardRows + SIDEBAR_SCROLL_BOTTOM_GAP;
     const getSidebarGridMetrics = () => {
       const board = sidebarBoardRef.current;
       if (!board) return null;
@@ -1812,7 +1819,8 @@ function App() {
     };
     const saveSidebarTileLayout = (
       nextLayout: Record<SidebarSectionKey, SidebarTileRect>,
-      nextVisibleOrder?: SidebarSectionKey[]
+      nextVisibleOrder?: SidebarSectionKey[],
+      nextWidths?: Record<string, number>,
     ) => {
       const nextOrder = nextVisibleOrder
         ? [
@@ -1822,14 +1830,15 @@ function App() {
         : sidebarOrderRef.current;
       // Moving cards while a timeline is open must not save its temporary
       // expansion as the user's collapsed reading height.
-      const savedLayout = withoutTimelineGrowth(nextLayout);
-      const compactedLayout = constrainSidebarTileHeights(savedLayout, visibleSidebarKeys, heightLimits);
+      const savedLayout = horizontalSidebar ? sidebarSavedLayout : withoutTimelineGrowth(nextLayout);
+      const compactedLayout = horizontalSidebar ? savedLayout : constrainSidebarTileHeights(savedLayout, visibleSidebarKeys, heightLimits);
       sidebarOrderRef.current = nextOrder;
       setSidebarTileLayoutDraft(compactedLayout);
       tauriInvoke("save_sidebar_tile_layout", {
         order: nextOrder,
         layout: compactedLayout,
         widgets: null,
+        horizontalWidths: nextWidths ?? null,
       })
         .then(setAppConfig)
         .catch(console.error);
@@ -1851,7 +1860,6 @@ function App() {
       const boardRect = metrics.board.getBoundingClientRect();
       const grabOffsetX = event.clientX - (boardRect.left + startRect.x * metrics.width);
       const grabOffsetY = event.clientY - (boardRect.top + startRect.y);
-      let latestPreview = startRect;
       let latestGuide: SidebarInsertionGuide | null = null;
       setSidebarTileDragPreview({ key, rect: startRect });
       setSidebarInsertionGuide(null);
@@ -1861,9 +1869,13 @@ function App() {
         const scrollContainer = sidebarScrollRef.current;
         if (scrollContainer) {
           const scrollRect = scrollContainer.getBoundingClientRect();
-          if (moveEvent.clientY < scrollRect.top + 44) {
+          if (horizontalSidebar && moveEvent.clientX < scrollRect.left + 44) {
+            scrollContainer.scrollLeft = Math.max(0, scrollContainer.scrollLeft - 18);
+          } else if (horizontalSidebar && moveEvent.clientX > scrollRect.right - 44) {
+            scrollContainer.scrollLeft += 18;
+          } else if (!horizontalSidebar && moveEvent.clientY < scrollRect.top + 44) {
             scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop - 18);
-          } else if (moveEvent.clientY > scrollRect.bottom - 44) {
+          } else if (!horizontalSidebar && moveEvent.clientY > scrollRect.bottom - 44) {
             scrollContainer.scrollTop += 18;
           }
         }
@@ -1871,17 +1883,15 @@ function App() {
         const nextX = (moveEvent.clientX - liveBoardRect.left - grabOffsetX) / metrics.width;
         const nextRect = {
           ...startRect,
-          x: Math.round(Math.min(1 - startRect.w, Math.max(0, nextX)) * 1000) / 1000,
-          y: Math.round(Math.max(0, moveEvent.clientY - liveBoardRect.top - grabOffsetY)),
+          x: horizontalSidebar ? Math.min(1 - startRect.w, Math.max(0, nextX)) : 0,
+          y: horizontalSidebar ? 0 : Math.round(Math.max(0, moveEvent.clientY - liveBoardRect.top - grabOffsetY)),
         };
-        if (!sidebarTileWithinBounds(nextRect)) return;
-        latestPreview = nextRect;
-        latestGuide = findSidebarInsertionGuide(
-          moveEvent.clientX - liveBoardRect.left,
-          moveEvent.clientY - liveBoardRect.top,
+        latestGuide = findDockedSidebarInsertion(
+          horizontalSidebar ? moveEvent.clientX - liveBoardRect.left : moveEvent.clientY - liveBoardRect.top,
           sidebarTileLayout,
           visibleSidebarKeys,
           key,
+          horizontalSidebar,
           metrics.width
         );
         setSidebarTileDragPreview({ key, rect: nextRect });
@@ -1902,26 +1912,16 @@ function App() {
       };
       const onPointerUp = () => {
         cleanup();
-        if (!latestGuide) {
-          setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
-          return;
-        }
-        const inserted = insertSidebarTileAtGuide(
-          sidebarTileLayout,
-          visibleSidebarKeys,
-          key,
-          latestGuide,
-          latestPreview
-        );
-        saveSidebarTileLayout(inserted.layout, inserted.order);
+        if (!latestGuide) return;
+        const order = reorderDockedSidebar(visibleSidebarKeys, key, latestGuide);
+        const nextLayout = layoutDockedSidebar(sidebarTileLayout, order, false, sidebarViewport.width, sidebarViewport.height).layout;
+        saveSidebarTileLayout(nextLayout, order);
       };
       const onPointerCancel = () => {
         cleanup();
-        setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
       };
       const onWindowBlur = () => {
         cleanup();
-        setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
       };
 
       window.addEventListener("pointermove", onPointerMove);
@@ -1943,7 +1943,7 @@ function App() {
       resizeTarget.setPointerCapture(pointerId);
       // An explicit resize while a timeline is open overrides automatic fit
       // until it is collapsed. Start from the currently displayed height.
-      if (sidebarContentHeights[key]?.expanded) {
+      if (!horizontalSidebar && sidebarContentHeights[key]?.expanded) {
         sidebarExpandedResizeOverrides.current.add(key);
         setSidebarTileLayoutDraft(sidebarTileLayout);
       }
@@ -1953,11 +1953,18 @@ function App() {
       const startY = event.clientY;
       const startRect = sidebarTileLayout[key];
       let latestLayout = sidebarTileLayout;
+      let latestWidths = horizontalWidths;
+      const startWidth = sidebarCardWidth(horizontalWidths[key]);
 
       const onPointerMove = (moveEvent: PointerEvent) => {
         if (moveEvent.pointerId !== pointerId) return;
         const deltaXPixels = moveEvent.clientX - startX;
         const deltaYPixels = moveEvent.clientY - startY;
+        if (horizontalSidebar) {
+          latestWidths = { ...horizontalWidths, [key]: sidebarCardWidth(startWidth + (direction === "w" ? -deltaXPixels : deltaXPixels)) };
+          setSidebarHorizontalWidthsDraft(latestWidths);
+          return;
+        }
         const nextRect = resizeSidebarTileRect(
           startRect,
           direction,
@@ -1966,25 +1973,7 @@ function App() {
           metrics.width,
           heightLimits[key],
         );
-        if (!sidebarTileWithinBounds(nextRect)) return;
-        const hasHorizontalEdge = direction.includes("e") || direction.includes("w");
-        const hasVerticalEdge = direction.includes("n") || direction.includes("s");
-        const preferredAxis: SidebarCollisionAxis =
-          hasHorizontalEdge && !hasVerticalEdge
-            ? "horizontal"
-            : hasVerticalEdge && !hasHorizontalEdge
-              ? "vertical"
-              : Math.abs(deltaXPixels) > Math.abs(deltaYPixels)
-                ? "horizontal"
-                : "vertical";
-        latestLayout = resolveSidebarTileCollisions(
-          key,
-          nextRect,
-          sidebarTileLayout,
-          visibleSidebarKeys,
-          metrics.width,
-          preferredAxis
-        );
+        latestLayout = layoutDockedSidebar({ ...sidebarTileLayout, [key]: nextRect }, visibleSidebarKeys, false, metrics.width, sidebarViewport.height).layout;
         setSidebarTileLayoutDraft(withoutTimelineGrowth(latestLayout));
       };
 
@@ -2000,15 +1989,16 @@ function App() {
       };
       const onPointerUp = () => {
         cleanup();
-        saveSidebarTileLayout(latestLayout);
+        saveSidebarTileLayout(latestLayout, undefined, horizontalSidebar ? latestWidths : undefined);
       };
       const onPointerCancel = () => {
         cleanup();
-        setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
+        if (horizontalSidebar) setSidebarHorizontalWidthsDraft(horizontalWidths);
+        else setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
       };
       const onWindowBlur = () => {
         cleanup();
-        saveSidebarTileLayout(latestLayout);
+        saveSidebarTileLayout(latestLayout, undefined, horizontalSidebar ? latestWidths : undefined);
       };
 
       window.addEventListener("pointermove", onPointerMove);
@@ -2036,17 +2026,10 @@ function App() {
         };
       }
 
-      const guideRows = sidebarRowsFromLayout(
-        sidebarTileLayout,
-        visibleSidebarKeys.filter((key) => key !== activeSidebarTile)
-      );
-      const targetRow = guideRows.find((row) =>
-        row.keys.includes(sidebarInsertionGuide.targetKey)
-      );
       const edge =
         sidebarInsertionGuide.placement === "above"
-          ? targetRow?.top ?? targetRect.y
-          : targetRow?.bottom ?? targetRect.y + targetRect.h;
+          ? targetRect.y
+          : targetRect.y + targetRect.h;
       return {
         left: 0,
         top: edge - 2,
@@ -2188,7 +2171,8 @@ function App() {
 
         <div
           ref={sidebarScrollRef}
-          className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-2 pt-2"
+          data-sidebar-scroll={horizontalSidebar ? "horizontal" : "vertical"}
+          className={`flex-1 min-h-0 min-w-0 custom-scrollbar px-2 pt-2 ${horizontalSidebar ? "overflow-x-auto overflow-y-hidden pb-2" : "overflow-y-auto overflow-x-hidden"}`}
           style={{ marginBottom: SIDEBAR_WINDOW_RESIZE_GUTTER }}
           data-no-drag="true"
         >
@@ -2196,7 +2180,7 @@ function App() {
             <div
               ref={sidebarBoardRef}
               className="relative min-w-0"
-              style={{ height: boardHeight }}
+              style={{ height: boardHeight, width: horizontalSidebar ? dockedLayout.width : "100%" }}
             >
               {sidebarSections.map((section) => {
                 const rect =
@@ -2228,6 +2212,7 @@ function App() {
                       theme={sidebarTheme}
                       isLight={sidebarIsLight}
                       showHeader={!hideSidebarWidgetHeaders}
+                      horizontal={horizontalSidebar}
                       onClose={() => saveSidebarWidgetVisibility(section.key, false)}
                       onMoveStart={(event) => startSidebarTileMove(event, section.key)}
                       onResizeStart={(event, direction) =>
@@ -2250,7 +2235,7 @@ function App() {
             </div>
           ) : (
             <div
-              className={`h-full min-h-[320px] rounded-lg border border-dashed flex flex-col items-center justify-center text-center px-6 ${
+              className={`h-full ${horizontalSidebar ? "" : "min-h-[320px]"} rounded-lg border border-dashed flex flex-col items-center justify-center text-center px-6 ${
                 sidebarIsLight
                   ? "border-slate-300 bg-white/70 text-slate-500"
                   : "border-white/10 bg-white/5 text-slate-400"
@@ -2486,7 +2471,7 @@ function App() {
             {activeTab === "dashboard" && (
               <div
                 key="dashboard"
-                className="space-y-6"
+                className={`space-y-6 ${isWindows || isMacOS ? "desktop-overview" : ""}`}
               >
                 <ToggleErrorBanner
                   message={toggleWidgetError}
@@ -2494,7 +2479,8 @@ function App() {
                   theme={appConfig.theme}
                 />
                 <h2 className="text-2xl font-bold tracking-tight text-[var(--dashboard-text)]">Overview</h2>
-                <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
+                <div className={`grid gap-4 ${isWindows || isMacOS ? "overview-stats-grid" : ""}`}
+                  style={isWindows || isMacOS ? undefined : { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
                   {MODULE_NAVIGATION.map(({ section, label, Icon, accent }) => {
                     const stat = {
                       quota: { value: monitoredAgentCount, metric: "monitors", hint: quotaStatHint, hintTone: quotaStatHintTone },

@@ -16,7 +16,7 @@ const SAVE_DEBOUNCE_MS: u64 = 300;
 // move/resize events. Keep those events out of the user-layout debounce so a
 // transient DPI-adjusted size cannot overwrite the normalized layout.
 // Must cover the longest first-run desktop-lock stagger in the frontend
-// (quota at 1900ms) plus SetParent/DPI settle time.
+// (quota at 1900ms) plus native window initialization time.
 const PROGRAMMATIC_LAYOUT_SETTLE_MS: u64 = 2500;
 const MONITOR_POLL_INTERVAL_MS: u64 = 2000;
 const MIN_WIDGET_WIDTH: u32 = 300;
@@ -161,7 +161,6 @@ fn layout_event_persist_is_suppressed(app: &AppHandle, label: &str) -> bool {
 
 pub fn schedule_layout_persist(app: AppHandle, label: String) {
     if !is_tracked_widget(&label)
-        || crate::desktop::is_desktop_mode(&app, &label)
         || layout_event_persist_is_suppressed(&app, &label)
     {
         return;
@@ -184,8 +183,7 @@ pub fn schedule_layout_persist(app: AppHandle, label: String) {
     let label_clone = label.clone();
     let handle = tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(SAVE_DEBOUNCE_MS)).await;
-        if !crate::desktop::is_desktop_mode(&app_clone, &label_clone)
-            && !layout_event_persist_is_suppressed(&app_clone, &label_clone)
+        if !layout_event_persist_is_suppressed(&app_clone, &label_clone)
         {
             if let Some(win) = app_clone.get_webview_window(&label_clone) {
                 if let Err(err) = persist_layout_for_window(&app_clone, &win, &label_clone) {
@@ -209,7 +207,7 @@ pub fn schedule_layout_persist(app: AppHandle, label: String) {
 }
 
 pub fn persist_layout_now(app: &AppHandle, label: &str) -> Result<(), String> {
-    if !is_tracked_widget(label) || crate::desktop::is_desktop_mode(app, label) {
+    if !is_tracked_widget(label) {
         return Ok(());
     }
     if let Some(win) = app.get_webview_window(label) {
@@ -219,8 +217,7 @@ pub fn persist_layout_now(app: &AppHandle, label: &str) -> Result<(), String> {
 }
 
 /// Restores zoom and physical bounds while preserving the widget's current
-/// desktop-embedded state. A desktop child window must be made top-level for
-/// the update, otherwise Windows may apply the parent DPI scale a second time.
+/// desktop layer. Windows widgets retain their own monitor DPI in either mode.
 pub fn restore_widget_layout_preserving_desktop_mode(
     app: &AppHandle,
     label: &str,
@@ -263,33 +260,14 @@ pub fn apply_scale_to_open_widgets(app: &AppHandle, scale: f64) {
     }
 }
 
-/// Desktop-locked widgets are Win32 child windows. Apply geometry updates only
-/// while they are top-level windows, otherwise Windows can apply the desktop
-/// parent's DPI transform a second time and make a scale change visibly larger.
+/// Geometry updates never need to change the Windows window's topology.
 fn with_top_level_widget_layout<T>(
     app: &AppHandle,
     label: &str,
     operation: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     suppress_layout_event_persist(app, label);
-    let was_desktop_embedded = crate::desktop::is_desktop_mode(app, label);
-    if was_desktop_embedded {
-        crate::desktop::set_desktop_mode_now(app, label, false)?;
-    }
-
-    let result = operation();
-
-    if was_desktop_embedded {
-        if let Err(err) = crate::desktop::set_desktop_mode_now(app, label, true) {
-            log::warn!(
-                "Failed to restore desktop mode for {} after layout update: {}",
-                label,
-                err
-            );
-        }
-    }
-
-    result
+    operation()
 }
 
 pub fn ensure_widget_layout_for_window(

@@ -1,5 +1,5 @@
 import { useState, useEffect, useId, useRef } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Radar, Check, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
@@ -272,7 +272,8 @@ export function ArxivWidgetContent({
 
 
   return (
-    <div className="arxiv-widget h-full min-h-0 flex flex-col select-none" style={{ color: mainText }}>
+    <div data-widget-kind="arxiv" className="arxiv-widget h-full min-h-0 flex flex-col select-none"
+      style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Radar size={16} style={{ color: accent }} />} title="Arxiv Radar" color={subText} controls={headerControls} />}
 
       <ServiceErrorBanners

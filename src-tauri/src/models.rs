@@ -132,6 +132,7 @@ pub struct AppConfig {
     pub sidebar_order: Option<Vec<String>>,
     pub sidebar_tile_sizes: Option<HashMap<String, String>>,
     pub sidebar_tile_layout: Option<HashMap<String, SidebarTileLayoutConfig>>,
+    pub sidebar_horizontal_tile_widths: Option<HashMap<String, f64>>,
     /// 1–10. Lower = harder to open from the screen edge (default 4, current feel).
     pub sidebar_reveal_sensitivity: Option<u8>,
     /// 1–10. Higher = hides sooner after the pointer leaves (default 8, current feel).
@@ -311,6 +312,7 @@ impl Default for AppConfig {
             ]),
             sidebar_tile_sizes: Some(sidebar_tile_sizes),
             sidebar_tile_layout: Some(sidebar_tile_layout),
+            sidebar_horizontal_tile_widths: None,
             sidebar_reveal_sensitivity: Some(crate::sidebar_dock::DEFAULT_REVEAL_SENSITIVITY),
             sidebar_hide_sensitivity: Some(crate::sidebar_dock::DEFAULT_HIDE_SENSITIVITY),
             active_widgets: Some(HashMap::new()),
@@ -583,6 +585,7 @@ pub struct WidgetTheme {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct WidgetThemeConfig {
     pub themes: Vec<WidgetTheme>,
     pub assignments: HashMap<String, String>, // widget_id -> theme_id
@@ -591,6 +594,19 @@ pub struct WidgetThemeConfig {
 #[cfg(test)]
 mod widget_material_tests {
     use super::*;
+
+    #[test]
+    fn partial_theme_config_recovers_defaults_without_losing_assignments() {
+        let config: WidgetThemeConfig = serde_json::from_value(serde_json::json!({
+            "assignments": { "widget-quota-default": "theme-quota-glass" }
+        })).expect("assignment-only config");
+        assert!(!config.themes.is_empty());
+        assert!(config.themes.iter().any(|theme| theme.id == "theme-quota-glass"));
+        assert_eq!(config.assignments.get("widget-quota-default").unwrap(), "theme-quota-glass");
+        let defaults: WidgetThemeConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(defaults.themes.len(), WidgetThemeConfig::default().themes.len());
+        assert!(serde_json::from_value::<WidgetThemeConfig>(serde_json::json!({ "themes": "broken" })).is_err());
+    }
 
     #[test]
     fn legacy_custom_theme_and_glass_copy_round_trip_without_losing_colors() {

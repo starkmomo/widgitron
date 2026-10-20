@@ -26,6 +26,7 @@ export interface AppConfig {
   sidebar_order?: string[];
   sidebar_tile_sizes?: Record<string, string>;
   sidebar_tile_layout?: Record<string, SidebarTileLayoutConfig>;
+  sidebar_horizontal_tile_widths?: Record<string, number>;
   /** 1–10. Lower = harder to open from the screen edge (default 4). */
   sidebar_reveal_sensitivity?: number;
   /** 1–10. Higher = hides sooner after the pointer leaves (default 8). */

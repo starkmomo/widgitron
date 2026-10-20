@@ -293,6 +293,7 @@ export interface TauriCommandArgs {
     order: string[];
     layout: Record<string, SidebarTileLayoutConfig>;
     widgets: Record<string, boolean> | null;
+    horizontalWidths?: Record<string, number> | null;
   };
   set_widget_always_on_top: { label: string; pinned: boolean };
   set_widget_display_mode: { label: string; mode: "topmost" | "desktop" };

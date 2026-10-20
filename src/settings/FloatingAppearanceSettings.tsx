@@ -12,6 +12,7 @@ import type { UiLanguage } from "../utils/localization";
 import { isMacOS, isWindows, supportsFloatingGlass } from "../utils/platform";
 import { widgetCardStyle, resolveWidgetCardBackground } from "../utils/glassCardBackground";
 import { ArxivPaperMetadata } from "../components/ArxivPaperMetadata";
+import { NativeGlassPreview } from "../components/NativeGlassPreview";
 
 const PRESETS: { mode: FloatingPreset; label: string }[] = [
   { mode: "follow", label: "Follow main" }, { mode: "light", label: "Light" },
@@ -44,6 +45,7 @@ function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: Widge
     className={`relative h-44 overflow-hidden rounded-xl border p-3 shadow-lg ${glass ? "glass-surface glass-preview border-transparent" : "border-slate-300/20"}`} style={{
     background: previewBackground(theme), color: main,
   }}>
+    {glass && <NativeGlassPreview dark={!lightSurface} />}
     <div className="relative z-10 flex h-full min-h-0 flex-col">
     <div className="widget-header mb-2 flex shrink-0 items-center gap-2 text-xs font-bold"><span className="h-2 w-2 rounded-full" style={{ background: accent }} /><span>{label}</span></div>
     <div data-widget-surface="preview" style={{
@@ -184,6 +186,7 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
             }`}>
             <div aria-hidden="true" className="floating-preview-scene relative h-9 rounded-md border border-slate-400/20 p-1.5">
               {preview && <div className={`relative h-full overflow-hidden rounded-sm px-1.5 py-1 ${preview.material === "native-glass" ? "glass-surface glass-preview [--glass-radius:4px]" : ""}`} style={{ background: previewBackground(preview) }}>
+                {preview.material === "native-glass" && <NativeGlassPreview dark={!isLightColor(preview.bg_color)} />}
                 <div className="h-1 w-2/3 rounded-full" style={{ background: colorValue(preview, "Main Text", "#fff") }} />
                 <div className="mt-1 h-1 w-1/3 rounded-full" style={{ background: colorValue(preview, "Accent", "#3b82f6", true) }} />
               </div>}

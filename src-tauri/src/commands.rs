@@ -205,10 +205,14 @@ pub fn save_sidebar_tile_layout(
     order: Vec<String>,
     layout: std::collections::HashMap<String, SidebarTileLayoutConfig>,
     widgets: Option<std::collections::HashMap<String, bool>>,
+    horizontal_widths: Option<std::collections::HashMap<String, f64>>,
 ) -> Result<AppConfig, String> {
     let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
     config.sidebar_order = Some(order);
     config.sidebar_tile_layout = Some(layout);
+    if let Some(widths) = horizontal_widths {
+        config.sidebar_horizontal_tile_widths = Some(widths);
+    }
     if let Some(widgets) = widgets {
         config.sidebar_widgets = Some(widgets);
     }

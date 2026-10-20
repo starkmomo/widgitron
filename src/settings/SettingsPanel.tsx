@@ -31,6 +31,7 @@ import { MasterSwitch } from "../components/MasterSwitch";
 import { providerSupportsQuotaVisualizations } from "../components/QuotaVisualizations";
 import { ColorControl, FloatingAppearanceSettings } from "./FloatingAppearanceSettings";
 import { widgetCardStyle, resolveGlassCardBackground } from "../utils/glassCardBackground";
+import { NativeGlassPreview } from "../components/NativeGlassPreview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { updateConferencePreferences } from "../utils/deadlineKeys";
 import { listenBackendServiceError } from "../utils/backendServiceError";
@@ -2128,6 +2129,7 @@ export function SettingsPanel({
                           backdropFilter: theme.blur > 0 ? `blur(${Math.min(theme.blur, 18)}px)` : undefined,
                         }}
                       >
+                        {theme.material === "native-glass" && <NativeGlassPreview dark={!isLightColor(theme.background)} />}
                         <div
                           className="h-4 rounded-md mb-2 border border-white/10"
                           style={{ backgroundColor: hexToRgba(theme.header, theme.header_opacity) }}

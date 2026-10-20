@@ -10,7 +10,7 @@ export function normalizeCardBackground(value: CardBackground | undefined): Card
 
 // Old themes keep their platform's existing card tint until explicitly edited.
 export function resolveGlassCardBackground(theme: { card_background?: CardBackground; bg_color?: string; background?: string }): CardBackground {
-  return normalizeCardBackground(theme.card_background) ?? (isMacOS && !isLightColor(theme.bg_color ?? theme.background ?? "#18181b")
+  return normalizeCardBackground(theme.card_background) ?? ((isMacOS || isWindows) && !isLightColor(theme.bg_color ?? theme.background ?? "#18181b")
     ? { color: "#000000", opacity: 0.12 }
     : { color: "#ffffff", opacity: isWindows ? 0.06 : isMacOS ? 0.04 : 0.05 });
 }

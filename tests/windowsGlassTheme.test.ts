@@ -18,23 +18,44 @@ const glass: WidgetTheme = {
   primary_colors: [],
 };
 
-test("Windows clear glass keeps a light tint and readable dark labels", () => {
+test("Windows native glass matches the thin Mac tint, bright text and dark cards", () => {
   const theme = resolveWidgetTheme({ themes: [glass], assignments: { "widget-quota-default": glass.id } }, "widget-quota-default", "quota")!;
-  assert.equal(theme.bg_color, "#f3f3f3");
-  assert.equal(theme.bg_opacity, 0.04);
-  assert.equal(theme.text_colors[0].value, "#0b1220");
+  assert.equal(theme.bg_color, "#18181b");
+  assert.equal(theme.bg_opacity, 0.02);
+  assert.equal(theme.text_colors[0].value, "#ffffff");
+  assert.equal(theme.text_colors[1].value, "#ffffff");
   assert.equal(theme.text_colors[1].opacity, 1);
   assert.equal(widgetCardStyle(theme), undefined);
-  assert.deepEqual(resolveGlassCardBackground(theme), { color: "#ffffff", opacity: 0.06 });
-  assert.equal(widgetKeywordSurface(theme, true).backgroundColor, "rgba(255, 255, 255, 0.06)");
+  assert.deepEqual(resolveGlassCardBackground(theme), { color: "#000000", opacity: 0.12 });
+  assert.equal(widgetKeywordSurface(theme, false).backgroundColor, "rgba(0, 0, 0, 0.12)");
 });
 
-test("Windows sidebar clear glass uses the same transparent palette", () => {
+test("Windows sidebar glass keeps white text without stacking dark module backgrounds", () => {
   const sidebar = resolveSidebarTheme({ active_theme_id: "glass" });
-  assert.equal(sidebar.background, "#f3f3f3");
-  assert.equal(sidebar.background_opacity, 0.04);
-  const theme = resolveWidgetTheme({ themes: [{ ...glass, id: "theme-quota-default" }], assignments: {} }, "sidebar", "quota", { sidebarLight: true, sidebarGlass: true })!;
-  assert.equal(theme.text_colors[0].value, "#0b1220");
+  assert.equal(sidebar.background, "#18181b");
+  assert.equal(sidebar.background_opacity, 0.02);
+  assert.equal(sidebar.card_opacity, 0);
+  const theme = resolveWidgetTheme({ themes: [{ ...glass, id: "theme-quota-default" }], assignments: {} }, "sidebar", "quota", { sidebarLight: false, sidebarGlass: true })!;
+  assert.equal(theme.text_colors[0].value, "#ffffff");
+  assert.equal(theme.text_colors[1].value, "#ffffff");
+});
+
+test("every Windows glass widget gets opaque white text, including legacy black arXiv text", () => {
+  for (const kind of ["quota", "gpu", "deadline", "arxiv"] as const) {
+    const label = `widget-${kind === "deadline" ? "deadlines" : kind}-default`;
+    const oldGlass = { ...glass, id: `theme-${kind}-glass`, text_colors: [
+      { name: "Main Text", value: "#000000", opacity: 0.6 },
+      { name: "Sub Text", value: "#64748b", opacity: 0.4 },
+    ] };
+    const config = { themes: [oldGlass], assignments: { [label]: oldGlass.id } };
+    const theme = resolveWidgetTheme(config, label, kind)!;
+    assert.deepEqual(theme.text_colors, [
+      { name: "Main Text", value: "#ffffff", opacity: 1 },
+      { name: "Sub Text", value: "#ffffff", opacity: 1 },
+    ]);
+    assert.equal(theme.bg_opacity, 0.02);
+    assert.deepEqual(resolveGlassCardBackground(theme), { color: "#000000", opacity: 0.12 });
+  }
 });
 
 test("custom glass themes keep their chosen colors and opacity", () => {
