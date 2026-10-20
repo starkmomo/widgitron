@@ -9,7 +9,7 @@
 - **浏览与筛选**：提供“全部 / 待看 / 已收藏”和 UTC 提交日期选择，支持每页 100 篇翻页与缓存。全部不受关键词影响；待看仅收集关键词匹配项，无关键词时为空。区分无论文与请求失败，刷新失败保留缓存。
 - **关键词输入**：改为可添加、删除的标签，支持回车及中英文逗号、分号、换行分隔。收起页面筛选或离开设置栏目后自动保存并更新，提供加载、成功及失败反馈。
 - **收藏与忽略**：卡片可直接收藏、忽略，各列表支持批量操作。已忽略内容通过小字入口打开管理弹窗，可恢复或收藏；忽略记录仅保留当前批次，收藏长期保存，兼容原有记录。
-- **阅读与下载**：完整显示标题，摘要预览随可用高度调整，完整摘要在独立面板中阅读。打开 arXiv 页面与下载 PDF 分为两个按钮，下载不覆盖同名文件；浮窗和侧边栏的收藏、忽略按钮使用轻底色，关键词下拉同步卡片背景设置。
+- **阅读与下载**：完整标题下显示作者，摘要预览随可用高度调整，阅读面板补齐全部作者和提交日期。打开 arXiv 页面与下载 PDF 分为两个按钮，下载不覆盖同名文件；浮窗和侧边栏的收藏、忽略按钮使用轻底色，关键词下拉同步卡片背景设置。
 
 #### 会议截止
 
@@ -20,7 +20,7 @@
 #### 浮窗与侧边栏
 
 - **外观设置**：四个浮窗的主题集中管理，提供跟随主界面、浅色、深色、透明和玻璃，以及多个自定义主题。支持新建、复制、删除确认和卡片背景自定义，使用紧凑等高预览；侧边栏主题独立选择，编辑面板可展开、收起。
-- **玻璃与阅读**：优化两平台的玻璃配色、文字对比度和圆角高光，减少重复底色与失焦变色。关键词菜单和完整摘要匹配当前主题，玻璃、透明面板虚化后方内容；收紧摘要行距，保留滚动阅读。
+- **玻璃与阅读**：优化两平台的玻璃配色、文字对比度和圆角高光，减少重复底色与失焦变色。关键词菜单和完整摘要匹配当前主题，虚化后方内容并保留窗口圆角；收紧摘要行距，保留滚动阅读。
 - **尺寸与排版**：侧边栏模块标题与操作合入彩色顶栏。额度、GPU、会议卡片可调整至完整内容高度，避免过小裁切或拉出空白；会议时间线展开时自动增高。统一普通浮窗最小高度，为 arXiv 保留更大阅读区域，调整大小时显示尺寸。
 - **显示与操作**：两平台统一锁定、置顶、隐藏按钮，悬停或键盘聚焦时显示。macOS 默认桌面层，置顶前后均支持普通桌面切换，修复闪现及无法点击、拖动的问题。侧边栏可彻底停用，钉选与设置同步；压缩会议卡片排版，修复时间线展开时宽度跳动。
 
@@ -47,7 +47,7 @@
 - **Browsing and filters**: Add All / To read / Saved views, a UTC submission-date picker, and cached pages of 100 papers. All ignores keywords; To read contains keyword matches and stays empty without keywords. Distinguish empty results from request failures and retain cached papers on refresh errors.
 - **Keyword input**: Use removable tags with Enter and English/Chinese comma, semicolon, or newline separators. Save and refresh when filters close or the Settings section is left, with loading, success, and error feedback.
 - **Saving and ignoring**: Add card actions and bulk management across lists. Open ignored papers in a separate dialog to restore or save them. Keep ignore records within the current batch, retain saved papers, and preserve existing selections.
-- **Reading and downloads**: Show full titles, adapt abstract previews to available space, and open full abstracts in a separate reading panel. Separate arXiv page and PDF download actions and avoid overwriting files. Use lighter save/ignore buttons in widgets and the sidebar, with keyword dropdowns following card background settings.
+- **Reading and downloads**: Show full titles with authors underneath, adapt abstract previews to available space, and include all authors and the submission date in the reading panel. Separate arXiv page and PDF download actions and avoid overwriting files. Use lighter save/ignore buttons in widgets and the sidebar, with keyword dropdowns following card background settings.
 
 #### Conference Deadlines
 
@@ -58,7 +58,7 @@
 #### Floating Widgets and Sidebar
 
 - **Appearance settings**: Manage all four widgets together with Follow main, Light, Dark, Transparent, Glass, and multiple custom themes. Support creation, copying, deletion confirmation, card backgrounds, and compact equal-height previews. Keep sidebar themes independent, with a collapsible editor.
-- **Glass and reading**: Refine platform-specific glass colors, text contrast, and edge highlights; reduce stacked fills and focus-related appearance changes. Match keyword menus and full abstracts to the selected theme, blur underlying content for translucent panels, and use tighter, scrollable abstract text.
+- **Glass and reading**: Refine platform-specific glass colors, text contrast, and edge highlights; reduce stacked fills and focus-related appearance changes. Match keyword menus and full abstracts to the selected theme, blur underlying content while preserving window corners, and use tighter, scrollable abstract text.
 - **Sizing and layout**: Move sidebar titles and actions into colored module headers. Resize quota, GPU, and conference cards up to their full content height without clipping or excess blank space; grow conference cards when timelines open. Share a minimum height for regular floating widgets, reserve more space for arXiv, and show dimensions while resizing.
 - **Visibility and controls**: Use consistent lock, pin, and hide controls on hover or keyboard focus. Default macOS widgets to the desktop layer, support ordinary Spaces in both pin states, and fix transition flashes and lost clicks or drags. Allow the sidebar to be fully disabled, synchronize its pin setting, compact conference cards, and prevent width shifts when timelines expand.
 

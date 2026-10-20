@@ -34,6 +34,7 @@ import { tauriInvoke } from "./utils/tauriInvoke";
 import { tauriListen } from "./utils/tauriListen";
 import { ArxivPaperActions } from "./components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "./components/ArxivAbstractPreview";
+import { ArxivPaperMetadata } from "./components/ArxivPaperMetadata";
 import { useArxivPaperPages } from "./hooks/useArxivPaperPages";
 import { ArxivDateFilter } from "./components/ArxivDateFilter";
 import { ArxivPagination } from "./components/ArxivPagination";
@@ -1410,12 +1411,8 @@ function App() {
           {paper.title}
         </h3>
         </div>
+        <ArxivPaperMetadata paper={paper} isLight={appConfig.theme === "light"} className="mb-2 shrink-0" />
         <ArxivAbstractPreview paper={paper} isLight={appConfig.theme === "light"} />
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span data-no-localize className="min-w-0 break-words text-[10px] text-slate-500">
-          {paper.authors.length > 0 ? `${paper.authors[0]}${paper.authors.length > 1 ? " et al." : ""}` : "Unknown Author"}
-        </span>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--dashboard-border)] pt-2">
         <ArxivReadingActions paper={paper} library={arxivLibrary} allowSkip={arxivView === "unread" && !arxivDate} />
@@ -2058,6 +2055,7 @@ function App() {
     return (
       <div
         data-sidebar-theme={sidebarTheme.id}
+        data-sidebar-edge={sidebarDockState.edge}
         data-glass-tone={isWindows || sidebarGlass ? (sidebarIsLight ? "light" : "dark") : undefined}
         data-native-glass={sidebarGlass && nativeGlass ? "true" : undefined}
         className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarGlass ? "glass-surface glass-sidebar" : ""} ${sidebarDockRounding[sidebarDockState.edge]} ${

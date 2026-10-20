@@ -11,6 +11,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { UiLanguage } from "../utils/localization";
 import { isMacOS, isWindows, supportsFloatingGlass } from "../utils/platform";
 import { widgetCardStyle, resolveWidgetCardBackground } from "../utils/glassCardBackground";
+import { ArxivPaperMetadata } from "../components/ArxivPaperMetadata";
 
 const PRESETS: { mode: FloatingPreset; label: string }[] = [
   { mode: "follow", label: "Follow main" }, { mode: "light", label: "Light" },
@@ -65,9 +66,10 @@ function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: Widge
       <div style={{ color: sub }} data-no-localize>Abstract submission</div>
       <div className="font-mono text-base font-bold" style={{ color: highlight }} data-no-localize>12d 08h 32m</div>
     </div>}
-    {kind === "arxiv" && <div className="space-y-2 text-[11px]">
+    {kind === "arxiv" && <div className="space-y-1 text-[11px]">
       <div className="arxiv-paper-title text-sm font-semibold leading-snug" data-no-localize>Learning to See, Hear and Reason</div>
-      <div className="arxiv-abstract-preview leading-relaxed" style={{ color: sub }}>An example paper abstract for previewing text and accent colors.</div>
+      <ArxivPaperMetadata paper={{ authors: ["Alex Chen", "Sam Lee"] }} compact isLight={lightSurface} color={sub} />
+      <div className="arxiv-abstract-preview leading-relaxed" style={{ color: sub }}>A short example abstract.</div>
       <div aria-hidden="true" className="flex gap-2" style={{ color: sub }}>
         <span className="arxiv-reading-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5"><Bookmark size={12} /><span>Bookmark</span></span>
         <span className="arxiv-reading-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5"><EyeOff size={12} /><span>Ignore</span></span>
@@ -177,16 +179,17 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
               void save(assignFloatingPreset(config.current, widgetId, presets[next].mode));
             }}
             onClick={() => { setDeleteId(null); void save(assignFloatingPreset(config.current, widgetId, preset.mode)); }}
-            className={`min-w-0 space-y-2 rounded-xl border p-2.5 text-left text-[11px] font-semibold transition-colors ${
+            className={`min-w-0 overflow-hidden space-y-2 rounded-xl border px-2 py-2.5 text-left text-[11px] font-semibold transition-colors ${
               mode === preset.mode ? "border-blue-500 bg-blue-500/5 ring-1 ring-blue-500" : "border-[var(--dashboard-border)] hover:border-blue-400"
             }`}>
-            <div aria-hidden="true" className="floating-preview-scene h-9 rounded-md border border-slate-400/20 p-1.5">
+            <div aria-hidden="true" className="floating-preview-scene relative h-9 rounded-md border border-slate-400/20 p-1.5">
               {preview && <div className={`relative h-full overflow-hidden rounded-sm px-1.5 py-1 ${preview.material === "native-glass" ? "glass-surface glass-preview [--glass-radius:4px]" : ""}`} style={{ background: previewBackground(preview) }}>
                 <div className="h-1 w-2/3 rounded-full" style={{ background: colorValue(preview, "Main Text", "#fff") }} />
                 <div className="mt-1 h-1 w-1/3 rounded-full" style={{ background: colorValue(preview, "Accent", "#3b82f6", true) }} />
               </div>}
+              {mode === preset.mode && <span className={`absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-blue-500/20 text-blue-500 ${isLight ? "bg-white" : "bg-slate-900"}`}><Check size={11} className="shrink-0" /></span>}
             </div>
-            <div className="flex items-center justify-between gap-1"><span>{preset.label}</span>{mode === preset.mode && <Check size={12} className="shrink-0 text-blue-500" />}</div>
+            <span className="block whitespace-nowrap leading-5">{preset.label}</span>
           </button>;
         })}
       </div>

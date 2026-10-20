@@ -5,9 +5,10 @@ import type { CSSProperties } from "react";
 import type { ArxivPaper } from "../types/config";
 import type { WidgetTheme } from "../types/theme";
 import { widgetOverlaySurface } from "../utils/widgetOverlaySurface";
+import { ArxivPaperMetadata } from "./ArxivPaperMetadata";
 
 export function ArxivAbstractPreview({ paper, compact = false, isLight, textColor, theme }: {
-  paper: Pick<ArxivPaper, "title" | "summary">;
+  paper: Pick<ArxivPaper, "title" | "summary" | "authors" | "published">;
   compact?: boolean;
   isLight: boolean;
   textColor?: string;
@@ -81,16 +82,9 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
           ref={dialogRef}
           data-compact={compact ? "true" : undefined}
           data-translucent={overlay?.translucent ? "true" : undefined}
-          data-glass-tone={overlay?.glass ? (isLight ? "light" : "dark") : undefined}
           aria-labelledby={titleId}
           data-no-drag="true"
-          className={`reading-dialog m-auto w-[calc(100%_-_2rem)] max-w-2xl max-h-[calc(100dvh_-_2rem)] overflow-hidden rounded-2xl border p-0 shadow-2xl ${overlay?.translucent ? overlay.glass ? "glass-surface glass-menu" : "" : "backdrop:bg-slate-950/40"} ${isLight ? "border-slate-200 bg-white text-slate-900" : "border-slate-700 bg-slate-900 text-slate-100"}`}
-          style={overlay?.translucent ? {
-            backgroundColor: overlay.backgroundColor,
-            borderColor: overlay.glass ? "transparent" : overlay.borderColor,
-            color: overlay.color, backdropFilter: overlay.backdropFilter,
-            WebkitBackdropFilter: overlay.backdropFilter, "--glass-radius": "16px",
-          } as CSSProperties : undefined}
+          className="reading-dialog fixed inset-0 m-0 h-full max-h-none w-full max-w-none items-center justify-center overflow-hidden border-0 p-4 outline-none"
           onPointerDownCapture={(event) => event.stopPropagation()}
           onKeyDownCapture={(event) => {
             // Let the dialog handle Escape without hiding the sidebar window.
@@ -101,19 +95,25 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
             triggerRef.current?.focus({ preventScroll: true });
           }}
           onClick={(event) => {
-            if (event.target !== event.currentTarget) return;
-            const bounds = event.currentTarget.getBoundingClientRect();
-            if (event.clientX < bounds.left || event.clientX > bounds.right
-              || event.clientY < bounds.top || event.clientY > bounds.bottom) {
-              event.currentTarget.close();
-            }
+            if (event.target === event.currentTarget) event.currentTarget.close();
           }}
         >
-          <div className="flex max-h-[calc(100dvh_-_2rem)] flex-col">
+          <div
+            data-glass-tone={overlay?.glass ? (isLight ? "light" : "dark") : undefined}
+            className={`relative flex w-full max-w-2xl max-h-[calc(100dvh_-_2rem)] flex-col overflow-hidden rounded-2xl border p-0 shadow-2xl ${overlay?.glass ? "glass-surface glass-menu" : ""} ${isLight ? "border-slate-200 bg-white text-slate-900" : "border-slate-700 bg-slate-900 text-slate-100"}`}
+            style={overlay?.translucent ? {
+              backgroundColor: overlay.backgroundColor,
+              borderColor: overlay.glass ? "transparent" : overlay.borderColor,
+              color: overlay.color, backdropFilter: overlay.backdropFilter,
+              WebkitBackdropFilter: overlay.backdropFilter, "--glass-radius": "16px",
+            } as CSSProperties : undefined}
+          >
             <header className={`flex shrink-0 items-start ${compact ? "gap-2 p-3 pb-2" : "gap-4 p-5 pb-4"}`}>
-              <h2 ref={initialFocusRef} tabIndex={-1} id={titleId} data-no-localize className={`outline-none min-w-0 flex-1 max-h-[30dvh] overflow-y-auto font-bold break-words ${compact ? "text-sm leading-snug" : "text-base leading-relaxed"}`}>
-                {paper.title}
-              </h2>
+              <div className="min-w-0 flex-1 max-h-[30dvh] overflow-y-auto">
+                <h2 ref={initialFocusRef} tabIndex={-1} id={titleId} data-no-localize className={`outline-none font-bold break-words ${compact ? "text-sm leading-snug" : "text-base leading-relaxed"}`}>
+                  {paper.title}
+                </h2>
+              </div>
               <button
                 type="button"
                 data-dialog-close
@@ -126,6 +126,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
               </button>
             </header>
             <div tabIndex={0} className={`min-h-0 overflow-y-auto overscroll-contain ${compact ? "px-3 pb-3 text-sm leading-[1.5]" : "px-5 pb-5 text-sm leading-7"} ${overlay?.translucent ? "" : isLight ? "text-slate-600" : "text-slate-300"}`}>
+              <ArxivPaperMetadata paper={paper} full isLight={isLight} color={overlay?.translucent ? overlay.color : undefined} className="mb-3" />
               <p data-no-localize className="whitespace-pre-line break-words">{paper.summary}</p>
             </div>
           </div>

@@ -22,6 +22,7 @@ import { useArxivLibrary } from "../hooks/useArxivLibrary";
 import { ArxivReadingActions } from "../components/ArxivReadingActions";
 import { ArxivPaperActions } from "../components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
+import { ArxivPaperMetadata } from "../components/ArxivPaperMetadata";
 
 type SwipeDirection = "left" | "right" | "up";
 
@@ -386,24 +387,10 @@ export function ArxivWidgetContent({
             >
               <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1">
                 <h3 className="arxiv-paper-title shrink-0 text-[10px] font-bold mb-2 leading-snug break-words">{currentPaper.title}</h3>
+                <ArxivPaperMetadata paper={currentPaper} compact isLight={isLightAppearance} color={subText} className="mb-2 shrink-0" />
                 <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} theme={currentTheme} />
               </div>
               <div className="shrink-0 pt-2 border-t border-white/5 space-y-1.5">
-                <div className="flex flex-wrap gap-1">
-                  <span
-                    className="arxiv-paper-meta text-[8px] bg-white/5 px-2 py-0.5 rounded-full font-medium"
-                    style={{ color: subText }}
-                  >
-                    {currentPaper.authors.length > 0 ? (
-                      <>
-                        {currentPaper.authors[0]}
-                        {currentPaper.authors.length > 1 ? " et al." : ""}
-                      </>
-                    ) : (
-                      "Unknown Author"
-                    )}
-                  </span>
-                </div>
                 <div className="flex flex-wrap items-center justify-between gap-1">
                   <ArxivReadingActions paper={currentPaper} library={library} allowSkip compact />
                   <ArxivPaperActions key={currentPaper.id} paper={currentPaper} compact />

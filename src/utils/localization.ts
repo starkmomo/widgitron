@@ -229,7 +229,7 @@ const ZH: Record<string, string> = {
   "Delete custom theme": "删除自定义主题", "Delete this custom theme?": "删除这个自定义主题？",
   "Could not save floating appearance. Please try again.": "浮窗外观保存失败，请重试。",
   "Appearance saved.": "外观已保存。", "Saving…": "正在保存…",
-  "An example paper abstract for previewing text and accent colors.": "这是一段示例论文摘要，用于预览文字与强调色的效果。",
+  "A short example abstract.": "用于预览的简短摘要。",
   "7-day limit": "7 天额度", "Background opacity": "背景不透明度",
   "Main Text opacity": "主文字不透明度", "Sub Text opacity": "次要文字不透明度",
   "Accent opacity": "强调色不透明度", "Success opacity": "正常状态不透明度",
