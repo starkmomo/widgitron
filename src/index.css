@@ -261,6 +261,14 @@ html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):
   text-shadow: inherit;
 }
 
+/* Native glass already softens the desktop. Use that same material inside
+   paper cards in both hosts, without another backdrop-blur-md layer. Popup
+   menus and full abstracts keep their own blur to separate foreground text. */
+html[data-platform="macos"] .glass-surface .widget-paper-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is(.widget-item-card, .widget-paper-card, [data-widget-surface="server"], [data-widget-surface="empty"], [data-widget-surface="preview"]) {
   background-color: rgba(0, 0, 0, 0.12);
   border-color: rgba(255, 255, 255, 0.18);
