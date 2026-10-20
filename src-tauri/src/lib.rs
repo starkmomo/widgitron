@@ -79,7 +79,31 @@ mod windows_tray;
 mod windows_tray_menu;
 
 pub fn run() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    #[cfg(all(windows, debug_assertions))]
+    let context = {
+        // QA builds use independent configs and must not activate an installed copy.
+        let mut context = context;
+        context.config_mut().identifier.push_str(".dev");
+        context
+    };
+    let builder = tauri::Builder::default();
+    // Register first: secondary launches exit before windows, trays or workers start.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // A repeated autostart request must not interrupt the user's current work.
+        if args.iter().skip(1).any(|arg| arg == "--minimized") {
+            return;
+        }
+        log::info!("Repeated launch: activating the existing main window");
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = commands::show_main(handle).await {
+                log::warn!("Failed to activate the existing main window: {error}");
+            }
+        });
+    }));
+    builder
         .manage(main_navigation::MainNavigation::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -707,7 +731,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
