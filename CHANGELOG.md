@@ -42,7 +42,7 @@
 
 #### 构建与测试
 
-- **构建流程**：支持 main 推送、面向 main 的 PR 和手动构建，产出 Windows x64 安装包及包含 WidgetKit 的 macOS 应用；仅文档、网页改动跳过完整打包。提供独立名称和标识的“Widgitron 测试版”，macOS 构建无需 Apple 签名凭证。
+- **构建流程**：支持 main 推送、面向 main 的 PR 和手动构建，产出 Windows x64 安装包及包含 WidgetKit 的 macOS 应用；仅文档、网页改动跳过完整打包。提供独立名称和标识的“Widgitron 测试版”，macOS 构建无需 Apple 签名凭证。升级构建 Action 至支持 Node.js 24 的版本，消除旧运行时弃用提示。
 
 ### English
 
@@ -84,7 +84,7 @@
 
 #### Builds and Testing
 
-- **Build workflow**: Build on main pushes, PRs targeting main, or manual dispatch, producing Windows x64 installers and macOS apps with WidgetKit. Skip full packaging for documentation-only or website-only changes. Provide a separately named and identified test app; macOS builds do not require Apple signing credentials.
+- **Build workflow**: Build on main pushes, PRs targeting main, or manual dispatch, producing Windows x64 installers and macOS apps with WidgetKit. Skip full packaging for documentation-only or website-only changes. Provide a separately named and identified test app; macOS builds do not require Apple signing credentials. Update build actions to Node.js 24-compatible versions to remove deprecated-runtime warnings.
 
 ## [0.2.6] - 2026-09-24
 
