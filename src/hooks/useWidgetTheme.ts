@@ -8,6 +8,7 @@ import { isLightColor } from "../utils/color";
 import { resolveSidebarTheme } from "../utils/sidebarTheme";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
+import { startWindowSnapshotSync } from "../utils/windowSnapshotSync";
 
 export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
   const win = getCurrentWindow();
@@ -15,13 +16,12 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
 
   useEffect(() => {
     let active = true;
-    const unlisteners: (() => void)[] = [];
+    let unlistenSidebar: (() => void) | undefined;
     let latestThemeConfig: WidgetThemeConfig | null = null;
     let latestAppConfig: AppConfig | null = null;
-    let appConfigEventRevision = 0;
 
     const updateTheme = () => {
-      if (!active || !latestThemeConfig) return;
+      if (!active || !latestThemeConfig || !latestAppConfig) return;
       const sidebarTheme = resolveSidebarTheme(latestAppConfig?.sidebar_theme, latestAppConfig?.theme);
       const sidebarLight =
         win.label === "sidebar" &&
@@ -35,59 +35,41 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
         : resolved);
     };
 
-    const load = async () => {
-      try {
-        const [themeConfig, appConfig] = await Promise.all([
-          tauriInvoke("get_theme_config"),
-          tauriInvoke("get_app_config"),
-        ]);
-        if (!active) return;
-        latestThemeConfig = themeConfig;
-        latestAppConfig = appConfig;
+    const themeSync = startWindowSnapshotSync<WidgetThemeConfig>({
+      listen: (onSnapshot) => tauriListen("theme_update", (event) => onSnapshot(event.payload)),
+      read: () => tauriInvoke("get_theme_config"),
+      apply: (config) => {
+        latestThemeConfig = config;
         updateTheme();
+      },
+      onError: (error) => console.error("Widget theme sync failed", error),
+    });
+    const appSync = startWindowSnapshotSync<AppConfig>({
+      listen: (onSnapshot) => tauriListen("app_config_update", (event) => onSnapshot(event.payload)),
+      read: () => tauriInvoke("get_app_config"),
+      apply: (config) => {
+        latestAppConfig = config;
+        updateTheme();
+      },
+      onError: (error) => console.error("Widget appearance sync failed", error),
+    });
 
-        const unlistenTheme = await tauriListen("theme_update", (event) => {
-          if (!active) return;
-          latestThemeConfig = event.payload;
-          updateTheme();
-        });
-        if (!active) { unlistenTheme(); return; }
-        unlisteners.push(() => unlistenTheme());
-
-        const unlistenApp = await tauriListen("app_config_update", (event) => {
-          if (!active) return;
-          appConfigEventRevision += 1;
-          latestAppConfig = event.payload;
-          updateTheme();
-        });
-        if (!active) { unlistenApp(); return; }
-        unlisteners.push(() => unlistenApp());
-
-        if (win.label === "sidebar") {
-          const unlistenSidebar = await tauriListen("sidebar_state_update", (event) => {
-            if (!event.payload.expanded) return;
-            const revision = appConfigEventRevision;
-            tauriInvoke("get_app_config")
-              .then((config) => {
-                if (!active || revision !== appConfigEventRevision) return;
-                latestAppConfig = config;
-                updateTheme();
-              })
-              .catch((error) => console.error("Sidebar theme refresh failed", error));
-          });
-          if (!active) { unlistenSidebar(); return; }
-          unlisteners.push(() => unlistenSidebar());
-        }
-      } catch (e) {
-        console.error("Widget theme load failed", e);
-      }
-    };
-
-    load();
+    if (win.label === "sidebar") {
+      tauriListen("sidebar_state_update", (event) => {
+        if (active && event.payload.expanded) void appSync.refresh();
+      })
+        .then((stop) => {
+          if (!active) stop();
+          else unlistenSidebar = stop;
+        })
+        .catch((error) => { if (active) console.error("Sidebar theme refresh failed", error); });
+    }
 
     return () => {
       active = false;
-      unlisteners.forEach((unlisten) => unlisten());
+      themeSync.stop();
+      appSync.stop();
+      unlistenSidebar?.();
     };
   }, [win.label, kind]);
 

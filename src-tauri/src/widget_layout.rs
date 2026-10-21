@@ -19,14 +19,16 @@ const SAVE_DEBOUNCE_MS: u64 = 300;
 // (quota at 1900ms) plus native window initialization time.
 const PROGRAMMATIC_LAYOUT_SETTLE_MS: u64 = 2500;
 const MONITOR_POLL_INTERVAL_MS: u64 = 2000;
-const MIN_WIDGET_WIDTH: u32 = 300;
-const MIN_WIDGET_HEIGHT: u32 = 220;
+const MIN_WIDGET_WIDTH: u32 = crate::widget_minimum::MIN_WIDTH_CSS;
+#[cfg(test)]
+const MIN_WIDGET_HEIGHT: u32 = crate::widget_minimum::FALLBACK_HEIGHT_CSS;
 
 // First-run target sizes in logical CSS pixels (before OS DPI / UI scale).
 const DEFAULT_TARGET_WIDTH_LOGICAL: f64 = 400.0;
 const DEFAULT_TARGET_HEIGHT_TALL_LOGICAL: f64 = 460.0;
 const DEFAULT_TARGET_HEIGHT_SHORT_LOGICAL: f64 = 340.0;
 const MACOS_TARGET_HEIGHT_SHORT_LOGICAL: f64 = 260.0;
+const DEFAULT_LAYOUT_MIN_HEIGHT_LOGICAL: f64 = 220.0;
 const DEFAULT_MARGIN_X_FRAC: f64 = 0.018;
 const DEFAULT_MARGIN_Y_FRAC: f64 = 0.028;
 const DEFAULT_COLUMN_GAP_FRAC: f64 = 0.014;
@@ -61,6 +63,7 @@ pub struct WidgetLayoutStore {
 pub struct WidgetLayoutSaveState {
     pub pending: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
     pub suppress_events_until: Mutex<HashMap<String, Instant>>,
+    pub content_minimum_heights: Mutex<HashMap<String, f64>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -279,6 +282,49 @@ pub fn ensure_widget_layout_for_window(
     ensure_widget_layout_for_window_at_scale(app, win, label, ui_scale::from_config(&config))
 }
 
+/// Update the native constraint without undoing a user's taller window size.
+pub fn set_content_minimum_height(win: &WebviewWindow, height: f64) -> Result<(), String> {
+    let label = win.label();
+    if !is_tracked_widget(label) || label == "widget-arxiv-default" {
+        return Err("Content minimums are only supported for quota, GPU and conference widgets".into());
+    }
+    let height = crate::widget_minimum::sanitize_content_height(height)
+        .ok_or_else(|| "Invalid widget content height".to_string())?;
+    let app = win.app_handle();
+    let config = config_store::read_config::<AppConfig>(app, "app_config.json");
+    let scale = ui_scale::from_config(&config);
+    let monitor = resolve_window_monitor(app, win)?
+        .or_else(|| preferred_monitor(app))
+        .ok_or_else(|| "No monitor available for widget content size".to_string())?;
+    let area = monitor_work_area(&monitor);
+    {
+        let state = app.state::<WidgetLayoutSaveState>();
+        state.content_minimum_heights.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()).insert(label.to_string(), height);
+    }
+    let minimum = cached_widget_minimum_size(app, label, area, monitor.scale_factor(), scale);
+    let current = win.inner_size().map_err(|error| error.to_string())?;
+    win.set_min_size(Some(Size::Physical(minimum))).map_err(|error| error.to_string())?;
+    if let Some((width, height)) = crate::widget_minimum::required_growth(
+        (current.width, current.height), (minimum.width, minimum.height),
+    ) {
+        let size = PhysicalSize::new(width, height);
+        win.set_size(Size::Physical(size)).map_err(|error| error.to_string())?;
+        let position = win.outer_position().map_err(|error| error.to_string())?;
+        let x = if size.width <= area.width {
+            position.x.clamp(area.x, area.x + (area.width - size.width) as i32)
+        } else { position.x };
+        let y = if size.height <= area.height {
+            position.y.clamp(area.y, area.y + (area.height - size.height) as i32)
+        } else { position.y };
+        if x != position.x || y != position.y {
+            win.set_position(Position::Physical(PhysicalPosition::new(x, y)))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 fn ensure_widget_layout_for_window_at_scale(
     app: &AppHandle,
     win: &WebviewWindow,
@@ -325,7 +371,7 @@ fn ensure_widget_layout_for_window_at_scale(
     // Persist the post-clamp geometry so stored fractions match what is on screen
     // (UI scale / min-size clamps can otherwise drift from the ideal default).
     let (applied_position, applied_size) =
-        normalized_to_physical(layout, label, &target_monitor, scale);
+        normalized_to_physical(app, layout, label, &target_monitor, scale);
     let applied_layout =
         physical_to_normalized(applied_position, applied_size, &target_monitor, scale);
 
@@ -414,7 +460,7 @@ fn persist_layout_for_window_at_scale(
 
     if let Some(stored_layout) = stored_layout {
         let (expected_position, expected_size) =
-            normalized_to_physical(stored_layout, label, &monitor, scale);
+            normalized_to_physical(app, stored_layout, label, &monitor, scale);
         if geometry_matches(position, size, expected_position, expected_size) {
             return Ok(());
         }
@@ -442,7 +488,8 @@ fn apply_layout_to_window(
     layout: NormalizedWidgetLayout,
     scale: f64,
 ) -> Result<(), String> {
-    let minimum = widget_minimum_size(
+    let minimum = cached_widget_minimum_size(
+        win.app_handle(),
         label,
         monitor_work_area(monitor),
         monitor.scale_factor(),
@@ -450,7 +497,7 @@ fn apply_layout_to_window(
     );
     win.set_min_size(Some(Size::Physical(minimum)))
         .map_err(|e| e.to_string())?;
-    let (position, size) = normalized_to_physical(layout, label, monitor, scale);
+    let (position, size) = normalized_to_physical(win.app_handle(), layout, label, monitor, scale);
     win.set_size(Size::Physical(size))
         .map_err(|e| e.to_string())?;
     win.set_position(Position::Physical(position))
@@ -496,8 +543,10 @@ fn default_layout_for_widget(
     let bottom_margin = DEFAULT_BOTTOM_MARGIN_FRAC * area_h;
 
     let min_w = (MIN_WIDGET_WIDTH as f64 * dpi * scale).max(1.0);
-    let min_h = (MIN_WIDGET_HEIGHT as f64 * dpi * scale).max(1.0);
-    let tall_min_h = min_h * 2.0;
+    // First-run placement stays comfortably spaced. This is a placement target,
+    // independent of the much smaller pre-measurement native resize constraint.
+    let min_h = (DEFAULT_LAYOUT_MIN_HEIGHT_LOGICAL * dpi * scale).max(1.0);
+    let tall_min_h = (crate::widget_minimum::ARXIV_HEIGHT_CSS as f64 * dpi * scale).max(1.0);
 
     // When arXiv plus one short widget cannot fit vertically, use three
     // columns if there is room. Don't enlarge windows into their neighbours
@@ -587,42 +636,57 @@ fn physical_to_normalized(
 }
 
 fn normalized_to_physical(
+    app: &AppHandle,
     layout: NormalizedWidgetLayout,
     label: &str,
     monitor: &Monitor,
     scale: f64,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
     let area = monitor_work_area(monitor);
-    let minimum = widget_minimum_size(label, area, monitor.scale_factor(), scale);
+    let minimum = cached_widget_minimum_size(app, label, area, monitor.scale_factor(), scale);
     normalized_to_physical_with_minimum(layout, area, scale, minimum)
 }
 
 /// Minimum content area in CSS pixels, converted once for OS DPI and UI zoom.
 /// Cap to the work area so a small display cannot leave the controls offscreen.
+#[cfg(test)]
 fn widget_minimum_size(
     label: &str,
     area: MonitorWorkArea,
     dpi: f64,
     scale: f64,
 ) -> PhysicalSize<u32> {
-    let height = match label {
-        "widget-arxiv-default" => MIN_WIDGET_HEIGHT * 2,
-        _ => MIN_WIDGET_HEIGHT,
-    };
+    widget_minimum_size_with_content(label, area, dpi, scale, None)
+}
+
+fn cached_widget_minimum_size(
+    app: &AppHandle,
+    label: &str,
+    area: MonitorWorkArea,
+    dpi: f64,
+    scale: f64,
+) -> PhysicalSize<u32> {
+    let state = app.state::<WidgetLayoutSaveState>();
+    let measured = state.content_minimum_heights.lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()).get(label).copied();
+    widget_minimum_size_with_content(label, area, dpi, scale, measured)
+}
+
+fn widget_minimum_size_with_content(
+    label: &str,
+    area: MonitorWorkArea,
+    dpi: f64,
+    scale: f64,
+    measured: Option<f64>,
+) -> PhysicalSize<u32> {
     let dpi = if dpi.is_finite() && dpi > 0.0 {
         dpi
     } else {
         1.0
     };
     let zoom = dpi * ui_scale::sanitize(Some(scale));
-    PhysicalSize::new(
-        ((MIN_WIDGET_WIDTH as f64 * zoom).round() as u32)
-            .max(1)
-            .min(area.width.max(1)),
-        ((height as f64 * zoom).round() as u32)
-            .max(1)
-            .min(area.height.max(1)),
-    )
+    let (width, height) = crate::widget_minimum::minimum_size(label, measured, zoom, area.width, area.height);
+    PhysicalSize::new(width, height)
 }
 
 #[cfg(test)]
@@ -840,7 +904,7 @@ mod tests {
         let area = sample_area(2560, 1440);
         assert_eq!(
             widget_minimum_size("widget-quota-default", area, 1.0, 1.0),
-            PhysicalSize::new(300, 220)
+            PhysicalSize::new(300, 96)
         );
         assert_eq!(
             widget_minimum_size("widget-deadlines-default", area, 1.0, 1.0),
@@ -848,7 +912,7 @@ mod tests {
         );
         assert_eq!(
             widget_minimum_size("widget-gpu-default", area, 2.0, 1.25),
-            PhysicalSize::new(750, 550)
+            PhysicalSize::new(750, 240)
         );
         assert_eq!(
             widget_minimum_size("widget-arxiv-default", area, 2.0, 1.25),

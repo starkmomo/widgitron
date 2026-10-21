@@ -27,6 +27,7 @@ mod antigravity;
 mod arxiv;
 mod arxiv_download;
 mod arxiv_library;
+mod arxiv_refresh;
 mod commands;
 mod config_store;
 mod deadlines;
@@ -66,6 +67,7 @@ mod ui_scale;
 mod utils;
 mod vscode_secrets;
 mod widget_layout;
+mod widget_minimum;
 mod widget_visibility;
 #[cfg(windows)]
 mod windows_glass;
@@ -144,6 +146,7 @@ pub fn run() {
             commands::set_widget_always_on_top,
             commands::set_widget_display_mode,
             commands::set_widget_glass,
+            commands::set_widget_content_minimum,
             commands::get_deadlines,
             commands::get_conference_catalog,
             commands::refresh_paper_deadlines,
@@ -683,11 +686,35 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             let label = window.label().to_string();
-            #[cfg(target_os = "macos")]
-            if label == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            #[cfg(any(target_os = "macos", windows))]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // OS shortcuts must follow the same hide/state-update paths as
+                // the custom close buttons. Destroying these persistent windows
+                // leaves the tray and sidebar controllers holding stale handles.
+                if label == "main" {
                     api.prevent_close();
                     let _ = window.hide();
+                    return;
+                }
+                if label == "sidebar" {
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = commands::hide_sidebar(app).await {
+                            log::warn!("Failed to hide sidebar after native close: {error}");
+                        }
+                    });
+                    return;
+                }
+                if widget_layout::is_tracked_widget(&label) {
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app.state::<models::GlobalState>();
+                        if let Err(error) = commands::close_widget(app.clone(), state, label).await {
+                            log::warn!("Failed to hide widget after native close: {error}");
+                        }
+                    });
                     return;
                 }
             }

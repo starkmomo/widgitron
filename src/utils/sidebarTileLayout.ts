@@ -41,8 +41,15 @@ export function sidebarTileHeightLimits(
   key: SidebarSectionKey,
   viewportHeight: number,
   naturalHeight?: number,
+  firstCardHeight?: number,
 ): SidebarTileHeightLimits {
-  const min = MIN_CONTENT_HEIGHT[key];
+  // The measured first card includes the title strip and outer framing. Keep
+  // the initial fallback until real card geometry is available; later cards
+  // enlarge only the natural maximum, never the minimum.
+  const min = key !== "arxiv" && firstCardHeight !== undefined
+    && Number.isFinite(firstCardHeight) && firstCardHeight > 0
+      ? Math.max(SIDEBAR_TILE_MIN_HEIGHT, Math.ceil(firstCardHeight))
+      : MIN_CONTENT_HEIGHT[key];
   const viewport = Number.isFinite(viewportHeight) ? Math.max(1, viewportHeight) : 800;
   const cap = Math.max(min, Math.min(key === "arxiv" ? 560 : 640, Math.floor(viewport * 0.75)));
   // arXiv is a reading viewport. Lists may grow to show all of their content,

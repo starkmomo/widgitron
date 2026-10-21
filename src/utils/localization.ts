@@ -10,6 +10,10 @@ export function resolveLanguage(language?: string): UiLanguage {
 // The existing interface contains labels in many independent widgets. Keep the
 // source copy intact so the language can be changed live in every Tauri window.
 const ZH: Record<string, string> = {
+  "Showing cached papers. Open the app for error details.": "正在显示缓存论文，点击打开主界面查看错误详情。",
+  "Could not update papers. Open the app for error details.": "论文更新失败，点击打开主界面查看错误详情。",
+  "Could not update papers": "论文更新失败",
+  "Open the app for error details.": "请打开主界面查看错误详情。",
   "Liquid Glass": "液态玻璃",
   "Native macOS glass with a subtle dark tint.": "macOS 原生玻璃，带轻微深色衬底。",
   "Native effect appears in the floating window. The preview is approximate.": "实际原生效果请查看浮窗，此处仅为示意。",
@@ -70,6 +74,8 @@ const ZH: Record<string, string> = {
   "Opening the sidebar enables it again.": "点击打开会重新启用侧边栏。",
   "Hide temporarily; move to the screen edge to reveal again.": "暂时隐藏；移到屏幕边缘可再次显示。",
   "Hide settings": "收起设置", "Close settings": "关闭设置",
+  "Manage servers": "管理服务器", "Manage quota monitors": "管理额度监控",
+  "Servers": "管理服务器", "Quotas": "管理额度监控",
   "Add the Paper Deadlines widget in Notification Center.": "请在通知中心添加“论文截止日期”小组件。",
   "Show Quota Monitor in sidebar": "在侧边栏显示额度监控",
   "Show GPU Monitor in sidebar": "在侧边栏显示 GPU 监控",

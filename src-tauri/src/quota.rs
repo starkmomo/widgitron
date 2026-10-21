@@ -3569,6 +3569,9 @@ pub fn schedule_quota_refresh_after_save(app: AppHandle, state: GlobalState) {
         if QUOTA_SAVE_REFRESH_GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
+        if !config_store::read_config::<AppConfig>(&app, "app_config.json").quota_enabled.unwrap_or(true) {
+            return;
+        }
 
         if let Err(error) = perform_quota_fetch_locked(&app, &state).await {
             log::warn!("Background quota refresh after save failed: {}", error);
@@ -3964,9 +3967,14 @@ async fn perform_quota_fetch_locked(
         }
     }
 
+    if !config_store::read_config::<AppConfig>(app, "app_config.json").quota_enabled.unwrap_or(true) {
+        if let Ok(mut items) = state.quota_data.lock() { items.clear(); }
+        let _ = app.emit("quota_update", Vec::<QuotaItem>::new());
+        return Ok(Vec::new());
+    }
+    let latest_config = read_quota_config(app);
     let previous = state.quota_data.lock().ok().map(|items| items.clone());
-
-    let ordered_items = order_quota_items_by_config(&fetched_items, &config);
+    let ordered_items = reconcile_quota_fetch_with_config(&fetched_items, &config, &latest_config);
 
     {
         if let Ok(mut state_quota) = state.quota_data.lock() {
@@ -3982,7 +3990,7 @@ async fn perform_quota_fetch_locked(
         let _ = app.emit("quota_update", &ordered_items);
     }
 
-    if let Err(e) = persist_quota_fetch_results(app, &fetched_items) {
+    if let Err(e) = persist_quota_fetch_results(app, &fetched_items, &config) {
         log::warn!("Failed to persist quota fetch results: {}", e);
     }
 
@@ -4041,52 +4049,58 @@ pub fn order_quota_items_by_config(fetched: &[QuotaItem], config: &QuotaConfig) 
 }
 
 /// Write fetched display fields back to quota_config.json so restarts show fresh data.
-fn persist_quota_fetch_results(app: &AppHandle, fetched: &[QuotaItem]) -> Result<(), String> {
-    let mut config = read_quota_config(app);
+fn persist_quota_fetch_results(app: &AppHandle, fetched: &[QuotaItem], source: &QuotaConfig) -> Result<(), String> {
     let fetched_by_id: std::collections::HashMap<&str, &QuotaItem> = fetched
         .iter()
         .map(|item| (item.id.as_str(), item))
         .collect();
 
-    let mut changed = false;
-    for item in &mut config.items {
-        let Some(fetched_item) = fetched_by_id.get(item.id.as_str()) else {
-            continue;
-        };
-
-        let before = item.clone();
-        apply_fetched_quota_fields(item, fetched_item);
-        if item.provider == "antigravity" {
-            group_antigravity_bars(item);
+    // Merge display fields into the newest disk snapshot in one transaction.
+    // Credentials remain encrypted and cannot be overwritten by an old fetch.
+    let config = config_store::update_config(app, "quota_config.json", |disk: &mut QuotaConfig| {
+        let mut latest = disk.clone();
+        decrypt_quota_config_secrets(&mut latest);
+        for item in &mut disk.items {
+            // Manual values belong to user edits, never an in-flight fetch snapshot.
+            if item.provider == "manual" { continue; }
+            let matching_source = source.items.iter().find(|source| source.id == item.id)
+                .zip(latest.items.iter().find(|latest| latest.id == item.id))
+                .is_some_and(|(source, latest)| !quota_item_fetch_changed(source, latest));
+            if !matching_source { continue; }
+            if let Some(fetched_item) = fetched_by_id.get(item.id.as_str()) {
+                apply_fetched_quota_fields(item, fetched_item);
+                if item.provider == "antigravity" { group_antigravity_bars(item); }
+            }
         }
-        if quota_config_display_changed(&before, item) {
-            changed = true;
-        }
-    }
-
-    if changed {
-        write_quota_config(app, &config)?;
+    })?;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::macos_widget_snapshot::publish_quota_snapshot(app, &config) {
+        log::warn!("Failed to publish macOS quota widget snapshot: {error}");
     }
     Ok(())
 }
 
-fn quota_config_display_changed(before: &QuotaItem, after: &QuotaItem) -> bool {
-    before.current_value != after.current_value
-        || before.error_msg != after.error_msg
-        || before.last_update != after.last_update
-        || before.unit != after.unit
-        || before.max_quota != after.max_quota
-        || before.account_label != after.account_label
-        || before.bars != after.bars
-        || before.plan_type != after.plan_type
-        || before.primary_name != after.primary_name
-        || before.primary_reset != after.primary_reset
-        || before.secondary_value != after.secondary_value
-        || before.secondary_name != after.secondary_name
-        || before.secondary_reset != after.secondary_reset
-        || before.tertiary_value != after.tertiary_value
-        || before.tertiary_name != after.tertiary_name
-        || before.tertiary_reset != after.tertiary_reset
+fn reconcile_quota_fetch_with_config(fetched: &[QuotaItem], source: &QuotaConfig, latest: &QuotaConfig) -> Vec<QuotaItem> {
+    latest.items.iter().map(|current| {
+        let compatible = source.items.iter().find(|item| item.id == current.id)
+            .is_some_and(|old| !quota_item_fetch_changed(old, current));
+        let mut item = if current.provider == "manual" { current.clone() } else if compatible {
+            fetched.iter().find(|item| item.id == current.id).cloned().unwrap_or_else(|| current.clone())
+        } else { current.clone() };
+        merge_quota_item_config(&mut item, current);
+        item
+    }).collect()
+}
+
+pub fn sync_quota_display_settings(app: &AppHandle, state: &GlobalState, previous: &QuotaConfig, config: &QuotaConfig) {
+    let enabled = config_store::read_config::<AppConfig>(app, "app_config.json").quota_enabled.unwrap_or(true);
+    let items = {
+        let mut data = state.quota_data.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let next = if enabled { reconcile_quota_fetch_with_config(&data, previous, config) } else { Vec::new() };
+        *data = next.clone();
+        next
+    };
+    let _ = app.emit("quota_update", items);
 }
 
 fn apply_fetched_quota_fields(target: &mut QuotaItem, fetched: &QuotaItem) {
@@ -4176,7 +4190,11 @@ fn merge_quota_item_config(fetched: &mut QuotaItem, source: &QuotaItem) {
     }
 }
 
-fn is_fetch_config_different(a: &QuotaConfig, b: &QuotaConfig) -> bool {
+pub(crate) fn is_fetch_config_different(a: &QuotaConfig, b: &QuotaConfig) -> bool {
+    // Antigravity chooses which account metadata to return using this setting.
+    if a.show_account_name.unwrap_or(false) != b.show_account_name.unwrap_or(false) {
+        return true;
+    }
     let map_a: std::collections::HashMap<&str, &QuotaItem> = a
         .items
         .iter()
@@ -4195,14 +4213,7 @@ fn is_fetch_config_different(a: &QuotaConfig, b: &QuotaConfig) -> bool {
     for (id, item_a) in &map_a {
         match map_b.get(id) {
             Some(item_b) => {
-                if item_a.provider != item_b.provider
-                    || item_a.auth_mode != item_b.auth_mode
-                    || item_a.api_key != item_b.api_key
-                    || item_a.encrypted_api_key != item_b.encrypted_api_key
-                    || item_a.api_url != item_b.api_url
-                    || item_a.json_path != item_b.json_path
-                    || item_a.visualizations != item_b.visualizations
-                {
+                if quota_item_fetch_changed(item_a, item_b) {
                     return true;
                 }
             }
@@ -4210,6 +4221,12 @@ fn is_fetch_config_different(a: &QuotaConfig, b: &QuotaConfig) -> bool {
         }
     }
     false
+}
+
+fn quota_item_fetch_changed(a: &QuotaItem, b: &QuotaItem) -> bool {
+    a.provider != b.provider || quota_auth_mode(a) != quota_auth_mode(b)
+        || a.api_key.trim() != b.api_key.trim() || a.api_url != b.api_url
+        || a.json_path != b.json_path || a.visualizations != b.visualizations
 }
 
 /// Polling monitor thread for quota items
@@ -4346,12 +4363,15 @@ pub async fn start_quota_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
             }
         }
 
-        // Wait for interval, break early if config changes
+        // Poll display changes without fetching. A new interval starts a new
+        // countdown instead of waiting through the old interval or fetching now.
         let last_config = read_quota_config(&app);
-        let check_interval = 30;
-        let loops = interval / check_interval;
-        for _ in 0..loops.max(1) {
-            tokio::time::sleep(Duration::from_secs(check_interval)).await;
+        let mut wait_interval = last_config.update_interval.unwrap_or(300).max(60);
+        let mut next_due = tokio::time::Instant::now() + Duration::from_secs(wait_interval);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= next_due { break; }
+            tokio::time::sleep((next_due - now).min(Duration::from_secs(30))).await;
             let ac = config_store::read_config::<AppConfig>(&app, "app_config.json");
             if !ac.quota_enabled.unwrap_or(true) {
                 break;
@@ -4361,6 +4381,11 @@ pub async fn start_quota_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
             if is_fetch_config_different(&last_config, &current_config) {
                 break;
             }
+            let interval = current_config.update_interval.unwrap_or(300).max(60);
+            if interval != wait_interval {
+                wait_interval = interval;
+                next_due = tokio::time::Instant::now() + Duration::from_secs(interval);
+            }
         }
     }
 }
@@ -4368,6 +4393,94 @@ pub async fn start_quota_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_quota_edits_update_custom_limits_and_manual_values_without_fetching() {
+        let previous = QuotaConfig { items: vec![
+            QuotaItem { id: "custom".into(), provider: "custom".into(), max_quota: Some(100.0), ..Default::default() },
+            QuotaItem { id: "manual".into(), provider: "manual".into(), current_value: Some(10.0), ..Default::default() },
+        ], ..Default::default() };
+        let mut live = previous.items.clone();
+        live[0].current_value = Some(70.0);
+        let mut latest = previous.clone();
+        latest.items[0].max_quota = Some(200.0);
+        latest.items[0].unit = Some("credits".into());
+        latest.items[0].name = "new label".into();
+        latest.items[1].current_value = Some(50.0);
+        let result = reconcile_quota_fetch_with_config(&live, &previous, &latest);
+        assert!(!is_fetch_config_different(&previous, &latest));
+        assert_eq!(result[0].current_value, Some(70.0));
+        assert_eq!(result[0].max_quota, Some(200.0));
+        assert_eq!(result[0].unit.as_deref(), Some("credits"));
+        assert_eq!(result[0].name, "new label");
+        assert_eq!(result[1].current_value, Some(50.0));
+    }
+
+    #[test]
+    fn late_quota_results_preserve_new_order_and_drop_removed_or_reconfigured_items() {
+        let source = QuotaConfig { items: vec![
+            QuotaItem { id: "removed".into(), provider: "codex".into(), ..Default::default() },
+            QuotaItem { id: "changed".into(), provider: "custom".into(), api_key: "old".into(), ..Default::default() },
+            QuotaItem { id: "same".into(), provider: "codex".into(), ..Default::default() },
+        ], ..Default::default() };
+        let mut fetched = source.items.clone();
+        for item in &mut fetched { item.current_value = Some(95.0); }
+        let latest = QuotaConfig { items: vec![
+            QuotaItem { name: "new name".into(), ..source.items[2].clone() },
+            QuotaItem { api_key: "new".into(), current_value: Some(10.0), ..source.items[1].clone() },
+            QuotaItem { id: "new".into(), provider: "cursor".into(), ..Default::default() },
+        ], ..Default::default() };
+        let result = reconcile_quota_fetch_with_config(&fetched, &source, &latest);
+        assert_eq!(result.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["same", "changed", "new"]);
+        assert_eq!(result[0].name, "new name");
+        assert_eq!(result[0].current_value, Some(95.0));
+        assert_eq!(result[1].api_key, "new");
+        assert_eq!(result[1].current_value, Some(10.0));
+        assert_eq!(result[2].current_value, None);
+    }
+
+    #[test]
+    fn display_edits_do_not_refetch_quota_or_compare_randomized_ciphertext() {
+        let mut previous = QuotaConfig::default();
+        previous.items = vec![QuotaItem { id: "test".into(), provider: "codex".into(), api_key: "same-key".into(),
+            encrypted_api_key: Some("old-ciphertext".into()), ..Default::default() }];
+        let mut edited = previous.clone();
+        edited.show_plan_type = Some(false);
+        edited.update_interval = Some(900);
+        edited.items[0].encrypted_api_key = Some("new-ciphertext".into());
+        edited.items[0].name = "renamed".into();
+        edited.items[0].unit = Some("credits".into());
+        edited.items[0].max_quota = Some(500.0);
+        assert!(!is_fetch_config_different(&previous, &edited));
+    }
+
+    #[test]
+    fn connection_and_analytics_edits_refresh_quota() {
+        let mut previous = QuotaConfig::default();
+        previous.items = vec![QuotaItem { id: "test".into(), provider: "codex".into(), ..Default::default() }];
+        let mut edited = previous.clone();
+        edited.items[0].api_key = "changed".into();
+        assert!(is_fetch_config_different(&previous, &edited));
+        edited = previous.clone();
+        edited.items[0].api_url = Some("https://example.test/quota".into());
+        assert!(is_fetch_config_different(&previous, &edited));
+        edited = previous.clone();
+        edited.items[0].visualizations = Some(Default::default());
+        assert!(is_fetch_config_different(&previous, &edited));
+    }
+
+    #[test]
+    fn quota_order_and_explicit_default_auth_mode_do_not_refetch() {
+        let mut previous = QuotaConfig::default();
+        previous.items = vec![QuotaItem { id: "a".into(), provider: "codex".into(), ..Default::default() },
+            QuotaItem { id: "b".into(), provider: "cursor".into(), ..Default::default() }];
+        let mut edited = previous.clone();
+        edited.items.reverse();
+        edited.items[0].auth_mode = Some("local".into());
+        assert!(!is_fetch_config_different(&previous, &edited));
+        edited.items.pop();
+        assert!(is_fetch_config_different(&previous, &edited));
+    }
 
     #[test]
     fn codex_usage_without_the_five_hour_window_keeps_the_available_window() {

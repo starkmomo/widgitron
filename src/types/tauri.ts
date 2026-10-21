@@ -136,6 +136,7 @@ export interface TauriCommandMap {
   set_widget_always_on_top: AppConfig;
   set_widget_display_mode: AppConfig;
   set_widget_glass: boolean;
+  set_widget_content_minimum: void;
   save_theme_config: void;
   download_and_install_update: void;
   create_widget: void;
@@ -212,6 +213,7 @@ export const TAURI_COMMAND_NAMES = [
   "set_widget_always_on_top",
   "set_widget_display_mode",
   "set_widget_glass",
+  "set_widget_content_minimum",
   "save_theme_config",
   "download_and_install_update",
   "create_widget",
@@ -288,7 +290,7 @@ export interface TauriCommandArgs {
   save_paper_config: { config: PaperConfig };
   save_arxiv_config: { config: ArxivConfig };
   save_quota_config: { config: QuotaConfig };
-  save_app_config: { config: AppConfig };
+  save_app_config: { config: AppConfig; baseConfig?: AppConfig };
   save_sidebar_tile_layout: {
     order: string[];
     layout: Record<string, SidebarTileLayoutConfig>;
@@ -298,6 +300,7 @@ export interface TauriCommandArgs {
   set_widget_always_on_top: { label: string; pinned: boolean };
   set_widget_display_mode: { label: string; mode: "topmost" | "desktop" };
   set_widget_glass: { enabled: boolean; dark: boolean; dockEdge?: SidebarDockState["edge"] | null; liquid?: boolean };
+  set_widget_content_minimum: { height: number };
   save_theme_config: { config: WidgetThemeConfig };
   toggle_widget: { id: string; title: string };
   create_widget: { id: string; title: string };

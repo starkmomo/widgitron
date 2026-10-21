@@ -1177,6 +1177,7 @@ export function SettingsPanel({
           arxivSetter: setLiveArxivPapers,
         }
       );
+      if (!active) { u1(); return; }
       unsubs.push(u1);
 
       const u1e = await listenBackendServiceError(
@@ -1188,6 +1189,7 @@ export function SettingsPanel({
         },
         () => active
       );
+      if (!active) { u1e(); return; }
       unsubs.push(u1e);
 
       const u1f = await listenBackendServiceError(
@@ -1195,23 +1197,30 @@ export function SettingsPanel({
         setArxivBackendError,
         () => active
       );
+      if (!active) { u1f(); return; }
       unsubs.push(u1f);
 
       const u3 = await listenGpuDataSync(setLiveGpuData, () => active);
+      if (!active) { u3(); return; }
       unsubs.push(u3);
     };
-    setup();
+    void setup().catch(error => {
+      unsubs.splice(0).forEach(unsubscribe => unsubscribe());
+      console.error("Failed to setup settings listeners", error);
+    });
 
     return () => {
       active = false;
-      unsubs.forEach((f) => f());
+      unsubs.splice(0).forEach((f) => f());
     };
   }, []);
 
   useEffect(() => {
+    let active = true;
     let unlisten: (() => void) | undefined;
     const setup = async () => {
-      unlisten = await tauriListen("ota_download_progress", (event) => {
+      const unsubscribe = await tauriListen("ota_download_progress", (event) => {
+        if (!active) return;
         const { state, progress, error } = event.payload;
         setDownloadState(state);
         setDownloadProgress(progress);
@@ -1219,9 +1228,12 @@ export function SettingsPanel({
           setUpdateError(error);
         }
       });
+      if (!active) unsubscribe();
+      else unlisten = unsubscribe;
     };
-    setup();
+    void setup().catch(error => console.error("Failed to setup update progress listener", error));
     return () => {
+      active = false;
       if (unlisten) unlisten();
     };
   }, []);

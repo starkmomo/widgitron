@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Cpu, Activity, RefreshCw, List } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { useFloatingContentMinimum } from "../hooks/useFloatingContentMinimum";
 import { widgetCardStyle } from "../utils/glassCardBackground";
 import { hexToRgba } from "../utils/color";
 import { orderGpuServersByConfig, sortGpuJobGroups } from "../utils/gpuDisplay";
@@ -81,9 +82,18 @@ function slurmStateColor(state: string, colors: { success: string; warning: stri
   return colors.subText;
 }
 
+function slurmDurationKey(host: string, id: string, kind: "job" | "step" | "queue" = "job"): string {
+  // Slurm IDs are only unique within one cluster; job and step namespaces can
+  // overlap too. Keep independent clocks for every server and item type.
+  return JSON.stringify([host, kind, id]);
+}
+
 export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideHeader?: boolean; headerControls?: ReactNode }) {
   const [serverData, setServerData] = useState<ServerGpuData[]>([]);
   const currentTheme = useWidgetTheme("gpu");
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentReady, setContentReady] = useState(false);
+  useFloatingContentMinimum(contentRef, Boolean(currentTheme) && contentReady);
   const [durations, setDurations] = useState<Record<string, number>>({});
   const [gpuConfig, setGpuConfig] = useState<GpuConfig>({ servers: [], compact_mode: true });
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -136,23 +146,23 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
       serverData.forEach((server) => {
         server.gpu_list.forEach((gpu) => {
           if (gpu.job_id) {
-            visibleJobs.add(gpu.job_id);
+            visibleJobs.add(slurmDurationKey(server.host, gpu.job_id));
           }
         });
         if (server.slurm_times) {
           Object.keys(server.slurm_times).forEach((jobId) => {
-            visibleJobs.add(jobId);
+            visibleJobs.add(slurmDurationKey(server.host, jobId));
           });
         }
         if (server.slurm_steps) {
           Object.values(server.slurm_steps).forEach((steps) => {
             steps.forEach((step) => {
-              visibleJobs.add(step.id);
+              visibleJobs.add(slurmDurationKey(server.host, step.id, "step"));
             });
           });
         }
         (server.slurm_queue_jobs || []).forEach((job) => {
-          visibleJobs.add(`queue:${job.id}`);
+          visibleJobs.add(slurmDurationKey(server.host, job.id, "queue"));
         });
       });
 
@@ -160,10 +170,11 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
       serverData.forEach((server) => {
         if (server.slurm_times) {
           Object.entries(server.slurm_times).forEach(([jobId, timeStr]) => {
+            const key = slurmDurationKey(server.host, jobId);
             const backendSecs = parseSlurmTime(timeStr);
-            const currentSecs = next[jobId];
+            const currentSecs = next[key];
             if (shouldSyncDuration(currentSecs, backendSecs)) {
-              ensureNext()[jobId] = backendSecs;
+              ensureNext()[key] = backendSecs;
               changed = true;
             }
           });
@@ -171,17 +182,18 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
         if (server.slurm_steps) {
           Object.values(server.slurm_steps).forEach((steps) => {
             steps.forEach((step) => {
+              const key = slurmDurationKey(server.host, step.id, "step");
               const backendSecs = parseSlurmTime(step.time);
-              const currentSecs = next[step.id];
+              const currentSecs = next[key];
               if (shouldSyncDuration(currentSecs, backendSecs)) {
-                ensureNext()[step.id] = backendSecs;
+                ensureNext()[key] = backendSecs;
                 changed = true;
               }
             });
           });
         }
         (server.slurm_queue_jobs || []).forEach((job) => {
-          const key = `queue:${job.id}`;
+          const key = slurmDurationKey(server.host, job.id, "queue");
           const backendSecs = parseSlurmTime(job.time);
           const currentSecs = next[key];
           if (shouldSyncDuration(currentSecs, backendSecs)) {
@@ -216,6 +228,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
         const gpuData = await refetchSectionLiveData(LIVE_DATA_SECTION.GPU);
         if (!active) return;
         setServerData(gpuData);
+        setContentReady(true);
 
         const u1 = await listenServiceUpdateEvents(
           () => active,
@@ -274,6 +287,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
         }
       } catch (e) {
         console.error("Widget init failed", e);
+        if (active) setContentReady(true);
       }
     };
 
@@ -357,7 +371,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
   };
 
   return (
-    <div data-widget-kind="gpu" className="h-full min-h-0 flex flex-col" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
+    <div ref={contentRef} data-widget-kind="gpu" className="h-full min-h-0 flex flex-col" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Cpu size={16} style={{ color: accent }} />} title="GPU Monitor" color={subText} controls={headerControls} status={gpuHeaderHint && <span className="text-[8px] font-bold" style={{ color: warning }}>{gpuHeaderHint}</span>}
         actions={<button
               onClick={handleRefresh}
@@ -419,6 +433,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
             return (
               <div
                 key={idx}
+                data-widget-minimum-card=""
                 data-widget-surface="server"
                 className={`${isCompact ? "space-y-4" : "space-y-2"} min-w-0 max-w-full`}
                 style={widgetCardStyle(currentTheme)}
@@ -582,7 +597,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
                                 )}
                                 {server.slurm_times?.[jobId] && (
                                   <span className="opacity-80 font-mono text-[8px] text-right shrink-0" style={{ color: accent }} title="Job Run Time">
-                                    {formatSlurmTime(durations[jobId] ?? parseSlurmTime(server.slurm_times[jobId]))}
+                                    {formatSlurmTime(durations[slurmDurationKey(server.host, jobId)] ?? parseSlurmTime(server.slurm_times[jobId]))}
                                   </span>
                                 )}
                               </div>
@@ -639,7 +654,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
                                       <span className="opacity-65 truncate" title={step.command}>{step.command}</span>
                                     </div>
                                     <div className="flex items-center gap-2 opacity-60 shrink-0 ml-2">
-                                      <span>{formatSlurmTime(durations[step.id] ?? parseSlurmTime(step.time))}</span>
+                                      <span>{formatSlurmTime(durations[slurmDurationKey(server.host, step.id, "step")] ?? parseSlurmTime(step.time))}</span>
                                     </div>
                                   </div>
                                 );
@@ -717,7 +732,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
                                   )}
                                   {server.slurm_times?.[jobId] && (
                                     <span className="opacity-80 font-mono text-[8px] text-right shrink-0" style={{ color: accent }} title="Job Run Time">
-                                      {formatSlurmTime(durations[jobId] ?? parseSlurmTime(server.slurm_times[jobId]))}
+                                      {formatSlurmTime(durations[slurmDurationKey(server.host, jobId)] ?? parseSlurmTime(server.slurm_times[jobId]))}
                                     </span>
                                   )}
                                 </div>
@@ -739,7 +754,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
                                         <span className="opacity-65 truncate" title={step.command}>{step.command}</span>
                                       </div>
                                       <div className="flex items-center gap-2 opacity-60 shrink-0 ml-2">
-                                        <span>{formatSlurmTime(durations[step.id] ?? parseSlurmTime(step.time))}</span>
+                                        <span>{formatSlurmTime(durations[slurmDurationKey(server.host, step.id, "step")] ?? parseSlurmTime(step.time))}</span>
                                       </div>
                                     </div>
                                   );
@@ -795,7 +810,7 @@ export function GPUWidgetContent({ hideHeader = false, headerControls }: { hideH
                               </span>
                               <span>
                                 {formatSlurmTime(
-                                  durations[`queue:${job.id}`] ?? parseSlurmTime(job.time)
+                                  durations[slurmDurationKey(server.host, job.id, "queue")] ?? parseSlurmTime(job.time)
                                 )}
                               </span>
                             </div>

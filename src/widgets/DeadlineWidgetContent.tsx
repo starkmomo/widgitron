@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Trophy, RefreshCw, MapPin, ChevronDown } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { useFloatingContentMinimum } from "../hooks/useFloatingContentMinimum";
 import { widgetCardStyle } from "../utils/glassCardBackground";
 import { hexToRgba } from "../utils/color";
 import { DeadlineCountdown } from "../components/DeadlineCountdown";
@@ -32,6 +33,9 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
   const [serviceEnabled, setServiceEnabled] = useState(true);
   const [dashboardTheme, setDashboardTheme] = useState<"light" | "dark">("dark");
   const currentTheme = useWidgetTheme("deadline");
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentReady, setContentReady] = useState(false);
+  useFloatingContentMinimum(contentRef, Boolean(currentTheme) && contentReady);
 
   useEffect(() => {
     let active = true;
@@ -46,8 +50,10 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
         const dl = await refetchSectionLiveData(LIVE_DATA_SECTION.DEADLINES);
         if (!active) return;
         setDeadlines(dl);
+        setContentReady(true);
       } catch (e) {
         console.error("Deadline widget load failed", e);
+        if (active) setContentReady(true);
       }
     };
 
@@ -167,7 +173,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
   };
 
   return (
-    <div data-widget-kind="deadline" className="h-full min-h-0 flex flex-col" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
+    <div ref={contentRef} data-widget-kind="deadline" className="h-full min-h-0 flex flex-col" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Trophy size={16} style={{ color: highlight }} />} title="Deadlines" color={subText} controls={headerControls}
         actions={<button
             onClick={handleRefresh}
@@ -211,6 +217,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
           displayList.map((dl) => (
             <div
               key={deadlineConferenceKey(dl)}
+              data-widget-minimum-card=""
               className="widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10"
               style={widgetCardStyle(currentTheme)}
             >

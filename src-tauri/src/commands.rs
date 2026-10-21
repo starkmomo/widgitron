@@ -146,25 +146,49 @@ pub async fn get_paper_config(app: AppHandle) -> Result<PaperConfig, String> {
     Ok(crate::deadlines::read_paper_config(&app))
 }
 
+fn app_config_edit_fields(config: &AppConfig, base: Option<&AppConfig>) -> serde_json::Map<String, serde_json::Value> {
+    let desired = serde_json::to_value(config).expect("AppConfig is serializable");
+    let base = base.map(|value| serde_json::to_value(value).expect("AppConfig is serializable"));
+    let mut fields = desired.as_object().expect("AppConfig is an object").clone();
+    if let Some(base) = base.as_ref().and_then(|value| value.as_object()) {
+        for key in base.keys() { fields.entry(key.clone()).or_insert(serde_json::Value::Null); }
+        fields.retain(|key, value| base.get(key).unwrap_or(&serde_json::Value::Null) != value);
+    }
+    // These fields belong to the native window commands, never a settings snapshot.
+    fields.remove("active_widgets");
+    fields.remove("widgets_hidden");
+    fields
+}
+
+fn apply_app_config_edit(config: &mut AppConfig, fields: &serde_json::Map<String, serde_json::Value>) {
+    let mut snapshot = serde_json::to_value(&*config).expect("AppConfig is serializable");
+    snapshot.as_object_mut().expect("AppConfig is an object").extend(fields.clone());
+    // Every field comes from a typed AppConfig; replacement preserves its schema.
+    *config = serde_json::from_value(snapshot).expect("AppConfig fields retain their types");
+    crate::widget_visibility::reset_hidden_when_empty(config);
+}
+
 #[tauri::command]
-pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
+pub async fn save_app_config(app: AppHandle, config: AppConfig, base_config: Option<AppConfig>) -> Result<(), String> {
     log::warn!("[SIDEBAR-SYNC] save requested: {}", sidebar_settings_summary(&config));
-    let previous = config_store::read_config::<AppConfig>(&app, "app_config.json");
-    // Floating-window visibility is owned by the window commands. Frontend
-    // config snapshots can lag behind a recent hide/show event.
-    config.active_widgets = previous.active_widgets.clone();
-    config.widgets_hidden = previous.widgets_hidden;
-    crate::widget_visibility::reset_hidden_when_empty(&mut config);
+    let fields = app_config_edit_fields(&config, base_config.as_ref());
+    let mut previous = AppConfig::default();
+    let config = config_store::update_config(&app, "app_config.json", |latest: &mut AppConfig| {
+        previous = latest.clone();
+        apply_app_config_edit(latest, &fields);
+        latest.global_scale = Some(crate::ui_scale::from_config(latest));
+    })?;
     let previous_scale = crate::ui_scale::from_config(&previous);
     let next_scale = crate::ui_scale::from_config(&config);
     let scale_changed = (previous_scale - next_scale).abs() >= 0.001;
-    config.global_scale = Some(next_scale);
+    if previous.arxiv_enabled != config.arxiv_enabled || previous.arxiv_proxy != config.arxiv_proxy {
+        crate::arxiv::invalidate_reading_refresh();
+    }
 
     if scale_changed {
         crate::widget_layout::persist_open_widget_layouts_at_scale(&app, previous_scale);
     }
 
-    config_store::write_config(&app, "app_config.json", &config)?;
     log::warn!("[SIDEBAR-SYNC] config persisted");
     #[cfg(target_os = "macos")]
     if previous.language != config.language {
@@ -207,16 +231,12 @@ pub fn save_sidebar_tile_layout(
     widgets: Option<std::collections::HashMap<String, bool>>,
     horizontal_widths: Option<std::collections::HashMap<String, f64>>,
 ) -> Result<AppConfig, String> {
-    let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-    config.sidebar_order = Some(order);
-    config.sidebar_tile_layout = Some(layout);
-    if let Some(widths) = horizontal_widths {
-        config.sidebar_horizontal_tile_widths = Some(widths);
-    }
-    if let Some(widgets) = widgets {
-        config.sidebar_widgets = Some(widgets);
-    }
-    config_store::write_config(&app, "app_config.json", &config)?;
+    let config = config_store::update_config(&app, "app_config.json", |config: &mut AppConfig| {
+        config.sidebar_order = Some(order);
+        config.sidebar_tile_layout = Some(layout);
+        if let Some(widths) = horizontal_widths { config.sidebar_horizontal_tile_widths = Some(widths); }
+        if let Some(widgets) = widgets { config.sidebar_widgets = Some(widgets); }
+    })?;
     log::warn!("[SIDEBAR-SYNC] tile settings persisted: {}", sidebar_settings_summary(&config));
     app.emit("app_config_update", &config).map_err(|error| {
         log::error!("[SIDEBAR-SYNC] tile notification failed: {error}");
@@ -278,12 +298,9 @@ pub async fn set_widget_always_on_top(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-        config
-            .always_on_top
-            .get_or_insert_with(Default::default)
-            .insert(label, pinned);
-        config_store::write_config(&app, "app_config.json", &config)?;
+        let config = config_store::update_config(&app, "app_config.json", |config: &mut AppConfig| {
+            config.always_on_top.get_or_insert_with(Default::default).insert(label, pinned);
+        })?;
         let _ = app.emit("app_config_update", &config);
         Ok(config)
     }
@@ -331,9 +348,9 @@ pub async fn set_widget_display_mode(
             )
             .await?;
         }
-        let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-        mode.apply_preferences(&mut config, &label);
-        config_store::write_config(&app, "app_config.json", &config)?;
+        let config = config_store::update_config(&app, "app_config.json", |config: &mut AppConfig| {
+            mode.apply_preferences(config, &label);
+        })?;
         let _ = app.emit("app_config_update", &config);
         Ok(config)
     }
@@ -357,6 +374,14 @@ pub async fn set_widget_glass(window: tauri::WebviewWindow, enabled: bool, dark:
     { let _ = liquid; crate::windows_glass::set_widget_glass(&window, enabled, dark, dock_edge).await }
     #[cfg(not(any(target_os = "macos", windows)))]
     { let _ = (window, enabled, dark, dock_edge, liquid); Ok(false) }
+}
+
+#[tauri::command]
+pub async fn set_widget_content_minimum(
+    window: tauri::WebviewWindow,
+    height: f64,
+) -> Result<(), String> {
+    crate::widget_layout::set_content_minimum_height(&window, height)
 }
 
 #[tauri::command]
@@ -459,8 +484,9 @@ pub async fn show_main(app: tauri::AppHandle) -> Result<(), String> {
 pub async fn show_sidebar(app: tauri::AppHandle) -> Result<(), String> {
     let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
     if !config.sidebar_enabled.unwrap_or(true) {
+        let base = config.clone();
         config.sidebar_enabled = Some(true);
-        save_app_config(app.clone(), config).await?;
+        save_app_config(app.clone(), config, Some(base)).await?;
     }
     crate::sidebar_dock::show(&app, !cfg!(target_os = "macos"))?;
     if let Some(tray_menu) = app.get_webview_window("tray-menu") {
@@ -686,10 +712,10 @@ pub async fn hide_all_widgets(
 }
 
 async fn apply_widgets_hidden(app: &AppHandle, hidden: bool) -> Result<AppConfig, String> {
-    let mut config = config_store::read_config::<AppConfig>(app, "app_config.json");
-    config.widgets_hidden = Some(hidden);
-    crate::widget_visibility::reset_hidden_when_empty(&mut config);
-    config_store::write_config(app, "app_config.json", &config)?;
+    let config = config_store::update_config(app, "app_config.json", |config: &mut AppConfig| {
+        config.widgets_hidden = Some(hidden);
+        crate::widget_visibility::reset_hidden_when_empty(config);
+    })?;
     let _ = app.emit("app_config_update", &config);
     #[cfg(target_os = "macos")]
     crate::macos_tray::refresh(app);
@@ -740,13 +766,7 @@ pub async fn toggle_widget(
 
     // Read the current visibility from config to prevent `win.is_visible()` sync issues
     // or OS-level visibility glitches (e.g. desktop child mode).
-    let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-    let previous_hidden = config.widgets_hidden;
-    crate::widget_visibility::reset_hidden_when_empty(&mut config);
-    if previous_hidden != config.widgets_hidden {
-        config_store::write_config(&app, "app_config.json", &config)?;
-        let _ = app.emit("app_config_update", &config);
-    }
+    let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
     let is_currently_visible = config
         .active_widgets
         .as_ref()
@@ -775,18 +795,15 @@ pub async fn save_arxiv_config(
     state: tauri::State<'_, GlobalState>,
     config: ArxivConfig,
 ) -> Result<bool, String> {
+    let previous = config_store::read_config::<ArxivConfig>(&app, "arxiv_config.json");
     config_store::write_config(&app, "arxiv_config.json", &config)?;
-    crate::arxiv_library::sync_config(&app, state.inner())?;
-    let _ = app.emit("arxiv_config_update", &config);
-
-    let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-    if app_config.arxiv_enabled.unwrap_or(true) {
-        if let Err(e) = crate::arxiv::perform_arxiv_fetch(&app, state.inner()).await {
-            log::warn!("Arxiv immediate fetch after config save failed: {}", e);
-            let _ = app.emit("arxiv_error", e);
-            return Ok(false);
-        }
+    if crate::arxiv_refresh::query_changed(&previous, &config) {
+        crate::arxiv::invalidate_reading_refresh();
+        crate::arxiv_library::sync_config(&app, state.inner())?;
     }
+    let _ = app.emit("arxiv_config_update", &config);
+    // Persist display/schedule preferences immediately. The caller refreshes
+    // only changed queries; saving settings never waits for the network.
     Ok(true)
 }
 
@@ -943,6 +960,7 @@ pub async fn save_quota_config(
     state: tauri::State<'_, GlobalState>,
     mut config: QuotaConfig,
 ) -> Result<(), String> {
+    let previous = crate::quota::read_quota_config(&app);
     config = crate::quota::sanitize_quota_config(config);
 
     // Group Antigravity models before saving to disk
@@ -955,6 +973,12 @@ pub async fn save_quota_config(
     // Write config to disk
     crate::quota::write_quota_config(&app, &config)?;
     let _ = app.emit("quota_config_update", &config);
+    crate::quota::sync_quota_display_settings(&app, state.inner(), &previous, &config);
+    if !crate::quota::is_fetch_config_different(&previous, &config)
+        || !config_store::read_config::<AppConfig>(&app, "app_config.json").quota_enabled.unwrap_or(true)
+    {
+        return Ok(());
+    }
 
     // Kick quota refresh to the background so settings interactions stay responsive.
     let app_clone = app.clone();
@@ -1126,6 +1150,37 @@ pub fn get_antigravity_setup_status(
 #[cfg(test)]
 mod widget_display_mode_tests {
     use super::*;
+
+    #[test]
+    fn settings_edits_preserve_native_window_fields_and_unrelated_newer_preferences() {
+        let base = AppConfig::default();
+        let mut requested = base.clone();
+        requested.theme = Some("light".into());
+        let mut current = base.clone();
+        current.language = Some("zh-CN".into());
+        current.sidebar_pinned = Some(true);
+        current.active_widgets = Some(std::collections::HashMap::from([("widget-quota-default".into(), true)]));
+        current.widgets_hidden = Some(true);
+        apply_app_config_edit(&mut current, &app_config_edit_fields(&requested, Some(&base)));
+        assert_eq!(current.theme.as_deref(), Some("light"));
+        assert_eq!(current.language.as_deref(), Some("zh-CN"));
+        assert_eq!(current.sidebar_pinned, Some(true));
+        assert_eq!(current.widgets_hidden, Some(true));
+        assert_eq!(current.active_widgets.as_ref().unwrap().get("widget-quota-default"), Some(&true));
+    }
+
+    #[test]
+    fn clearing_an_optional_setting_is_an_edit() {
+        let mut base = AppConfig::default();
+        base.language = Some("zh-CN".into());
+        let mut requested = base.clone();
+        requested.language = None;
+        let mut current = base.clone();
+        current.sidebar_width = Some(480.0);
+        apply_app_config_edit(&mut current, &app_config_edit_fields(&requested, Some(&base)));
+        assert_eq!(current.language, None);
+        assert_eq!(current.sidebar_width, Some(480.0));
+    }
 
     #[test]
     fn legacy_normal_mode_resolves_to_the_desktop() {

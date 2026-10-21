@@ -49,10 +49,12 @@ windows = { version = "0.62.2", features = ["System", "UI_Composition_Desktop", 
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
+keyring = { version = "3", features = ["apple-native"] }
+security-framework = "3"
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 objc2-app-kit = { version = "0.3", features = ["NSWindow"] }
 objc2 = "0.6"
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "objc2-core-foundation"] }
 objc2-core-graphics = { version = "0.3", features = ["CGWindowLevel"] }
-objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", features = ["NSBundle", "NSFileManager", "NSString", "NSURL"] }
 libloading = "0.8"

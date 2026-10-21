@@ -415,12 +415,15 @@ fn persist_pinned(app: &AppHandle) {
     };
     let pinned = runtime.state.pinned;
     drop(runtime);
-    let mut config = config_store::read_config::<AppConfig>(app, "app_config.json");
-    config.sidebar_pinned = Some(pinned);
-    if let Err(err) = config_store::write_config(app, "app_config.json", &config) {
-        log::warn!("Failed to persist sidebar pin state: {err}");
-        return;
-    }
+    let config = match config_store::update_config::<AppConfig>(app, "app_config.json", |config| {
+        config.sidebar_pinned = Some(pinned);
+    }) {
+        Ok(config) => config,
+        Err(err) => {
+            log::warn!("Failed to persist sidebar pin state: {err}");
+            return;
+        }
+    };
     let _ = app.emit("app_config_update", config);
 }
 

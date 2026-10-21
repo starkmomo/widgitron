@@ -1,4 +1,5 @@
 import { isGlassMaterial } from "./utils/glassMaterial";
+import { arxivQueryChanged } from "./utils/arxivSettings";
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -17,7 +18,6 @@ import {
   GripVertical,
   Globe,
   User,
-  Plus,
   ChevronDown,
   EyeOff,
   Eye
@@ -40,6 +40,7 @@ import { useArxivPaperPages } from "./hooks/useArxivPaperPages";
 import { ArxivDateFilter } from "./components/ArxivDateFilter";
 import { ArxivPagination } from "./components/ArxivPagination";
 import { startWindowSnapshotSync } from "./utils/windowSnapshotSync";
+import { createAppConfigWriter } from "./utils/appConfigWrites";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -182,7 +183,6 @@ const SIDEBAR_RESIZE_HANDLES: Array<{
   direction: SidebarResizeDirection;
   className: string;
 }> = [
-  { direction: "n", className: "top-0 left-2 right-2 h-1.5 cursor-n-resize" },
   { direction: "s", className: "bottom-0 left-2 right-2 h-1.5 cursor-s-resize" },
   { direction: "e", className: "right-0 top-2 bottom-2 w-1.5 cursor-e-resize" },
   { direction: "w", className: "left-0 top-2 bottom-2 w-1.5 cursor-w-resize" },
@@ -312,7 +312,7 @@ function SidebarWidgetSection({
   children,
 }: {
   sectionKey: SidebarSectionKey;
-  onContentHeight: (key: SidebarSectionKey, height: number, expanded: boolean) => void;
+  onContentHeight: (key: SidebarSectionKey, height: number, expanded: boolean, minimumHeight?: number) => void;
   title: string;
   accentColor: string;
   theme: ResolvedSidebarTheme;
@@ -333,7 +333,7 @@ function SidebarWidgetSection({
     if (sectionKey === "arxiv") return;
     const section = sectionRef.current;
     if (!section) return;
-    return observeSidebarContentHeight(section, (height, expanded) => onContentHeight(sectionKey, height, expanded));
+    return observeSidebarContentHeight(section, (height, expanded, minimumHeight) => onContentHeight(sectionKey, height, expanded, minimumHeight));
   }, [sectionKey, onContentHeight]);
   return (
     <section
@@ -392,7 +392,7 @@ function SidebarWidgetSection({
       </div>
       {SIDEBAR_RESIZE_HANDLES.filter((handle) => horizontal
         ? handle.direction === "e" || handle.direction === "w"
-        : handle.direction === "n" || handle.direction === "s").map((handle) => (
+        : handle.direction === "s").map((handle) => (
         <button
           key={handle.direction}
           type="button"
@@ -491,6 +491,7 @@ function App() {
   const arxivConfigRef = useRef(arxivConfig);
   const arxivSaveQueue = useRef<Promise<boolean>>(Promise.resolve(true));
   const arxivSaveRevision = useRef(0);
+  const arxivFilterRevision = useRef(0);
   const arxivPendingWrites = useRef(0);
   const [arxivFilterState, setArxivFilterState] = useState<FilterStatusState>("idle");
   useEffect(() => {
@@ -648,6 +649,24 @@ function App() {
       return { theme: "dark" };
     }
   });
+  const appConfigWriterRef = useRef<ReturnType<typeof createAppConfigWriter> | null>(null);
+  if (!appConfigWriterRef.current) {
+    appConfigWriterRef.current = createAppConfigWriter({
+      initial: appConfig,
+      save: (config, baseConfig) => tauriInvoke("save_app_config", { config, baseConfig }),
+      read: () => tauriInvoke("get_app_config"),
+      apply: config => {
+        setAppConfig(config);
+        try {
+          if (config.theme) localStorage.setItem("widgitron-theme", config.theme);
+        } catch (error) {
+          console.warn("Could not cache the application theme", error);
+        }
+      },
+      onError: error => console.error("Application settings save failed", error),
+    });
+  }
+  const appConfigWriter = appConfigWriterRef.current;
   const appConfigSync = useRef<ReturnType<typeof startWindowSnapshotSync<AppConfig>> | null>(null);
   useUiLocalization(resolveLanguage(appConfig.language));
   const pagedArxivView = arxivView === "all" || (arxivView === "unread" && hasReadingKeywords && arxivDate !== "");
@@ -684,14 +703,18 @@ function App() {
   const [serviceToggleErrorDismissed, setServiceToggleErrorDismissed] = useState(false);
   const [sidebarTileLayoutDraft, setSidebarTileLayoutDraft] =
     useState<Record<SidebarSectionKey, SidebarTileRect> | null>(null);
-  const [sidebarContentHeights, setSidebarContentHeights] = useState<Partial<Record<SidebarSectionKey, { height: number; expanded: boolean; collapsedHeight: number }>>>({});
+  const [sidebarContentHeights, setSidebarContentHeights] = useState<Partial<Record<SidebarSectionKey, { height: number; expanded: boolean; collapsedHeight: number; minimumHeight?: number; collapsedMinimumHeight?: number }>>>({});
   const sidebarExpandedResizeOverrides = useRef(new Set<SidebarSectionKey>());
   const [sidebarHorizontalWidthsDraft, setSidebarHorizontalWidthsDraft] = useState<Record<string, number> | null>(null);
   const [sidebarViewport, setSidebarViewport] = useState(() => ({ width: window.innerWidth - 16, height: window.innerHeight - 80 }));
-  const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, expanded: boolean) => {
+  const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, expanded: boolean, minimumHeight?: number) => {
     if (!expanded) sidebarExpandedResizeOverrides.current.delete(key);
-    setSidebarContentHeights((previous) => previous[key]?.height === height && previous[key]?.expanded === expanded
-      ? previous : { ...previous, [key]: { height, expanded, collapsedHeight: expanded ? (previous[key]?.collapsedHeight ?? height) : height } });
+    setSidebarContentHeights((previous) => previous[key]?.height === height && previous[key]?.expanded === expanded && previous[key]?.minimumHeight === minimumHeight
+      ? previous : { ...previous, [key]: {
+        height, expanded, minimumHeight,
+        collapsedHeight: expanded ? (previous[key]?.collapsedHeight ?? height) : height,
+        collapsedMinimumHeight: expanded ? (previous[key]?.collapsedMinimumHeight ?? minimumHeight) : minimumHeight,
+      } });
   }, []);
   useEffect(() => {
     if (windowLabel !== "sidebar" || appConfig.sidebar_enabled === false) return;
@@ -909,27 +932,20 @@ function App() {
       },
       apply: (config) => {
         const update = () => {
-          setAppConfig((previous) => {
-            if (JSON.stringify(previous) === JSON.stringify(config)) return previous;
-            applyServiceDisableClears(previous, config, serviceDisableHandlers);
-            return config;
-          });
+          const previous = appConfigWriter.current();
+          const next = appConfigWriter.receive(config);
+          applyServiceDisableClears(previous, next, serviceDisableHandlers);
           if (windowLabel.startsWith("widget-")) {
-            setIsPinned(config.always_on_top?.[windowLabel] ?? false);
+            setIsPinned(next.always_on_top?.[windowLabel] ?? false);
           }
           if (windowLabel === "main" || windowLabel === "tray-menu") {
-            setActiveWidgets(activeWidgetLabelsFromConfig(config) ?? []);
+            setActiveWidgets(activeWidgetLabelsFromConfig(next) ?? []);
           }
         };
         // Native IPC callbacks run outside React input events. Commit sidebar
         // settings synchronously so the DOM is updated before the callback ends.
         if (windowLabel === "sidebar" && !isMacOS) flushSync(update);
         else update();
-        try {
-          if (config.theme) localStorage.setItem("widgitron-theme", config.theme);
-        } catch (error) {
-          console.warn("Could not cache the application theme", error);
-        }
       },
       onError: (error) => {
         console.error("Application settings sync failed", error);
@@ -1288,11 +1304,7 @@ function App() {
     void savePaperConfig({ ...paperConfigRef.current, followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids });
   };
 
-  const onSaveApp = async (config: AppConfig) => {
-    setAppConfig(config);
-    if (config.theme) localStorage.setItem("widgitron-theme", config.theme);
-    await tauriInvoke("save_app_config", { config });
-  };
+  const onSaveApp = (config: AppConfig) => appConfigWriter.save(appConfig, config);
 
   const saveSidebarWidgetVisibility = async (key: SidebarSectionKey, visible: boolean) => {
     const sidebarWidgets = appConfig.sidebar_widgets || {};
@@ -1329,7 +1341,7 @@ function App() {
       layout: nextLayout,
       widgets: nextWidgets,
     });
-    setAppConfig(updated);
+    appConfigWriter.receive(updated);
   };
 
   const handleMasterServiceToggle = createMasterServiceToggleHandler({
@@ -1343,42 +1355,60 @@ function App() {
 
   const saveArxivConfig = async (changes: Partial<ArxivConfig>): Promise<FilterSaveResult> => {
     const newConfig = { ...arxivConfigRef.current, ...changes };
+    const queryChanged = arxivQueryChanged(arxivConfigRef.current, newConfig);
     const revision = ++arxivSaveRevision.current;
+    const filterRevision = queryChanged ? ++arxivFilterRevision.current : null;
     arxivConfigRef.current = newConfig;
     arxivPendingWrites.current += 1;
     setArxivConfig(newConfig);
-    setIsRefreshingArxiv(true);
-    setArxivFilterState("applying");
-    setArxivError(null);
-    setArxivRefreshError(null);
-    // A keyword draft can be committed while a category or preference save is
-    // still running. Keep their writes ordered and merge from the latest intent.
+    if (queryChanged) {
+      setIsRefreshingArxiv(true);
+      setArxivFilterState("applying");
+      setArxivError(null);
+      setArxivRefreshError(null);
+    }
+    // Serialize disk writes only. A slow network request must never hold up
+    // saving a later category, hint toggle, or polling interval.
     const save = arxivSaveQueue.current.catch(() => false).then(() => tauriInvoke("save_arxiv_config", { config: newConfig }));
     arxivSaveQueue.current = save;
     try {
-      const updated = await save;
-      const result = updated ? "applied" : "refresh-error";
-      if (revision === arxivSaveRevision.current) setArxivFilterState(result);
-      return result;
+      await save;
     } catch (error) {
-      console.error("Save arXiv filters failed", error);
+      console.error("Save arXiv settings failed", error);
       if (revision === arxivSaveRevision.current) setArxivFilterState("save-error");
+      if (filterRevision === arxivFilterRevision.current) setIsRefreshingArxiv(false);
       return "save-error";
     } finally {
       arxivPendingWrites.current -= 1;
       if (!arxivPendingWrites.current && revision === arxivSaveRevision.current) {
-        setIsRefreshingArxiv(false);
         try {
           const saved = await tauriInvoke("get_arxiv_config");
           if (!arxivPendingWrites.current && revision === arxivSaveRevision.current) {
             arxivConfigRef.current = saved;
             setArxivConfig(saved);
           }
-        } catch (error) { console.error("Could not reload arXiv filters", error); }
+        } catch (error) { console.error("Could not reload arXiv settings", error); }
       }
     }
+    if (!queryChanged) return "applied";
+    // Coalesce quick category changes. Keyword drafts still commit only when
+    // filters close or the user leaves the settings section.
+    await new Promise(resolve => window.setTimeout(resolve, 500));
+    if (filterRevision !== arxivFilterRevision.current) return "applied";
+    try {
+      if (appConfig.arxiv_enabled !== false) await tauriInvoke("refresh_arxiv");
+      if (filterRevision === arxivFilterRevision.current) setArxivFilterState("applied");
+      return "applied";
+    } catch (error) {
+      if (filterRevision === arxivFilterRevision.current) {
+        setArxivFilterState("refresh-error");
+        setArxivRefreshError(String(error));
+      }
+      return "refresh-error";
+    } finally {
+      if (filterRevision === arxivFilterRevision.current) setIsRefreshingArxiv(false);
+    }
   };
-
 
   const activeArxivPapers = arxivView === "unread" && !hasReadingKeywords ? [] : pagedArxivView ? pagedArxiv.papers : arxivView === "unread" ? arxivPapers : arxivSavedPapers;
   const arxivSelection = useResearchSelection(activeArxivPapers, arxivPaperKey, JSON.stringify([activeTab, arxivView, arxivDate, pagedArxivView ? pagedArxiv.page : null, arxivConfig.categories, arxivConfig.keywords]));
@@ -1485,7 +1515,7 @@ function App() {
     setWidgetsVisibilityBusy(true);
     setToggleWidgetError(null);
     try {
-      setAppConfig(await tauriInvoke("toggle_widgets_visibility"));
+      appConfigWriter.receive(await tauriInvoke("toggle_widgets_visibility"));
     } catch (error) {
       setToggleWidgetError(String(error));
     } finally {
@@ -1518,7 +1548,7 @@ function App() {
         label: targetLabel,
         pinned: next,
       });
-      setAppConfig(nextConfig);
+      appConfigWriter.receive(nextConfig);
       if (targetLabel === windowLabel) {
         setIsPinned(next);
       }
@@ -1741,15 +1771,21 @@ function App() {
       (key) => sidebarWidgets[key] !== false
     );
     const heightLimits = Object.fromEntries(DEFAULT_SIDEBAR_ORDER.map((key) => [key,
-      sidebarTileHeightLimits(key, sidebarViewport.height, sidebarContentHeights[key]?.height),
+      sidebarTileHeightLimits(key, sidebarViewport.height, sidebarContentHeights[key]?.height, sidebarContentHeights[key]?.minimumHeight),
     ])) as SidebarTileHeightLimitMap;
     const deadlineHeight = sidebarContentHeights.deadlines;
     const timelineGrowth = deadlineHeight?.expanded && !sidebarExpandedResizeOverrides.current.has("deadlines")
       ? Math.max(0, deadlineHeight.height - deadlineHeight.collapsedHeight) : 0;
+    // Keep the saved baseline in its collapsed geometry. The expanded first
+    // card's new minimum is applied together with timeline growth below, once.
+    const baseHeightLimits = deadlineHeight?.expanded && !sidebarExpandedResizeOverrides.current.has("deadlines")
+      ? { ...heightLimits, deadlines: sidebarTileHeightLimits("deadlines", sidebarViewport.height,
+          deadlineHeight.collapsedHeight, deadlineHeight.collapsedMinimumHeight) }
+      : heightLimits;
     const sidebarSavedLayout = sidebarTileLayoutDraft ?? normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys);
     const sidebarBaseLayout = constrainSidebarTileHeights(
       sidebarSavedLayout,
-      visibleSidebarKeys, heightLimits,
+      visibleSidebarKeys, baseHeightLimits,
     );
     const verticalTileLayout = constrainSidebarTileHeights(
       sidebarBaseLayout, visibleSidebarKeys, heightLimits,
@@ -1762,7 +1798,7 @@ function App() {
     const withoutTimelineGrowth = (layout: Record<SidebarSectionKey, SidebarTileRect>) =>
       effectiveTimelineGrowth > 0 && !sidebarExpandedResizeOverrides.current.has("deadlines") ? {
         ...layout,
-        deadlines: { ...layout.deadlines, h: Math.max(heightLimits.deadlines.min, layout.deadlines.h - effectiveTimelineGrowth) },
+        deadlines: { ...layout.deadlines, h: Math.max(baseHeightLimits.deadlines.min, layout.deadlines.h - effectiveTimelineGrowth) },
       } : layout;
     sidebarOrderRef.current = sidebarOrder;
     const allSidebarSections: SidebarSectionDefinition[] = [
@@ -1833,7 +1869,8 @@ function App() {
       // Moving cards while a timeline is open must not save its temporary
       // expansion as the user's collapsed reading height.
       const savedLayout = horizontalSidebar ? sidebarSavedLayout : withoutTimelineGrowth(nextLayout);
-      const compactedLayout = horizontalSidebar ? savedLayout : constrainSidebarTileHeights(savedLayout, visibleSidebarKeys, heightLimits);
+      const compactedLayout = horizontalSidebar ? savedLayout : constrainSidebarTileHeights(savedLayout, visibleSidebarKeys,
+        sidebarExpandedResizeOverrides.current.has("deadlines") ? heightLimits : baseHeightLimits);
       sidebarOrderRef.current = nextOrder;
       setSidebarTileLayoutDraft(compactedLayout);
       tauriInvoke("save_sidebar_tile_layout", {
@@ -1842,7 +1879,7 @@ function App() {
         widgets: null,
         horizontalWidths: nextWidths ?? null,
       })
-        .then(setAppConfig)
+        .then(config => appConfigWriter.receive(config))
         .catch(console.error);
     };
     const startSidebarTileMove = (
@@ -2585,8 +2622,8 @@ function App() {
                     GPU Monitor Status
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} className={sectionActionClass}>
-                      {inlineSettingsSection === LIVE_DATA_SECTION.GPU ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add server</>}
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} aria-label={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Manage servers"} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.GPU ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Servers</>}
                     </button>
                     {appConfig.gpu_enabled !== false && (
                       <button
@@ -2624,7 +2661,7 @@ function App() {
                 {renderInlineSettings(LIVE_DATA_SECTION.GPU)}
                 <div className="space-y-6">
                   {visibleGpuData.length === 0 ? (
-                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Add server"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} />
+                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Servers"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} />
                   ) : (
                     visibleGpuData.map((server, idx) => {
                       const hasCachedGpus =
@@ -3016,8 +3053,8 @@ function App() {
                     Agent & API Quotas
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} className={sectionActionClass}>
-                      {inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add quota monitor</>}
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} aria-label={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Manage quota monitors"} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Quotas</>}
                     </button>
                     {appConfig.quota_enabled !== false && (
                       <button
@@ -3065,7 +3102,7 @@ function App() {
 
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] items-start gap-6">
                   {visibleQuotaData.length === 0 ? (
-                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} /></div>
+                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Quotas"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} /></div>
                   ) : (
                     visibleQuotaData.map((q) => {
                       const hasValue = q.current_value !== null && q.current_value !== undefined;

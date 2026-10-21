@@ -4,6 +4,7 @@ import { WidgetContentList } from "../components/WidgetContentList";
 import { WidgetHeader } from "../components/WidgetHeader";
 import { Gauge, RefreshCw, AlertCircle, Minus, Plus, Edit2, Globe, Cpu, User } from "lucide-react";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { useFloatingContentMinimum } from "../hooks/useFloatingContentMinimum";
 import { widgetCardStyle } from "../utils/glassCardBackground";
 import { hexToRgba, adjustColorOpacity, isLightColor } from "../utils/color";
 import { providerLogoToneClass } from "../utils/providerLogo";
@@ -55,6 +56,9 @@ function renderQuotaAlert(
 export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hideHeader?: boolean; headerControls?: ReactNode }) {
   const [quotas, setQuotas] = useState<QuotaItem[]>([]);
   const currentTheme = useWidgetTheme("quota");
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentReady, setContentReady] = useState(false);
+  useFloatingContentMinimum(contentRef, Boolean(currentTheme) && contentReady);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [quotaBackendError, setQuotaBackendError] = useState<string | null>(null);
@@ -103,8 +107,10 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
         setShowAccountName(qc?.show_account_name || false);
         setShowPlanType(qc?.show_plan_type !== false);
         setConfigItems(qc?.items || []);
+        setContentReady(true);
       } catch (e) {
         console.error("Quota widget load failed", e);
+        if (active) setContentReady(true);
       }
     };
 
@@ -322,7 +328,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
   };
 
   return (
-    <div data-widget-kind="quota" className="h-full min-h-0 flex flex-col select-none" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
+    <div ref={contentRef} data-widget-kind="quota" className="h-full min-h-0 flex flex-col select-none" style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Gauge size={16} style={{ color: accent }} />} title="Quota Monitor" color={subText} controls={headerControls} status={quotaHeaderHint && <span className="text-[8px] font-bold" style={{ color: quotaHardErrorCount > 0 ? danger : warning }}>{quotaHeaderHint}</span>}
         actions={<button
             onClick={handleRefresh}
@@ -442,6 +448,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
               return (
                 <div
                   key={q.id}
+                  data-widget-minimum-card=""
                   className="widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
                   style={widgetCardStyle(currentTheme)}
                 >
@@ -554,6 +561,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
             return (
               <div
                 key={q.id}
+                data-widget-minimum-card=""
                 data-widget-surface="true"
                 className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
                 style={widgetCardStyle(currentTheme)}

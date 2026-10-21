@@ -1,7 +1,7 @@
 import { useState, useEffect, useId, useRef } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { WidgetHeader } from "../components/WidgetHeader";
-import { Radar, Check, ChevronDown } from "lucide-react";
+import { Radar, Check, ChevronDown, CloudOff } from "lucide-react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
 import type { ArxivConfig, ArxivPaper } from "../types/config";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
@@ -12,9 +12,8 @@ import { handleWidgetAppConfigUpdate } from "../utils/widgetLifecycle";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveData";
-import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
+import { arxivQueryChanged } from "../utils/arxivSettings";
 import { ALL_ARXIV_KEYWORDS, UNCATEGORIZED_ARXIV_KEYWORD, hasArxivKeywords, filterArxivPapersByKeywords, formatArxivKeywordLabel, getArxivKeywords, getPaperArxivKeywords } from "../utils/arxivKeywords";
-import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { arxivPaperLinks } from "../utils/arxivPaperLinks";
@@ -52,6 +51,7 @@ export function ArxivWidgetContent({
   const library = useArxivLibrary();
   const [papers, setPapers] = useState<ArxivPaper[]>([]);
   const [arxivConfig, setArxivConfig] = useState<ArxivConfig>({});
+  const arxivConfigRef = useRef<ArxivConfig>({});
   const [arxivBackendError, setArxivBackendError] = useState<string | null>(null);
   const [arxivRefreshError, setArxivRefreshError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -65,7 +65,6 @@ export function ArxivWidgetContent({
   const keywordMenuId = useId();
   const [exitDirection, setExitDirection] = useState<SwipeDirection | undefined>(undefined);
   const [serviceEnabled, setServiceEnabled] = useState(true);
-  const [dashboardTheme, setDashboardTheme] = useState<"light" | "dark">("dark");
   const currentTheme = useWidgetTheme("arxiv");
   const arxivKeywords = getArxivKeywords(arxivConfig.keywords);
   const hasOtherArxivMatches = papers.some((paper) => getPaperArxivKeywords(paper, arxivConfig.keywords).length === 0);
@@ -131,6 +130,7 @@ export function ArxivWidgetContent({
 
         const configArxiv = await tauriInvoke("get_arxiv_config");
         if (!active) return;
+        arxivConfigRef.current = configArxiv;
         setArxivConfig(configArxiv);
       } catch (e) {
         console.error("Arxiv widget load failed", e);
@@ -164,10 +164,13 @@ export function ArxivWidgetContent({
 
         const u3 = await tauriListen("arxiv_config_update", (event) => {
           if (!active) return;
+          const queryChanged = arxivQueryChanged(arxivConfigRef.current, event.payload);
+          arxivConfigRef.current = event.payload;
           setArxivConfig(event.payload);
-          setArxivRefreshError(null);
-          setCurrentIndex(0);
-          // Saving filters already refreshes centrally and publishes arxiv_update.
+          if (queryChanged) {
+            setArxivRefreshError(null);
+            setCurrentIndex(0);
+          }
         });
         if (!active) {
           u3();
@@ -190,7 +193,6 @@ export function ArxivWidgetContent({
         let arxivEnabled = appConfig?.arxiv_enabled !== false;
         if (active) {
           setServiceEnabled(arxivEnabled);
-          setDashboardTheme(appConfig?.theme === "light" ? "light" : "dark");
         }
 
         const u5 = await tauriListen("app_config_update", async (event) => {
@@ -198,7 +200,6 @@ export function ArxivWidgetContent({
           arxivEnabled = await handleWidgetAppConfigUpdate(event.payload, arxivEnabled, {
             serviceField: "arxiv_enabled",
             setServiceEnabled: setServiceEnabled,
-            setDashboardTheme: setDashboardTheme,
             disableClears: {
               clearData: () => setPapers([]),
               clearRefreshError: () => setArxivRefreshError(null),
@@ -271,28 +272,20 @@ export function ArxivWidgetContent({
     : "rgba(148, 163, 184, 0.38)";
 
 
+  const refreshFailed = serviceEnabled && Boolean(arxivBackendError || arxivRefreshError);
+  const failureLabel = papers.length > 0
+    ? "Showing cached papers. Open the app for error details."
+    : "Could not update papers. Open the app for error details.";
+  const refreshStatus = refreshFailed ? <button type="button" aria-label={failureLabel} title={failureLabel}
+    className="shrink-0 rounded p-1 text-amber-400 hover:bg-amber-400/10" data-no-drag="true"
+    onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}
+    onClick={() => void tauriInvoke("show_main")}><CloudOff size={13} aria-hidden="true" /></button> : undefined;
+
   return (
     <div data-widget-kind="arxiv" className="arxiv-widget h-full min-h-0 flex flex-col select-none"
       style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
-      {!hideHeader && <WidgetHeader icon={<Radar size={16} style={{ color: accent }} />} title="Arxiv Radar" color={subText} controls={headerControls} />}
+      {!hideHeader && <WidgetHeader icon={<Radar size={16} style={{ color: accent }} />} title="Arxiv Radar" color={subText} status={refreshStatus} controls={headerControls} />}
 
-      <ServiceErrorBanners
-        backendError={arxivBackendError}
-        refreshError={arxivRefreshError}
-        onDismissBackend={() => setArxivBackendError(null)}
-        onDismissRefresh={() => setArxivRefreshError(null)}
-        theme={dashboardTheme}
-        showBackend={serviceEnabled}
-        className="mb-2 space-y-2"
-        backendCachedLabel={cachedLabelWhen(
-          papers.length > 0,
-          CACHED_LABELS.arxiv.backend
-        )}
-        refreshCachedLabel={cachedLabelWhen(
-          papers.length > 0,
-          CACHED_LABELS.arxiv.refresh
-        )}
-      />
       {serviceEnabled && arxivKeywordOptions.length > 0 && (
         <div ref={keywordControlRef} className="relative z-[60] mb-3 shrink-0" data-no-drag="true"
           onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
@@ -458,11 +451,11 @@ export function ArxivWidgetContent({
           ) : (
             <div data-widget-surface="empty" style={widgetCardStyle(currentTheme)} className="h-full min-h-0 flex flex-col items-center justify-center text-center p-4 space-y-2">
               <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
-                <Check size={22} className="text-emerald-500" />
+                {refreshFailed ? <CloudOff size={22} className="text-amber-400" /> : <Check size={22} className="text-emerald-500" />}
               </div>
               <div className="space-y-1">
-                <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No keywords configured" : "All caught up!"}</div>
-                <p className="text-[9px] text-slate-500">{arxivKeywords.length === 0 ? "Add keywords in Paper filters to fill To read." : "Check back later for matching papers."}</p>
+                <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No keywords configured" : refreshFailed ? "Could not update papers" : "All caught up!"}</div>
+                <p className="text-[9px] text-slate-500">{arxivKeywords.length === 0 ? "Add keywords in Paper filters to fill To read." : refreshFailed ? "Open the app for error details." : "Check back later for matching papers."}</p>
               </div>
             </div>
           )}

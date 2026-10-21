@@ -956,19 +956,22 @@ fn persist_runtime_config(app: &AppHandle) {
         )
     };
 
-    let mut config = config_store::read_config::<AppConfig>(app, "app_config.json");
-    config.sidebar_edge = Some(edge);
-    config.sidebar_pinned = Some(pinned);
-    config.sidebar_width = Some(thickness.round());
-    if let Some(edge_length) = edge_length {
-        config.sidebar_length = Some(edge_length.round());
-    }
-    config.sidebar_monitor_x = Some(monitor_x);
-    config.sidebar_monitor_y = Some(monitor_y);
-    if let Err(err) = config_store::write_config(app, "app_config.json", &config) {
-        log::warn!("Failed to persist sidebar dock state: {err}");
-        return;
-    }
+    let config = match config_store::update_config::<AppConfig>(app, "app_config.json", |config| {
+        config.sidebar_edge = Some(edge);
+        config.sidebar_pinned = Some(pinned);
+        config.sidebar_width = Some(thickness.round());
+        if let Some(edge_length) = edge_length {
+            config.sidebar_length = Some(edge_length.round());
+        }
+        config.sidebar_monitor_x = Some(monitor_x);
+        config.sidebar_monitor_y = Some(monitor_y);
+    }) {
+        Ok(config) => config,
+        Err(err) => {
+            log::warn!("Failed to persist sidebar dock state: {err}");
+            return;
+        }
+    };
     let _ = app.emit("app_config_update", config);
 }
 
