@@ -842,9 +842,10 @@ pub async fn mark_arxiv_seen(
 pub async fn refresh_arxiv(
     app: AppHandle,
     state: tauri::State<'_, GlobalState>,
+    filters_only: Option<bool>,
 ) -> Result<Vec<ArxivPaper>, String> {
     let global_state = state.inner();
-    crate::arxiv::perform_arxiv_fetch(&app, global_state).await
+    crate::arxiv::perform_arxiv_fetch(&app, global_state, filters_only.unwrap_or(false)).await
 }
 
 #[tauri::command]

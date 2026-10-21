@@ -8,7 +8,7 @@
 
 - **浏览与筛选**：提供“全部 / 待看 / 已收藏”和 UTC 提交日期选择，支持每页 100 篇翻页与缓存。全部不受关键词影响；待看仅收集关键词匹配项，无关键词时为空。区分无论文与请求失败，刷新失败保留缓存。
 - **关键词输入**：改为可添加、删除的标签，支持回车及中英文逗号、分号、换行分隔。收起页面筛选或离开设置栏目后自动保存并更新，提供加载、成功及失败反馈。
-- **刷新控制**：显示选项和更新间隔不再触发即时请求；合并重复刷新，丢弃过期筛选结果，失败后退避重试。浮窗与侧边栏保留缓存，只以小图标提示失败。
+- **刷新控制**：关键词增删复用按词缓存，仅查询缺失项并保留其他论文；显示选项和更新间隔不再触发即时请求。合并重复刷新，丢弃过期筛选结果，失败后退避重试。浮窗与侧边栏保留缓存，只以小图标提示失败。
 - **收藏与忽略**：卡片可直接收藏、忽略，各列表支持批量操作。已忽略内容通过小字入口打开管理弹窗，可恢复或收藏；忽略记录仅保留当前批次，收藏长期保存，兼容原有记录。
 - **阅读与下载**：完整标题下显示作者，摘要预览随可用高度调整，阅读面板补齐全部作者和提交日期。打开 arXiv 页面与下载 PDF 分为两个按钮，下载不覆盖同名文件；浮窗和侧边栏的收藏、忽略按钮使用轻底色，关键词下拉同步卡片背景设置。
 
@@ -49,7 +49,7 @@
 
 - **Browsing and filters**: Add All / To read / Saved views, a UTC submission-date picker, and cached pages of 100 papers. All ignores keywords; To read contains keyword matches and stays empty without keywords. Distinguish empty results from request failures and retain cached papers on refresh errors.
 - **Keyword input**: Use removable tags with Enter and English/Chinese comma, semicolon, or newline separators. Save and refresh when filters close or the Settings section is left, with loading, success, and error feedback.
-- **Refresh control**: Display options and polling intervals no longer trigger immediate requests. Share duplicate refreshes, discard obsolete filter results, and back off after failures. Keep cached papers in widgets and the sidebar with a small failure indicator.
+- **Refresh control**: Reuse per-keyword caches when editing filters, fetching only missing terms and preserving other papers. Display options and polling intervals no longer trigger immediate requests. Share duplicate refreshes, discard obsolete filter results, and back off after failures. Keep cached papers in widgets and the sidebar with a small failure indicator.
 - **Saving and ignoring**: Add card actions and bulk management across lists. Open ignored papers in a separate dialog to restore or save them. Keep ignore records within the current batch, retain saved papers, and preserve existing selections.
 - **Reading and downloads**: Show full titles with authors underneath, adapt abstract previews to available space, and include all authors and the submission date in the reading panel. Separate arXiv page and PDF download actions and avoid overwriting files. Use lighter save/ignore buttons in widgets and the sidebar, with keyword dropdowns following card background settings.
 

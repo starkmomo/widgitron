@@ -1396,7 +1396,7 @@ function App() {
     await new Promise(resolve => window.setTimeout(resolve, 500));
     if (filterRevision !== arxivFilterRevision.current) return "applied";
     try {
-      if (appConfig.arxiv_enabled !== false) await tauriInvoke("refresh_arxiv");
+      if (appConfig.arxiv_enabled !== false) await tauriInvoke("refresh_arxiv", { filtersOnly: true });
       if (filterRevision === arxivFilterRevision.current) setArxivFilterState("applied");
       return "applied";
     } catch (error) {
@@ -2963,6 +2963,9 @@ function App() {
                   </div>
                 )}
                 {pagedArxivView && pagedArxiv.loading && activeArxivPapers.length === 0 ? (
+                  pagedArxiv.preservingResults ? <p role="status" className="flex items-center gap-2 text-xs text-slate-500">
+                    <RefreshCw size={14} className="animate-spin" aria-hidden="true" />Updating papers…
+                  </p> :
                   <div role="status" className="flex items-center justify-center gap-2 py-16 text-xs text-slate-500">
                     <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
                     Loading papers…

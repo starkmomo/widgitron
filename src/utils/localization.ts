@@ -168,7 +168,7 @@ const ZH: Record<string, string> = {
   "Submission date (UTC)": "提交日期（UTC）", "Show recent papers": "查看最近论文",
   "View papers": "查看论文",
   "Previous page": "上一页", "Next page": "下一页", "Paper pagination": "论文翻页",
-  "Loading papers": "正在加载论文", "Loading papers…": "正在加载论文…",
+  "Loading papers": "正在加载论文", "Loading papers…": "正在加载论文…", "Updating papers…": "正在更新论文…",
   "No papers matched your keywords on this submission date.": "该提交日期没有匹配关键词的论文。",
   "No papers in the selected categories on this submission date.": "该提交日期下，所选分类暂无论文。",
   "Choose another date or view recent papers. Submissions not yet announced may appear later.": "可换一天或查看最近论文；尚未公布的投稿可能稍后出现。",

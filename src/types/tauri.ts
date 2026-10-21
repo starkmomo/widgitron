@@ -278,7 +278,7 @@ export interface TauriCommandArgs {
   get_quota_data: undefined;
   refresh_gpu_data: undefined;
   refresh_paper_deadlines: undefined;
-  refresh_arxiv: undefined;
+  refresh_arxiv: { filtersOnly: boolean } | undefined;
   refresh_quota: undefined;
   get_arxiv_saved_papers: undefined;
   get_arxiv_discarded_papers: undefined;

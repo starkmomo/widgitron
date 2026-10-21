@@ -137,7 +137,7 @@ fn paper_matches_keyword(haystack: &str, keyword: &str) -> bool {
     !terms.is_empty() && terms.iter().all(|term| haystack.contains(term))
 }
 
-fn matched_keywords_for_paper(paper: &ArxivPaper, keywords: &[String]) -> Vec<String> {
+pub(crate) fn matched_keywords_for_paper(paper: &ArxivPaper, keywords: &[String]) -> Vec<String> {
     let haystack = format!("{} {}", paper.title, paper.summary).to_lowercase();
     keywords
         .iter()
@@ -188,23 +188,7 @@ fn build_category_query(categories: &[String]) -> String {
     }
 }
 
-fn merge_papers(target: &mut Vec<ArxivPaper>, source: Vec<ArxivPaper>) {
-    for paper in source {
-        if let Some(existing) = target.iter_mut().find(|existing| existing.id == paper.id) {
-            for keyword in paper.matched_keywords {
-                if !existing.matched_keywords.iter().any(|existing_keyword| {
-                    normalize_keyword(existing_keyword) == normalize_keyword(&keyword)
-                }) {
-                    existing.matched_keywords.push(keyword);
-                }
-            }
-        } else {
-            target.push(paper);
-        }
-    }
-}
-
-fn sort_papers_by_updated_desc(papers: &mut [ArxivPaper]) {
+pub(crate) fn sort_papers_by_updated_desc(papers: &mut [ArxivPaper]) {
     papers.sort_by(|a, b| paper_updated_at(b).cmp(&paper_updated_at(a)));
 }
 
@@ -667,13 +651,17 @@ fn reading_request(app: &AppHandle) -> crate::arxiv_refresh::RefreshRequest {
     }
 }
 
-async fn fetch_reading_papers(app: &AppHandle, config: ArxivConfig) -> Result<Vec<ArxivPaper>, String> {
-    if !has_reading_keywords(&config.keywords) { return Ok(Vec::new()); }
+async fn fetch_reading_papers(app: &AppHandle, config: ArxivConfig, reuse_cached: bool) -> Result<bool, String> {
+    if !has_reading_keywords(&config.keywords) { return Ok(reuse_cached); }
+    let cached = if reuse_cached { crate::arxiv_library::cached_keywords(app, &config)? } else { Vec::new() };
+    let missing: Vec<_> = get_unique_keywords(&config.keywords).into_iter()
+        .filter(|keyword| !cached.contains(&normalize_keyword(keyword))).collect();
+    // Removal/reordering needs no HTTP client or requests at all.
+    if missing.is_empty() { return Ok(reuse_cached); }
     let client = arxiv_client(app)?;
     let cat_query = build_category_query(&config.categories);
     let (today_start, tomorrow_start) = today_local_bounds()?;
-    let mut papers = Vec::new();
-    for keyword in get_unique_keywords(&config.keywords) {
+    for keyword in missing {
         let latest = reading_request(app);
         if !latest.enabled || crate::arxiv_refresh::query_changed(&config, &latest.config) { break; }
         if let Some(keyword_query) = arxiv_keyword_query(&keyword) {
@@ -682,19 +670,18 @@ async fn fetch_reading_papers(app: &AppHandle, config: ArxivConfig) -> Result<Ve
                 &client, &query, &config.keywords, today_start, tomorrow_start,
                 Some(ARXIV_MIN_PAPERS_PER_KEYWORD),
             ).await?;
-            merge_papers(&mut papers, keyword_papers);
+            crate::arxiv_library::cache_keyword(app, &config, &keyword, keyword_papers)?;
         }
     }
-    sort_papers_by_updated_desc(&mut papers);
-    Ok(papers)
+    Ok(reuse_cached)
 }
 
-async fn refresh_reading_papers(app: &AppHandle, state: &GlobalState, force: bool)
+async fn refresh_reading_papers(app: &AppHandle, state: &GlobalState, mode: crate::arxiv_refresh::RefreshMode)
     -> Result<Option<Vec<ArxivPaper>>, String>
 {
-    let result = READING_REFRESH.refresh(force, || reading_request(app),
-        |request| fetch_reading_papers(app, request.config),
-        |config, papers| crate::arxiv_library::replace_batch(app, state, papers, config)).await;
+    let result = READING_REFRESH.refresh(mode, || reading_request(app),
+        |request, reuse_cached| fetch_reading_papers(app, request.config, reuse_cached),
+        |config, filters_changed| crate::arxiv_library::complete_cached_batch(app, state, config, filters_changed)).await;
     match &result {
         Ok(Some(_)) => { let _ = app.emit("arxiv_error", ""); }
         Err(error) => {
@@ -706,8 +693,10 @@ async fn refresh_reading_papers(app: &AppHandle, state: &GlobalState, force: boo
     result
 }
 
-pub async fn perform_arxiv_fetch(app: &AppHandle, state: &GlobalState) -> Result<Vec<ArxivPaper>, String> {
-    Ok(refresh_reading_papers(app, state, true).await?.unwrap_or_default())
+pub async fn perform_arxiv_fetch(app: &AppHandle, state: &GlobalState, filters_only: bool) -> Result<Vec<ArxivPaper>, String> {
+    let mode = if filters_only { crate::arxiv_refresh::RefreshMode::Filters }
+        else { crate::arxiv_refresh::RefreshMode::Manual };
+    Ok(refresh_reading_papers(app, state, mode).await?.unwrap_or_default())
 }
 
 pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalState>) {
@@ -717,7 +706,14 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
         .and_then(|modified| modified.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(1800));
     if fresh {
         let papers = crate::arxiv_library::visible_papers(&app).unwrap_or_default();
-        if !papers.is_empty() { READING_REFRESH.seed_cache(reading_request(&app), papers).await; }
+        let request = reading_request(&app);
+        let cached = crate::arxiv_library::cached_keywords(&app, &request.config).unwrap_or_default();
+        let complete = get_unique_keywords(&request.config.keywords).iter()
+            .filter(|keyword| arxiv_keyword_query(keyword).is_some())
+            .all(|keyword| cached.contains(&normalize_keyword(keyword)));
+        // Initialize old combined caches in the background, preserving their
+        // visible papers instead of leaving missing query caches idle for an hour.
+        if !papers.is_empty() && complete { READING_REFRESH.seed_cache(request, papers).await; }
     }
     let mut was_enabled = true;
     loop {
@@ -731,7 +727,7 @@ pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalSta
         } else {
             // This shares the foreground fetch's result and due time. Settings
             // polling cannot enqueue a second request or repeat a failed one.
-            let _ = refresh_reading_papers(&app, &state, false).await;
+            let _ = refresh_reading_papers(&app, &state, crate::arxiv_refresh::RefreshMode::Scheduled).await;
         }
         was_enabled = request.enabled;
         tokio::time::sleep(Duration::from_secs(5)).await;
