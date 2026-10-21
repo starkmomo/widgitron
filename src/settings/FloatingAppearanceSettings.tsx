@@ -197,7 +197,6 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
           </button>;
         })}
       </div>
-      {isMacOS && mode === "glass" && <p className="text-[10px] leading-relaxed text-slate-500">Native effect appears in the floating window. The preview is approximate.</p>}
       {activeTheme && <div className="space-y-2">
         <div className="flex justify-between text-[10px] font-medium text-slate-500"><span>Preview</span><span>Example data</span></div>
         <div className="floating-preview-scene relative isolate overflow-hidden rounded-2xl border border-slate-400/20 p-3">
