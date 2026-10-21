@@ -148,6 +148,8 @@ struct WorkArea {
     top: i32,
     right: i32,
     bottom: i32,
+    // Layout avoids taskbars; reveal hit-testing uses the monitor perimeter.
+    screen: RectPx,
     scale_factor: f64,
 }
 
@@ -201,10 +203,6 @@ impl WorkArea {
 
     fn height(self) -> i32 {
         (self.bottom - self.top).max(1)
-    }
-
-    fn contains(self, point: POINT) -> bool {
-        point.x >= self.left && point.x < self.right && point.y >= self.top && point.y < self.bottom
     }
 }
 
@@ -477,7 +475,13 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
     }
     if let (Some(x), Some(y)) = (config.sidebar_monitor_x, config.sidebar_monitor_y) {
         if let Some(area) = work_area_near_point(app, POINT { x, y }) {
-            if area.left != state.work_area.left || area.top != state.work_area.top {
+            if area.left != state.work_area.left
+                || area.top != state.work_area.top
+                || area.right != state.work_area.right
+                || area.bottom != state.work_area.bottom
+                || area.screen != state.work_area.screen
+                || (area.scale_factor - state.work_area.scale_factor).abs() >= 0.001
+            {
                 state.work_area = area;
                 state.layout_dirty = true;
                 state.start_reveal_cooldown(now);
@@ -514,6 +518,7 @@ pub fn show(app: &AppHandle, focus: bool) -> Result<(), String> {
             || area.top != state.work_area.top
             || area.right != state.work_area.right
             || area.bottom != state.work_area.bottom
+            || area.screen != state.work_area.screen
             || (area.scale_factor - state.work_area.scale_factor).abs() >= 0.001
         {
             state.work_area = area;
@@ -905,7 +910,7 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
             if pointer_inside {
                 state.awaiting_pointer_entry = false;
             }
-            if pointer_inside || state.awaiting_pointer_entry || now < state.grace_until {
+            if pointer_inside || edge_hovered || state.awaiting_pointer_entry || now < state.grace_until {
                 state.leave_at = None;
             } else if let Some(deadline) = state.leave_at {
                 if now >= deadline {
@@ -1077,6 +1082,12 @@ fn work_area_near_point(app: &AppHandle, point: POINT) -> Option<WorkArea> {
         top: info.rcWork.top,
         right: info.rcWork.right,
         bottom: info.rcWork.bottom,
+        screen: RectPx {
+            left: info.rcMonitor.left,
+            top: info.rcMonitor.top,
+            width: info.rcMonitor.right - info.rcMonitor.left,
+            height: info.rcMonitor.bottom - info.rcMonitor.top,
+        },
         scale_factor,
     })
 }
@@ -1231,33 +1242,34 @@ fn logical_edge_length_for_rect(
 }
 
 fn cursor_in_edge_trigger(area: WorkArea, sidebar: RectPx, edge: DockEdge, point: POINT) -> bool {
-    if !area.contains(point) {
+    let screen = area.screen;
+    if !screen.contains(point) {
         return false;
     }
     let trigger = (EDGE_TRIGGER_LOGICAL * area.scale_factor).round().max(2.0) as i32;
     let vertical_guard = ((EDGE_CORNER_GUARD_LOGICAL * area.scale_factor).round() as i32)
-        .min(area.height() / 4)
+        .min(screen.height / 4)
         .max(0);
     let horizontal_guard = ((EDGE_CORNER_GUARD_LOGICAL * area.scale_factor).round() as i32)
-        .min(area.width() / 4)
+        .min(screen.width / 4)
         .max(0);
-    let vertical_start = sidebar.top.max(area.top + vertical_guard);
-    let vertical_end = sidebar.bottom().min(area.bottom - vertical_guard);
-    let horizontal_start = sidebar.left.max(area.left + horizontal_guard);
-    let horizontal_end = sidebar.right().min(area.right - horizontal_guard);
+    let vertical_start = sidebar.top.max(screen.top + vertical_guard);
+    let vertical_end = sidebar.bottom().min(screen.bottom() - vertical_guard);
+    let horizontal_start = sidebar.left.max(screen.left + horizontal_guard);
+    let horizontal_end = sidebar.right().min(screen.right() - horizontal_guard);
 
     match edge {
         DockEdge::Left => {
-            point.x < area.left + trigger && point.y >= vertical_start && point.y < vertical_end
+            point.x < screen.left + trigger && point.y >= vertical_start && point.y < vertical_end
         }
         DockEdge::Right => {
-            point.x >= area.right - trigger && point.y >= vertical_start && point.y < vertical_end
+            point.x >= screen.right() - trigger && point.y >= vertical_start && point.y < vertical_end
         }
         DockEdge::Top => {
-            point.y < area.top + trigger && point.x >= horizontal_start && point.x < horizontal_end
+            point.y < screen.top + trigger && point.x >= horizontal_start && point.x < horizontal_end
         }
         DockEdge::Bottom => {
-            point.y >= area.bottom - trigger
+            point.y >= screen.bottom() - trigger
                 && point.x >= horizontal_start
                 && point.x < horizontal_end
         }
@@ -1271,7 +1283,7 @@ fn cursor_entered_edge_with_intent(
     previous: POINT,
     current: POINT,
 ) -> bool {
-    if !area.contains(previous)
+    if !area.screen.contains(previous)
         || !cursor_in_edge_trigger(area, sidebar, edge, current)
         || cursor_in_edge_trigger(area, sidebar, edge, previous)
     {
@@ -1282,11 +1294,12 @@ fn cursor_entered_edge_with_intent(
 }
 
 fn edge_distance(area: WorkArea, edge: DockEdge, point: POINT) -> i32 {
+    let screen = area.screen;
     match edge {
-        DockEdge::Left => point.x - area.left,
-        DockEdge::Top => point.y - area.top,
-        DockEdge::Right => area.right - 1 - point.x,
-        DockEdge::Bottom => area.bottom - 1 - point.y,
+        DockEdge::Left => point.x - screen.left,
+        DockEdge::Top => point.y - screen.top,
+        DockEdge::Right => screen.right() - 1 - point.x,
+        DockEdge::Bottom => screen.bottom() - 1 - point.y,
     }
 }
 
@@ -1426,6 +1439,7 @@ mod tests {
             top: 0,
             right: 1920,
             bottom: 1040,
+            screen: RectPx { left: 0, top: 0, width: 1920, height: 1080 },
             scale_factor: 1.0,
         }
     }
@@ -1486,6 +1500,60 @@ mod tests {
             DockEdge::Right,
             POINT { x: 1919, y: 100 }
         ));
+    }
+
+    #[test]
+    fn taskbar_reservation_does_not_move_the_screen_edge_trigger() {
+        for (edge, left, top, right, bottom, outer, inner) in [
+            (DockEdge::Bottom, 0, 0, 1920, 1040,
+                POINT { x: 960, y: 1079 }, POINT { x: 960, y: 1039 }),
+            (DockEdge::Top, 0, 40, 1920, 1080,
+                POINT { x: 960, y: 0 }, POINT { x: 960, y: 40 }),
+            (DockEdge::Left, 48, 0, 1920, 1080,
+                POINT { x: 0, y: 540 }, POINT { x: 48, y: 540 }),
+            (DockEdge::Right, 0, 0, 1872, 1080,
+                POINT { x: 1919, y: 540 }, POINT { x: 1871, y: 540 }),
+        ] {
+            let work = WorkArea { left, top, right, bottom, ..area() };
+            let sidebar = sidebar_rect(work, edge, 420.0, None, 1.0);
+            assert!(cursor_in_edge_trigger(work, sidebar, edge, outer), "{edge:?}");
+            assert!(!cursor_in_edge_trigger(work, sidebar, edge, inner), "{edge:?}");
+            // The visible sidebar still fits inside the area above/beside the taskbar.
+            assert!(sidebar.left >= left && sidebar.top >= top);
+            assert!(sidebar.right() <= right && sidebar.bottom() <= bottom);
+        }
+    }
+
+    #[test]
+    fn bottom_reveal_accepts_approaching_through_the_taskbar() {
+        let bottom = sidebar_rect(area(), DockEdge::Bottom, 420.0, None, 1.0);
+        assert!(cursor_entered_edge_with_intent(
+            area(), bottom, DockEdge::Bottom,
+            POINT { x: 960, y: 1070 }, POINT { x: 960, y: 1079 },
+        ));
+        assert!(!cursor_entered_edge_with_intent(
+            area(), bottom, DockEdge::Bottom,
+            POINT { x: 960, y: 1080 }, POINT { x: 960, y: 1079 },
+        ));
+    }
+
+    #[test]
+    fn bottom_trigger_keeps_saved_span_and_dpi_on_a_negative_monitor() {
+        let work = WorkArea {
+            left: -2880, top: 0, right: 0, bottom: 1548,
+            screen: RectPx { left: -2880, top: 0, width: 2880, height: 1620 },
+            scale_factor: 1.5,
+        };
+        let sidebar = sidebar_rect_at(work, DockEdge::Bottom, 320.0, Some(640.0), 1.0, 0.75);
+        let x = sidebar.left + sidebar.width / 2;
+        assert!(cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1619 }));
+        assert!(cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1615 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1614 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1547 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1620 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom,
+            POINT { x: sidebar.left - 1, y: 1619 }));
+        assert!(sidebar.bottom() <= work.bottom);
     }
 
     #[test]
