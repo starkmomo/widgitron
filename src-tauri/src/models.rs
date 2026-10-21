@@ -127,6 +127,8 @@ pub struct AppConfig {
     pub sidebar_theme: Option<SidebarThemeConfig>,
     pub sidebar_width: Option<f64>,
     pub sidebar_length: Option<f64>,
+    /// Position within the unused edge span: 0 = start, 1 = end; unset = center.
+    pub sidebar_offset: Option<f64>,
     pub sidebar_widgets: Option<HashMap<String, bool>>,
     pub sidebar_layout: Option<HashMap<String, f64>>,
     pub sidebar_order: Option<Vec<String>>,
@@ -302,6 +304,7 @@ impl Default for AppConfig {
             }),
             sidebar_width: Some(320.0),
             sidebar_length: None,
+            sidebar_offset: None,
             sidebar_widgets: Some(sidebar_widgets),
             sidebar_layout: Some(sidebar_layout),
             sidebar_order: Some(vec![

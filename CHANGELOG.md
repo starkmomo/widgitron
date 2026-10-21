@@ -23,6 +23,7 @@
 - **外观设置**：四个浮窗的主题集中管理，提供跟随主界面、浅色、深色、透明和玻璃，以及多个自定义主题。支持新建、复制、删除确认和卡片背景自定义，使用紧凑等高预览；侧边栏主题独立选择，编辑面板可展开、收起。
 - **玻璃与阅读**：优化玻璃配色、文字对比度和圆角高光，减少重复底色与失焦变色。macOS 的玻璃主题升级为“液态玻璃”，背景与卡片默认使用 8% 黑色衬底，失焦保留效果；Windows 保持原有玻璃主题。修复主题切换时内容消失。关键词菜单和完整摘要匹配当前主题，虚化后方内容并保留圆角；菜单支持外部点击、Esc 收起，展开时阻断卡片手势。收紧摘要行距，保留滚动阅读。
 - **尺寸与排版**：侧边栏模块标题与操作合入彩色顶栏。额度、GPU、会议的浮窗和侧边栏最小高度按首张卡片实测，侧边栏最大高度随完整内容变化，仅从底边调整高度；会议时间线展开时自动增高。arXiv 保留更大阅读区域，调整浮窗大小时显示尺寸。
+- **侧边栏停靠**：左右停靠调高度，上下停靠调宽度；标题沿边移动，左侧手柄切换停靠边缘，记忆尺寸与位置并限制在屏幕内。扩大缩放热区，拖动预览保持跟手，调整后不再立即收起；修复 macOS 调整卡片时主窗口抢前景及屏幕上沿无法呼出的问题，Windows 同步停靠与位置记忆逻辑。
 - **显示与操作**：两平台默认解锁并置于桌面层，统一悬停显示锁定、置顶、隐藏按钮。隐藏/显示浮窗保留模块选择，全关后重置隐藏状态。macOS 浮窗与侧边栏支持普通桌面切换，修复闪现及点击、拖动问题。侧边栏可彻底停用，钉选与设置同步；修复会议时间线展开时宽度跳动。
 
 #### 额度与 GPU 监控
@@ -64,6 +65,7 @@
 - **Appearance settings**: Manage all four widgets together with Follow main, Light, Dark, Transparent, Glass, and multiple custom themes. Support creation, copying, deletion confirmation, card backgrounds, and compact equal-height previews. Keep sidebar themes independent, with a collapsible editor.
 - **Glass and reading**: Refine glass colors, contrast, and edge highlights; reduce stacked fills and focus-related changes. Replace macOS Glass with native Liquid Glass, using 8% black backgrounds and card fills and preserving the inactive effect. Keep Windows Glass unchanged and fix disappearing content when switching themes. Match keyword menus and full abstracts to the selected theme, blur underlying content, and preserve corners. Dismiss menus with outside clicks or Escape and block card gestures while open. Use tighter, scrollable abstract text.
 - **Sizing and layout**: Move sidebar titles and actions into colored module headers. Measure the first quota, GPU, or conference card to set widget and sidebar minimum heights. Cap sidebar heights at their full content, resize them from the bottom, and grow conference cards when timelines open. Reserve more reading space for arXiv and show floating dimensions while resizing.
+- **Sidebar docking**: Resize height when docked left/right and width when docked top/bottom. Drag the title along its edge or the left grip to change edges; remember size and position within screen bounds. Enlarge resize targets, keep drag previews under the pointer, and prevent immediate hiding after adjustments. Fix macOS dashboard activation during card resizing and top-edge reveal; apply docking and position persistence to Windows as well.
 - **Visibility and controls**: Default both platforms to unlocked desktop widgets with consistent hover controls. Hide/show preserves selected modules; switching every widget off resets temporary hiding. Support ordinary macOS Spaces for widgets and the sidebar, and fix flashes, clicks, and dragging. Allow the sidebar to be disabled, synchronize its pin setting, and prevent conference timeline width shifts.
 
 #### Quota and GPU Monitoring

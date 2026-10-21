@@ -2,13 +2,14 @@
 //! use native edge cursors and edge-only resize hit targets for these windows.
 //! Interior content stays with the WebView, with no activation or global monitor.
 use std::cell::Cell;
+use tauri::Manager;
 
 use objc2::{
     available, define_class, msg_send, rc::Retained, runtime::Bool, AnyThread, DeclaredClass,
     MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSCursor, NSCursorFrameResizeDirections,
+    NSApplication, NSAutoresizingMaskOptions, NSCursor, NSCursorFrameResizeDirections,
     NSCursorFrameResizePosition, NSEvent, NSGlassEffectView, NSTrackingArea, NSTrackingAreaOptions,
     NSUserInterfaceItemIdentification, NSView, NSVisualEffectView, NSWindow,
 };
@@ -31,7 +32,9 @@ struct HoverIvars {
     window: tauri::WebviewWindow,
     hovered: Cell<bool>,
     resize_cursor: Cell<Option<ResizeEdge>>,
+    header_cursor: Cell<bool>,
     drag: Cell<Option<ResizeDrag>>,
+    move_start: Cell<Option<NSRect>>,
 }
 
 define_class!(
@@ -51,12 +54,17 @@ define_class!(
             // retained while converting the parent's coordinate to this view.
             let parent = unsafe { self.superview() };
             let local = self.convertPoint_fromView(point, parent.as_deref());
-            if self.edge_at(local).is_some() { (self as *const Self).cast_mut().cast() }
+            if self.edge_at(local).is_some() || self.owns_header(local) { (self as *const Self).cast_mut().cast() }
             else { std::ptr::null_mut() }
         }
 
         #[unsafe(method(acceptsFirstMouse:))]
         fn accepts_first_mouse(&self, _event: &NSEvent) -> Bool { Bool::YES }
+
+        #[unsafe(method(shouldDelayWindowOrderingForEvent:))]
+        fn delay_ordering(&self, _event: &NSEvent) -> Bool {
+            Bool::new(self.ivars().window.label() == "sidebar")
+        }
 
         #[unsafe(method(mouseEntered:))]
         fn mouse_entered(&self, event: &NSEvent) {
@@ -71,21 +79,68 @@ define_class!(
             self.update_cursor(event);
         }
 
+        #[unsafe(method(cursorUpdate:))]
+        fn cursor_update(&self, event: &NSEvent) { self.update_cursor(event); }
+
+        #[unsafe(method(resetCursorRects))]
+        fn reset_cursor_rects(&self) {
+            if self.ivars().window.label() != "sidebar" { return; }
+            let bounds = self.bounds();
+            let band = crate::sidebar_dock::native_resize_band();
+            let (header_height, controls_width) = crate::sidebar_dock::native_header_metrics();
+            let top_band = (header_height / 44.0 * 6.0).clamp(4.0, 8.0);
+            let rect = |x, y, width, height| NSRect::new(NSPoint::new(x, y), objc2_foundation::NSSize::new(width, height));
+            if crate::sidebar_dock::native_vertical() {
+                let grip_end = header_height / 44.0 * 40.0;
+                self.addCursorRect_cursor(rect(grip_end, bounds.size.height - top_band, (bounds.size.width - controls_width - grip_end).max(1.0), top_band), &resize_cursor(ResizeEdge::North));
+                self.addCursorRect_cursor(rect(0.0, 0.0, bounds.size.width, band), &resize_cursor(ResizeEdge::South));
+            } else {
+                self.addCursorRect_cursor(rect(0.0, 0.0, band, (bounds.size.height - header_height).max(1.0)), &resize_cursor(ResizeEdge::West));
+                self.addCursorRect_cursor(rect(bounds.size.width - band, 0.0, band, (bounds.size.height - header_height).max(1.0)), &resize_cursor(ResizeEdge::East));
+            }
+        }
+
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
             self.publish(false);
-            if self.ivars().drag.get().is_none() { self.clear_resize_cursor(); }
+            if self.ivars().drag.get().is_none() && self.ivars().move_start.get().is_none() { self.clear_resize_cursor(); }
         }
 
         #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, event: &NSEvent) { self.begin_resize(event); }
+        fn mouse_down(&self, event: &NSEvent) {
+            if self.ivars().window.label() == "sidebar" {
+                NSApplication::sharedApplication(self.mtm()).preventWindowOrdering();
+                if self.edge_at(self.convertPoint_fromView(event.locationInWindow(), None)).is_none() {
+                    if let Some(window) = self.window() {
+                        let point = self.convertPoint_fromView(event.locationInWindow(), None);
+                        let bounds = self.bounds();
+                        let y = if self.isFlipped() { point.y } else { bounds.size.height - point.y };
+                        let allow_undock = crate::sidebar_dock::native_undock_hit(point.x, y, bounds.size.width);
+                        self.ivars().move_start.set(Some(window.frame()));
+                        crate::sidebar_dock::begin_native_interaction(self.ivars().window.app_handle(), true, allow_undock);
+                        NSCursor::closedHandCursor().set();
+                        self.ivars().header_cursor.set(true);
+                    }
+                    return;
+                }
+            }
+            self.begin_resize(event);
+        }
 
         #[unsafe(method(mouseDragged:))]
-        fn mouse_dragged(&self, _event: &NSEvent) { self.resize(); }
+        fn mouse_dragged(&self, _event: &NSEvent) {
+            if self.ivars().move_start.get().is_some() {
+                if let Err(error) = crate::sidebar_dock::update_native_move(&self.ivars().window) {
+                    log::warn!("Sidebar drag failed: {error}");
+                }
+                NSCursor::closedHandCursor().set();
+            } else { self.resize(); }
+        }
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
-            self.ivars().drag.set(None);
+            self.finish_move();
+            self.finish_resize();
             self.update_cursor(event);
         }
     }
@@ -97,7 +152,9 @@ impl WidgetHoverView {
             window,
             hovered: Cell::new(false),
             resize_cursor: Cell::new(None),
+            header_cursor: Cell::new(false),
             drag: Cell::new(None),
+            move_start: Cell::new(None),
         });
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
@@ -110,14 +167,41 @@ impl WidgetHoverView {
         } else {
             bounds.size.height - (point.y - bounds.origin.y)
         };
-        geometry::edge_at(x, y, bounds.size.width, bounds.size.height)
+        if self.ivars().window.label() == "sidebar" {
+            if x < 0.0 || y < 0.0 || x > bounds.size.width || y > bounds.size.height { return None; }
+            let band = crate::sidebar_dock::native_resize_band();
+            let (header_height, controls_width) = crate::sidebar_dock::native_header_metrics();
+            let top_band = (header_height / 44.0 * 6.0).clamp(4.0, 8.0);
+            if crate::sidebar_dock::native_vertical() {
+                // Keep the header's close/pin buttons outside the widened top
+                // target; the lower edge remains one continuous easy target.
+                if y <= top_band && (x < bounds.size.width - controls_width || y <= 4.0)
+                    && !crate::sidebar_dock::native_undock_hit(x, y, bounds.size.width) { Some(ResizeEdge::North) }
+                else if y >= bounds.size.height - band { Some(ResizeEdge::South) }
+                else { None }
+            } else if y < header_height && x > 4.0 && x < bounds.size.width - 4.0 { None }
+            else if x <= band { Some(ResizeEdge::West) }
+            else if x >= bounds.size.width - band { Some(ResizeEdge::East) }
+            else { None }
+        } else {
+            geometry::edge_at(x, y, bounds.size.width, bounds.size.height)
+        }
+    }
+
+    fn owns_header(&self, point: NSPoint) -> bool {
+        let bounds = self.bounds();
+        let y = if self.isFlipped() { point.y - bounds.origin.y }
+            else { bounds.size.height - (point.y - bounds.origin.y) };
+        self.ivars().window.label() == "sidebar"
+            && crate::sidebar_dock::native_header_hit(point.x - bounds.origin.x, y, bounds.size.width)
     }
 
     fn update_cursor(&self, event: &NSEvent) {
         // A hide/theme change can interrupt a drag before mouseUp arrives.
         // Do not let that old gesture keep owning the cursor after release.
         if NSEvent::pressedMouseButtons() & 1 == 0 {
-            self.ivars().drag.set(None);
+            self.finish_move();
+            self.finish_resize();
         }
         let point = self.convertPoint_fromView(event.locationInWindow(), None);
         if let Some(edge) = self.edge_at(point) {
@@ -125,13 +209,18 @@ impl WidgetHoverView {
             resize_cursor(edge).set();
         } else {
             self.clear_resize_cursor();
+            if self.owns_header(point) {
+                NSCursor::openHandCursor().set();
+                self.ivars().header_cursor.set(true);
+            }
         }
     }
 
     fn clear_resize_cursor(&self) {
         // Only restore a cursor that this tracker set. Leave text/link cursors
         // in the interior entirely to WebKit.
-        if self.ivars().resize_cursor.replace(None).is_some() {
+        let header = self.ivars().header_cursor.replace(false);
+        if self.ivars().resize_cursor.replace(None).is_some() || header {
             NSCursor::arrowCursor().set();
         }
     }
@@ -155,8 +244,30 @@ impl WidgetHoverView {
                 height: frame.size.height,
             },
         }));
+        if self.ivars().window.label() == "sidebar" {
+            crate::sidebar_dock::begin_native_interaction(self.ivars().window.app_handle(), false, false);
+        }
         self.ivars().resize_cursor.set(Some(edge));
         resize_cursor(edge).set();
+    }
+
+    fn finish_move(&self) {
+        let Some(start) = self.ivars().move_start.replace(None) else { return; };
+        let changed = self.window().is_some_and(|window| window.frame() != start);
+        crate::sidebar_dock::finish_native_interaction(&self.ivars().window, true, changed);
+        self.ivars().header_cursor.set(false);
+        NSCursor::arrowCursor().set();
+    }
+
+    fn finish_resize(&self) {
+        let Some(drag) = self.ivars().drag.replace(None) else { return; };
+        if self.ivars().window.label() == "sidebar" {
+            let changed = self.window().is_some_and(|window| {
+                let size = window.frame().size;
+                size.width != drag.start_frame.width || size.height != drag.start_frame.height
+            });
+            crate::sidebar_dock::finish_native_interaction(&self.ivars().window, false, changed);
+        }
     }
 
     fn resize(&self) {
@@ -186,6 +297,16 @@ impl WidgetHoverView {
         frame.origin.y = next.y;
         frame.size.width = next.width;
         frame.size.height = next.height;
+        if self.ivars().window.label() == "sidebar" {
+            if let Some(screen) = window.screen() {
+                let area = screen.visibleFrame();
+                let (x, width) = crate::sidebar_placement::bounded_span(frame.origin.x, frame.size.width,
+                    area.origin.x, area.size.width, minimum.width);
+                let (y, height) = crate::sidebar_placement::bounded_span(frame.origin.y, frame.size.height,
+                    area.origin.y, area.size.height, minimum.height);
+                frame = NSRect::new(NSPoint::new(x, y), objc2_foundation::NSSize::new(width, height));
+            }
+        }
         window.setFrame_display(frame, true);
         resize_cursor(drag.edge).set();
     }
@@ -296,6 +417,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {
                 tracker.addTrackingArea(&area);
                 // The native hierarchy owns the tracker and its tracking area.
                 host.addSubview(&tracker);
+                native.invalidateCursorRectsForView(&tracker);
                 Ok(())
             })();
             if let Err(error) = result {

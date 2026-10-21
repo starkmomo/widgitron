@@ -211,6 +211,8 @@ const ZH: Record<string, string> = {
   "Open Log Folder": "打开日志文件夹", "Dock Edge": "停靠边缘",
   "Reveal Sidebar": "打开侧边栏", "Slide the docked widget hub into view.": "显示汇集各模块的侧边栏。",
   "Choose an edge here, or drag the sidebar header near any screen edge to snap it there.": "选择停靠边缘，或拖动侧边栏顶部靠近屏幕边缘。",
+  "Drag to change dock edge": "拖动以切换停靠边缘",
+  "Drag the grip to change edges; drag the title to reposition.": "拖动手柄切换边缘，拖动标题沿边移动。",
   "Choose the screen edge where the sidebar opens.": "选择侧边栏打开时所靠近的屏幕边缘。",
   "Left": "左", "Top": "上", "Right": "右", "Bottom": "下",
   "Pin Display": "保持显示", "Keep the sidebar pinned open instead of hiding when the pointer leaves.": "让侧边栏保持打开。",

@@ -548,8 +548,9 @@ pub async fn set_sidebar_pinned(
 #[tauri::command]
 pub async fn begin_sidebar_drag(
     app: tauri::AppHandle,
+    allow_undock: Option<bool>,
 ) -> Result<crate::sidebar_dock::SidebarDockState, String> {
-    crate::sidebar_dock::begin_drag(&app)
+    crate::sidebar_dock::begin_drag(&app, allow_undock.unwrap_or(false))
 }
 
 #[tauri::command]

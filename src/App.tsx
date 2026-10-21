@@ -1586,7 +1586,7 @@ function App() {
           // The native loop owns drag state. Its completion event can arrive
           // before this command resolves, so applying the command's initial
           // snapshot here could leave the "moving" overlay stuck on screen.
-          await tauriInvoke("begin_sidebar_drag");
+          await tauriInvoke("begin_sidebar_drag", { allowUndock: !!target.closest('[data-sidebar-undock="true"]') });
           return;
         }
         if (isWindows && windowLabel.startsWith("widget-")) {
@@ -1726,8 +1726,8 @@ function App() {
     const sidebarDragMessage = sidebarDockState.preview_edge
       ? "Release to dock on the " + sidebarEdgeLabels[sidebarDockState.preview_edge] + " edge"
       : "Move toward any screen edge to preview docking";
-    // Keep resize hit targets thin (h-1.5 / w-1.5). The previous h-4 / w-4
-    // strips covered most of the top drag header and stole window moves.
+    // Give resizing an easy target while reserving header buttons and the
+    // remaining header area for dragging. macOS uses matching native targets.
     const sidebarWindowResizeHandles: Array<{
       direction: NativeResizeDirection;
       className: string;
@@ -1737,13 +1737,13 @@ function App() {
       ? [
           {
             direction: "North",
-            className: "top-0 left-3 right-3 h-1.5",
+            className: "top-0 left-10 right-[84px] h-2",
             cursor: "ns-resize",
             label: "Resize sidebar from top edge",
           },
           {
             direction: "South",
-            className: "bottom-0 left-3 right-3 h-1.5",
+            className: "bottom-0 inset-x-0 h-3.5",
             cursor: "ns-resize",
             label: "Resize sidebar from bottom edge",
           },
@@ -1751,13 +1751,13 @@ function App() {
       : [
           {
             direction: "West",
-            className: "left-0 top-3 bottom-3 w-1.5",
+            className: "left-0 top-11 bottom-0 w-3.5",
             cursor: "ew-resize",
             label: "Resize sidebar from left edge",
           },
           {
             direction: "East",
-            className: "right-0 top-3 bottom-3 w-1.5",
+            className: "right-0 top-11 bottom-0 w-3.5",
             cursor: "ew-resize",
             label: "Resize sidebar from right edge",
           },
@@ -2109,7 +2109,7 @@ function App() {
           outlineOffset: sidebarDockState.dragging ? "-2px" : undefined,
         } as React.CSSProperties}
       >
-        {sidebarWindowResizeHandles.map((handle) => (
+        {!isMacOS && sidebarWindowResizeHandles.map((handle) => (
           <div
             key={handle.direction}
             role="separator"
@@ -2127,14 +2127,25 @@ function App() {
             }}
           />
         ))}
+        <span aria-hidden="true" className={`pointer-events-none absolute z-[75] rounded-full ${sidebarIsLight ? "bg-slate-400/65" : "bg-white/50"} ${
+          sidebarDockState.edge === "left" || sidebarDockState.edge === "right"
+            ? "bottom-1 left-1/2 h-[3px] w-8 -translate-x-1/2"
+            : "right-1 top-1/2 h-8 w-[3px] -translate-y-1/2"
+        }`} />
         <header
           aria-label="Drag sidebar"
-          className={`h-11 shrink-0 flex items-center justify-between gap-2 px-3 border-b ${sidebarIsLight ? "border-slate-300/60" : "border-white/10"} ${isMacOS ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
+          className={`relative h-11 shrink-0 flex items-center justify-between gap-2 px-3 border-b ${sidebarIsLight ? "border-slate-300/60" : "border-white/10"} cursor-grab active:cursor-grabbing`}
           style={{ backgroundColor: hexToRgba(sidebarTheme.header, sidebarTheme.header_opacity) }}
           onMouseDown={isMacOS ? undefined : startDrag}
         >
-          <span className="text-xs font-bold tracking-wide">Widgitron Sidebar</span>
-          <div className="flex items-center gap-2" data-no-drag="true" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <button type="button" data-sidebar-undock="true" aria-label="Drag to change dock edge" title="Drag to change dock edge"
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md cursor-grab active:cursor-grabbing ${sidebarIsLight ? "text-slate-400 hover:bg-slate-200" : "text-white/60 hover:bg-white/15"}`}>
+              <GripVertical size={16} aria-hidden="true" />
+            </button>
+            <span className="truncate text-xs font-bold tracking-wide">Widgitron Sidebar</span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2" data-no-drag="true" onMouseDown={(event) => event.stopPropagation()}>
             <button
               type="button"
               aria-label={sidebarDockState.pinned ? "Unpin sidebar" : "Pin sidebar open"}
@@ -2213,7 +2224,9 @@ function App() {
           ref={sidebarScrollRef}
           data-sidebar-scroll={horizontalSidebar ? "horizontal" : "vertical"}
           className={`flex-1 min-h-0 min-w-0 custom-scrollbar px-2 pt-2 ${horizontalSidebar ? "overflow-x-auto overflow-y-hidden pb-2" : "overflow-y-auto overflow-x-hidden"}`}
-          style={{ marginBottom: SIDEBAR_WINDOW_RESIZE_GUTTER }}
+          style={horizontalSidebar
+            ? { marginInline: SIDEBAR_WINDOW_RESIZE_GUTTER }
+            : { marginBottom: SIDEBAR_WINDOW_RESIZE_GUTTER }}
           data-no-drag="true"
         >
           {sidebarSections.length > 0 ? (

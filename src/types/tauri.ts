@@ -334,7 +334,7 @@ export interface TauriCommandArgs {
   toggle_sidebar: undefined;
   get_sidebar_state: undefined;
   set_sidebar_pinned: { pinned: boolean };
-  begin_sidebar_drag: undefined;
+  begin_sidebar_drag: { allowUndock?: boolean };
   exit_app: undefined;
   open_log_dir: undefined;
   open_config_dir: undefined;

@@ -227,6 +227,7 @@ struct DockRuntime {
     native_visible: bool,
     thickness_logical: f64,
     edge_length_logical: Option<f64>,
+    edge_offset: f64,
     ui_scale: f64,
     reveal_dwell: Duration,
     reveal_cooldown: Duration,
@@ -245,9 +246,12 @@ struct DockRuntime {
     dragging: bool,
     drag_start: Option<POINT>,
     drag_has_moved: bool,
+    drag_allow_undock: bool,
     drag_offset: Option<POINT>,
+    drag_grip_inset: Option<(f64, f64)>,
     drag_preview_edge: Option<DockEdge>,
     drag_preview_area: Option<WorkArea>,
+    drag_preview_offset: Option<f64>,
     resizing: bool,
     was_left_down: bool,
     managed_rect: Option<RectPx>,
@@ -260,8 +264,9 @@ impl DockRuntime {
             edge: self.edge.as_str().to_string(),
             pinned: self.pinned,
             expanded: self.visual_expanded,
-            dragging: self.dragging,
-            preview_edge: self.drag_preview_edge.map(|edge| edge.as_str().to_string()),
+            dragging: self.dragging && self.drag_allow_undock && self.drag_has_moved,
+            preview_edge: self.drag_preview_edge.filter(|_| self.drag_allow_undock && self.drag_has_moved)
+                .map(|edge| edge.as_str().to_string()),
         }
     }
 
@@ -350,6 +355,7 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         native_visible: false,
         thickness_logical: config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL),
         edge_length_logical: config.sidebar_length,
+        edge_offset: crate::sidebar_placement::sanitize_offset(config.sidebar_offset),
         ui_scale,
         reveal_dwell,
         reveal_cooldown,
@@ -368,9 +374,12 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         dragging: false,
         drag_start: None,
         drag_has_moved: false,
+        drag_allow_undock: false,
         drag_offset: None,
+        drag_grip_inset: None,
         drag_preview_edge: None,
         drag_preview_area: None,
+        drag_preview_offset: None,
         resizing: false,
         was_left_down: false,
         managed_rect: None,
@@ -421,6 +430,7 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         state.resizing = false;
         state.drag_preview_edge = None;
         state.drag_preview_area = None;
+        state.drag_preview_offset = None;
         state.drag_start = None;
         state.drag_offset = None;
         state.reset_edge_reveal();
@@ -438,6 +448,7 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
     }
     let next_thickness = config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL);
     let next_edge_length = config.sidebar_length;
+    let next_offset = crate::sidebar_placement::sanitize_offset(config.sidebar_offset);
     let now = Instant::now();
 
     if state.edge != next_edge {
@@ -454,6 +465,10 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
     }
     if edge_length_changed(state.edge_length_logical, next_edge_length) {
         state.edge_length_logical = next_edge_length;
+        state.layout_dirty = true;
+    }
+    if (state.edge_offset - next_offset).abs() > 0.0001 {
+        state.edge_offset = next_offset;
         state.layout_dirty = true;
     }
     if (state.ui_scale - next_ui_scale).abs() >= 0.001 {
@@ -575,7 +590,7 @@ pub fn toggle_pinned(
     set_pinned(app, pinned, focus_when_pinning && pinned)
 }
 
-pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
+pub fn begin_drag(app: &AppHandle, allow_undock: bool) -> Result<SidebarDockState, String> {
     require_started()?;
     let runtime = DOCK_RUNTIME
         .get()
@@ -588,6 +603,7 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
     state.dragging = true;
     state.drag_start = cursor;
     state.drag_has_moved = false;
+    state.drag_allow_undock = allow_undock;
     state.drag_offset = match (cursor, current_rect) {
         (Some(cursor), Some(rect)) => Some(POINT {
             x: cursor.x.saturating_sub(rect.left),
@@ -595,8 +611,14 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
         }),
         _ => None,
     };
+    state.drag_grip_inset = if allow_undock {
+        state.drag_offset.map(|grab|
+            (grab.x as f64 / state.work_area.scale_factor,
+             grab.y as f64 / state.work_area.scale_factor))
+    } else { None };
     state.drag_preview_edge = None;
     state.drag_preview_area = None;
+    state.drag_preview_offset = None;
     state.resizing = false;
     state.requested_expanded = true;
     state.awaiting_pointer_entry = false;
@@ -656,18 +678,24 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
     let left_down = is_left_button_down();
     let pointer_button_down = left_down || is_other_pointer_button_down();
     let current_rect = native_window_rect(&window);
+    // Native sizing runs a modal message loop. Completion can arrive without a
+    // polling tick observing the pressed mouse button, especially on fast drags.
+    let resize_finished = crate::windows_frame::take_sidebar_resize_finished();
     let mut should_persist = false;
     let mut event_payload = None;
 
     {
         let mut state = lock_runtime(&runtime);
         if !state.enabled { return; }
-        let shown_rect = sidebar_rect(
+        crate::windows_frame::set_sidebar_axis(state.edge.is_vertical(),
+            (MIN_EDGE_LENGTH_LOGICAL * state.work_area.scale_factor * state.ui_scale).round() as i32);
+        let shown_rect = sidebar_rect_at(
             state.work_area,
             state.edge,
             state.thickness_logical,
             state.edge_length_logical,
             state.ui_scale,
+            state.edge_offset,
         );
         if state.native_visible && !native_is_visible(&window) {
             state.native_visible = false;
@@ -691,24 +719,40 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
 
                 if state.drag_has_moved {
                     if let Some(next_area) = work_area_near_point(&app, point) {
+                        let next_area = if state.drag_allow_undock { next_area } else { state.work_area };
                         let (edge, distance) = nearest_edge(next_area, point);
                         let snap_distance =
                             (SNAP_DISTANCE_LOGICAL * next_area.scale_factor).round() as i32;
-                        let preview_edge = (distance <= snap_distance.max(24)).then_some(edge);
+                        let parallel = !state.drag_allow_undock || (next_area.left == state.work_area.left && next_area.top == state.work_area.top
+                            && state.drag_start.is_some_and(|start| crate::sidebar_placement::stays_on_edge(
+                                state.edge.is_vertical(), (point.x - start.x) as f64, (point.y - start.y) as f64,
+                                next_area.scale_factor)));
+                        let preview_edge = if parallel { Some(state.edge) }
+                            else { (distance <= snap_distance.max(24)).then_some(edge) };
                         let source_rect =
                             state.managed_rect.or(current_rect).unwrap_or(shown_rect);
+                        let mut preview_offset = None;
                         let preview_rect = match preview_edge {
-                            Some(edge) => sidebar_rect(
-                                next_area,
-                                edge,
-                                state.thickness_logical,
-                                state.edge_length_logical,
-                                state.ui_scale,
-                            ),
+                            Some(edge) => {
+                                let centered = sidebar_rect_at(next_area, edge, state.thickness_logical,
+                                    state.edge_length_logical, state.ui_scale, 0.5);
+                                let grab = state.drag_offset.unwrap_or(POINT { x: centered.width / 2, y: 22 });
+                                let grab = crate::sidebar_placement::preview_grab(centered.width as f64, centered.height as f64,
+                                    (grab.x as f64, grab.y as f64), state.drag_grip_inset, next_area.scale_factor);
+                                let offset = crate::sidebar_placement::offset_from_origin(
+                                    if edge.is_vertical() { next_area.top } else { next_area.left } as f64,
+                                    if edge.is_vertical() { next_area.height() } else { next_area.width() } as f64,
+                                    if edge.is_vertical() { centered.height } else { centered.width } as f64,
+                                    if edge.is_vertical() { point.y as f64 - grab.1 } else { point.x as f64 - grab.0 });
+                                preview_offset = Some(offset);
+                                sidebar_rect_at(next_area, edge, state.thickness_logical,
+                                    state.edge_length_logical, state.ui_scale, offset)
+                            },
                             None => floating_drag_preview_rect(
                                 next_area,
                                 point,
                                 state.drag_offset,
+                                state.drag_grip_inset,
                                 source_rect,
                                 state.ui_scale,
                             ),
@@ -721,6 +765,7 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                         }
                         state.drag_preview_edge = preview_edge;
                         state.drag_preview_area = Some(next_area);
+                        state.drag_preview_offset = preview_offset;
                     }
                 }
             }
@@ -731,16 +776,21 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                 {
                     state.edge = edge;
                     state.work_area = next_area;
+                    if let Some(offset) = state.drag_preview_offset { state.edge_offset = offset; }
                 }
                 state.dragging = false;
                 state.drag_start = None;
                 state.drag_has_moved = false;
                 state.drag_offset = None;
+                state.drag_grip_inset = None;
                 state.drag_preview_edge = None;
                 state.drag_preview_area = None;
+                state.drag_preview_offset = None;
                 state.layout_dirty = true;
                 state.requested_expanded = true;
                 state.grace_until = now + SHOW_GRACE;
+                state.awaiting_pointer_entry = true;
+                state.leave_at = None;
                 state.start_reveal_cooldown(now);
                 should_persist = true;
             }
@@ -752,7 +802,7 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                     state.resizing = true;
                 }
             }
-        } else if state.was_left_down && state.resizing {
+        } else if (state.was_left_down && state.resizing) || resize_finished {
             if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
                 let thickness_changed = if state.edge.is_vertical() {
                     (actual.width - managed.width).abs() > 2
@@ -781,13 +831,26 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                         state.ui_scale,
                     ));
                 }
+                state.edge_offset = crate::sidebar_placement::offset_from_origin(
+                    if state.edge.is_vertical() { state.work_area.top } else { state.work_area.left } as f64,
+                    if state.edge.is_vertical() { state.work_area.height() } else { state.work_area.width() } as f64,
+                    if state.edge.is_vertical() { actual.height } else { actual.width } as f64,
+                    if state.edge.is_vertical() { actual.top } else { actual.left } as f64);
                 state.layout_dirty = true;
                 should_persist = true;
             }
             state.resizing = false;
+            state.awaiting_pointer_entry = true;
+            state.leave_at = None;
+            state.grace_until = now + SHOW_GRACE;
         }
 
         state.was_left_down = left_down;
+
+        // Resize and drop may change the visible span during this same tick.
+        // Hit-testing against the old frame would immediately disarm protection.
+        let shown_rect = sidebar_rect_at(state.work_area, state.edge, state.thickness_logical,
+            state.edge_length_logical, state.ui_scale, state.edge_offset);
 
         let previous_cursor = state.last_cursor;
         state.last_cursor = cursor;
@@ -866,12 +929,13 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
         }
 
         if state.layout_dirty && !state.dragging && !left_down {
-            let target = sidebar_rect(
+            let target = sidebar_rect_at(
                 state.work_area,
                 state.edge,
                 state.thickness_logical,
                 state.edge_length_logical,
                 state.ui_scale,
+                state.edge_offset,
             );
             if native_set_window_rect(&window, target).is_ok() {
                 state.managed_rect = Some(target);
@@ -881,12 +945,13 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
 
         if state.requested_expanded {
             if !state.native_visible || state.raise_requested {
-                let target = sidebar_rect(
+                let target = sidebar_rect_at(
                     state.work_area,
                     state.edge,
                     state.thickness_logical,
                     state.edge_length_logical,
                     state.ui_scale,
+                    state.edge_offset,
                 );
                 match show_sidebar_window(&window, target, state.focus_requested) {
                     Ok(()) => {
@@ -944,13 +1009,14 @@ fn persist_runtime_config(app: &AppHandle) {
     let Some(runtime) = DOCK_RUNTIME.get() else {
         return;
     };
-    let (edge, pinned, thickness, edge_length, monitor_x, monitor_y) = {
+    let (edge, pinned, thickness, edge_length, offset, monitor_x, monitor_y) = {
         let state = lock_runtime(runtime);
         (
             state.edge.as_str().to_string(),
             state.pinned,
             state.thickness_logical,
             state.edge_length_logical,
+            state.edge_offset,
             state.work_area.left,
             state.work_area.top,
         )
@@ -960,6 +1026,7 @@ fn persist_runtime_config(app: &AppHandle) {
         config.sidebar_edge = Some(edge);
         config.sidebar_pinned = Some(pinned);
         config.sidebar_width = Some(thickness.round());
+        config.sidebar_offset = Some(offset);
         if let Some(edge_length) = edge_length {
             config.sidebar_length = Some(edge_length.round());
         }
@@ -1014,12 +1081,13 @@ fn work_area_near_point(app: &AppHandle, point: POINT) -> Option<WorkArea> {
     })
 }
 
-fn sidebar_rect(
+fn sidebar_rect_at(
     area: WorkArea,
     edge: DockEdge,
     thickness_logical: f64,
     edge_length_logical: Option<f64>,
     ui_scale: f64,
+    offset: f64,
 ) -> RectPx {
     let dpi_scale = area.scale_factor.max(0.5);
     let content_scale = dpi_scale * crate::ui_scale::sanitize(Some(ui_scale));
@@ -1040,7 +1108,7 @@ fn sidebar_rect(
             edge_length_logical,
             content_scale,
         );
-        let top = area.top + (area.height() - height) / 2;
+        let top = crate::sidebar_placement::edge_origin(area.top as f64, area.height() as f64, height as f64, offset).round() as i32;
         return RectPx {
             left: if matches!(edge, DockEdge::Left) {
                 area.left
@@ -1058,7 +1126,7 @@ fn sidebar_rect(
         edge_length_logical,
         content_scale,
     );
-    let left = area.left + (area.width() - width) / 2;
+    let left = crate::sidebar_placement::edge_origin(area.left as f64, area.width() as f64, width as f64, offset).round() as i32;
     RectPx {
         left,
         top: if matches!(edge, DockEdge::Top) {
@@ -1069,6 +1137,11 @@ fn sidebar_rect(
         width,
         height: thickness,
     }
+}
+
+#[cfg(test)]
+fn sidebar_rect(area: WorkArea, edge: DockEdge, thickness: f64, length: Option<f64>, scale: f64) -> RectPx {
+    sidebar_rect_at(area, edge, thickness, length, scale, 0.5)
 }
 
 fn resolve_edge_length_px(
@@ -1096,6 +1169,7 @@ fn floating_drag_preview_rect(
     area: WorkArea,
     cursor: POINT,
     drag_offset: Option<POINT>,
+    grip_inset: Option<(f64, f64)>,
     source: RectPx,
     ui_scale: f64,
 ) -> RectPx {
@@ -1113,12 +1187,11 @@ fn floating_drag_preview_rect(
         .max(1);
     let width = source.width.clamp(min_width.min(max_width), max_width);
     let height = source.height.clamp(min_height.min(max_height), max_height);
-    let offset_x = drag_offset
-        .map(|offset| offset.x.clamp(0, width.saturating_sub(1)))
-        .unwrap_or(width / 2);
-    let offset_y = drag_offset
-        .map(|offset| offset.y.clamp(0, height.saturating_sub(1)))
-        .unwrap_or(height / 2);
+    let original = drag_offset.map(|offset| (offset.x as f64, offset.y as f64))
+        .unwrap_or((width as f64 / 2.0, height as f64 / 2.0));
+    let grab = crate::sidebar_placement::preview_grab(width as f64, height as f64, original, grip_inset, area.scale_factor);
+    let offset_x = grab.0.round() as i32;
+    let offset_y = grab.1.round() as i32;
     let min_left = area.left + margin;
     let max_left = (area.right - margin - width).max(min_left);
     let min_top = area.top + margin;
@@ -1554,6 +1627,7 @@ mod tests {
             area(),
             POINT { x: 960, y: 520 },
             Some(POINT { x: 210, y: 20 }),
+            None,
             sidebar_rect(area(), DockEdge::Right, 420.0, None, 1.0),
             1.0,
         );

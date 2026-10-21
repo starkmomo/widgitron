@@ -1828,7 +1828,7 @@ export function SettingsPanel({
               Dock Edge
             </div>
             <p className="text-[10px] text-slate-400">
-              {isMacOS ? "Choose the screen edge where the sidebar opens." : "Choose an edge here, or drag the sidebar header near any screen edge to snap it there."}
+              Drag the grip to change edges; drag the title to reposition.
             </p>
           </div>
           <div className={`grid grid-cols-4 gap-1 p-1 rounded-xl border ${

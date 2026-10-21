@@ -43,6 +43,8 @@ mod macos_glass;
 #[cfg(target_os = "macos")]
 mod macos_widget_hover;
 #[cfg(target_os = "macos")]
+mod macos_sidebar_ordering;
+#[cfg(target_os = "macos")]
 mod macos_tray;
 #[cfg(target_os = "macos")]
 mod macos_widget_snapshot;
@@ -63,6 +65,7 @@ mod sidebar_hotkey;
 mod sidebar_hotkey;
 mod sqlite_state;
 mod sidebar_startup;
+mod sidebar_placement;
 mod ui_scale;
 mod utils;
 mod vscode_secrets;
