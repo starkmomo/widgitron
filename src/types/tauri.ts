@@ -297,7 +297,7 @@ export interface TauriCommandArgs {
   };
   set_widget_always_on_top: { label: string; pinned: boolean };
   set_widget_display_mode: { label: string; mode: "topmost" | "desktop" };
-  set_widget_glass: { enabled: boolean; dark: boolean; dockEdge?: SidebarDockState["edge"] | null };
+  set_widget_glass: { enabled: boolean; dark: boolean; dockEdge?: SidebarDockState["edge"] | null; liquid?: boolean };
   save_theme_config: { config: WidgetThemeConfig };
   toggle_widget: { id: string; title: string };
   create_widget: { id: string; title: string };

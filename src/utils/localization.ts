@@ -10,6 +10,9 @@ export function resolveLanguage(language?: string): UiLanguage {
 // The existing interface contains labels in many independent widgets. Keep the
 // source copy intact so the language can be changed live in every Tauri window.
 const ZH: Record<string, string> = {
+  "Liquid Glass": "液态玻璃",
+  "Native macOS glass with a subtle dark tint.": "macOS 原生玻璃，带轻微深色衬底。",
+  "Native effect appears in the floating window. The preview is approximate.": "实际原生效果请查看浮窗，此处仅为示意。",
   "Keywords": "关键词", "Type a keyword, then Enter": "输入关键词，回车添加",
   "Add keyword": "添加关键词", "Remove keyword": "删除关键词",
   "Keyword filtering help": "关键词筛选说明",

@@ -44,7 +44,7 @@ export interface SidebarTileLayoutConfig {
   h?: number;
 }
 
-export type SidebarThemePresetId = "follow" | "midnight" | "light" | "glass";
+export type SidebarThemePresetId = "follow" | "midnight" | "light" | "glass" | "liquid";
 
 /** `transparent` remains readable so existing profiles migrate to Light. */
 export type SidebarThemeKind = SidebarThemePresetId | "transparent" | "custom";
@@ -63,7 +63,7 @@ export interface SidebarThemeDefinition {
   header_opacity?: number;
   card_opacity?: number;
   blur?: number;
-  material?: "native-glass";
+  material?: import("./theme").WidgetMaterial;
   card_background?: import("./theme").CardBackground;
 }
 

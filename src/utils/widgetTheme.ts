@@ -1,6 +1,7 @@
 import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
 import type { DashboardTheme } from "../types/config";
 import { isMacOS, isWindows } from "./platform";
+import { canonicalGlassPresetId, isGlassMaterial, LIQUID_GLASS_BACKGROUND, LIQUID_GLASS_CARD_BACKGROUND, platformGlassMaterial } from "./glassMaterial";
 
 export type WidgetThemeKind = "gpu" | "deadline" | "arxiv" | "quota";
 export const FOLLOW_DASHBOARD_THEME_ID = "@follow-dashboard";
@@ -34,10 +35,10 @@ function lightGlassTextColor(role: "Main Text" | "Sub Text", kind: WidgetThemeKi
 }
 
 export const PRESET_THEME_IDS: Record<WidgetThemeKind, readonly string[]> = {
-  gpu: ["theme-gpu-default", "theme-gpu-light", "theme-gpu-transparent", "theme-gpu-glass"],
-  deadline: ["theme-deadline-default", "theme-deadline-light", "theme-deadline-transparent", "theme-deadline-glass"],
-  arxiv: ["theme-arxiv-default", "theme-arxiv-light", "theme-arxiv-transparent", "theme-arxiv-glass"],
-  quota: ["theme-quota-default", "theme-quota-light", "theme-quota-transparent", "theme-quota-glass"],
+  gpu: ["theme-gpu-default", "theme-gpu-light", "theme-gpu-transparent", "theme-gpu-glass", "theme-gpu-liquid"],
+  deadline: ["theme-deadline-default", "theme-deadline-light", "theme-deadline-transparent", "theme-deadline-glass", "theme-deadline-liquid"],
+  arxiv: ["theme-arxiv-default", "theme-arxiv-light", "theme-arxiv-transparent", "theme-arxiv-glass", "theme-arxiv-liquid"],
+  quota: ["theme-quota-default", "theme-quota-light", "theme-quota-transparent", "theme-quota-glass", "theme-quota-liquid"],
 };
 
 export function widgetThemeKindFromLabel(label: string): WidgetThemeKind {
@@ -87,8 +88,18 @@ export function resolveWidgetTheme(
   const resolvedId = themeId === FOLLOW_DASHBOARD_THEME_ID
     ? `theme-${kind ?? widgetThemeKindFromLabel(windowLabel)}-${options?.dashboardTheme === "light" ? "light" : "default"}`
     : themeId;
-  const theme =
-    config.themes.find((t) => t.id === resolvedId) || config.themes.find((t) => t.id === defaultId);
+  const saved = config.themes.find((t) => t.id === (resolvedId ? canonicalGlassPresetId(resolvedId) : resolvedId))
+    || config.themes.find((t) => t.id === resolvedId) || config.themes.find((t) => t.id === defaultId);
+  const material = platformGlassMaterial(saved?.material);
+  const theme = saved && material !== saved.material ? { ...saved, material } : saved;
+  if (isMacOS && isGlassMaterial(theme?.material) && theme?.is_default) {
+    return { ...theme, name: theme.name.replace(/\b(?:Liquid )?Glass\b/, "Liquid Glass"),
+      bg_color: LIQUID_GLASS_BACKGROUND.color, bg_opacity: LIQUID_GLASS_BACKGROUND.opacity,
+      card_background: { ...LIQUID_GLASS_CARD_BACKGROUND },
+      text_colors: theme.text_colors.map(color => ({ ...color,
+        value: color.name === "Main Text" ? "#ffffff" : color.name === "Sub Text" ? "#f4f4f5" : color.value, opacity: 1 })),
+    };
+  }
   if (theme?.material === "native-glass" && theme.is_default) {
     return {
       ...theme,

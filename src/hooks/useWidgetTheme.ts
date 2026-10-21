@@ -1,3 +1,4 @@
+import { isGlassMaterial } from "../utils/glassMaterial";
 import { useState, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppConfig } from "../types/config";
@@ -26,10 +27,10 @@ export function useWidgetTheme(kind: WidgetThemeKind): WidgetTheme | null {
         win.label === "sidebar" &&
         isLightColor(sidebarTheme.background);
       const resolved = resolveWidgetTheme(latestThemeConfig, win.label, kind, {
-        sidebarLight, sidebarGlass: sidebarTheme.material === "native-glass", dashboardTheme: latestAppConfig?.theme,
+        sidebarLight, sidebarGlass: isGlassMaterial(sidebarTheme.material), dashboardTheme: latestAppConfig?.theme,
       });
-      setCurrentTheme(win.label === "sidebar" && sidebarTheme.material === "native-glass" && resolved
-        ? { ...resolved, material: "native-glass", bg_color: sidebarTheme.background, bg_opacity: sidebarTheme.background_opacity,
+      setCurrentTheme(win.label === "sidebar" && isGlassMaterial(sidebarTheme.material) && resolved
+        ? { ...resolved, material: sidebarTheme.material, bg_color: sidebarTheme.background, bg_opacity: sidebarTheme.background_opacity,
           card_background: sidebarTheme.card_background }
         : resolved);
     };

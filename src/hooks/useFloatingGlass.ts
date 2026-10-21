@@ -6,10 +6,10 @@ import type { SidebarDockState } from "../types/tauri";
 
 /** Serialize native material changes so a late response cannot restore an old preset. */
 export function useFloatingGlass(widget: boolean, ready: boolean, enabled: boolean, dark: boolean,
-  dockEdge: SidebarDockState["edge"] | null = null) {
+  dockEdge: SidebarDockState["edge"] | null = null, liquid = false) {
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const [result, setResult] = useState<{ key: string; applied: boolean } | null>(null);
-  const key = `${enabled}:${dark}:${dockEdge ?? ""}`;
+  const key = `${enabled}:${dark}:${dockEdge ?? ""}:${liquid}`;
   useEffect(() => {
     if (!supportsFloatingGlass || !widget || !ready) return;
     let active = true;
@@ -19,7 +19,7 @@ export function useFloatingGlass(widget: boolean, ready: boolean, enabled: boole
       if (!active) return;
       try {
         const stop = await tauriListen("widget_glass_update", ({ payload }) => {
-          if (active && `${payload.enabled}:${payload.dark}:${payload.dock_edge ?? ""}` === key) {
+          if (active && !liquid && `${payload.enabled}:${payload.dark}:${payload.dock_edge ?? ""}:false` === key) {
             updates += 1;
             setResult({ key, applied: payload.applied });
           }
@@ -27,7 +27,7 @@ export function useFloatingGlass(widget: boolean, ready: boolean, enabled: boole
         if (!active) { stop(); return; }
         unlisten = stop;
         const beforeInvoke = updates;
-        const applied = await tauriInvoke("set_widget_glass", { enabled, dark, dockEdge });
+        const applied = await tauriInvoke("set_widget_glass", { enabled, dark, dockEdge, liquid });
         // A newer reparent/resize event wins over an older command response.
         if (active && updates === beforeInvoke) setResult({ key, applied });
       } catch (error) {
@@ -36,6 +36,6 @@ export function useFloatingGlass(widget: boolean, ready: boolean, enabled: boole
       }
     });
     return () => { active = false; unlisten?.(); };
-  }, [widget, ready, enabled, dark, dockEdge, key]);
+  }, [widget, ready, enabled, dark, dockEdge, liquid, key]);
   return enabled && result?.key === key && result.applied;
 }

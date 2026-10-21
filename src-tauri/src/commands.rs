@@ -346,17 +346,17 @@ pub async fn set_widget_display_mode(
 
 #[tauri::command]
 pub async fn set_widget_glass(window: tauri::WebviewWindow, enabled: bool, dark: bool,
-    dock_edge: Option<crate::glass_shape::GlassDockEdge>) -> Result<bool, String> {
+    dock_edge: Option<crate::glass_shape::GlassDockEdge>, liquid: Option<bool>) -> Result<bool, String> {
     if window.label() != "sidebar" && !crate::widget_layout::is_tracked_widget(window.label()) {
         return Err("Glass is only supported for the sidebar and independent widgets".into());
     }
     let dock_edge = if window.label() == "sidebar" { Some(dock_edge.unwrap_or(crate::glass_shape::GlassDockEdge::Right)) } else { None };
     #[cfg(target_os = "macos")]
-    { crate::macos_glass::set_widget_glass(&window, enabled, dark, dock_edge).await }
+    { crate::macos_glass::set_widget_glass(&window, enabled, dark, dock_edge, liquid.unwrap_or(false)).await }
     #[cfg(windows)]
-    { crate::windows_glass::set_widget_glass(&window, enabled, dark, dock_edge).await }
+    { let _ = liquid; crate::windows_glass::set_widget_glass(&window, enabled, dark, dock_edge).await }
     #[cfg(not(any(target_os = "macos", windows)))]
-    { let _ = (window, enabled, dark, dock_edge); Ok(false) }
+    { let _ = (window, enabled, dark, dock_edge, liquid); Ok(false) }
 }
 
 #[tauri::command]

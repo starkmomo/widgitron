@@ -565,6 +565,7 @@ pub struct CardBackground {
 pub enum WidgetMaterial {
     #[serde(alias = "liquid-glass")]
     NativeGlass,
+    NativeLiquidGlass,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -594,6 +595,26 @@ pub struct WidgetThemeConfig {
 #[cfg(test)]
 mod widget_material_tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_liquid_glass_has_a_distinct_persistent_material() {
+        let mut config = WidgetThemeConfig::default();
+        let theme = config.themes.iter_mut().find(|theme| theme.id == "theme-arxiv-glass").unwrap();
+        assert!(matches!(theme.material, Some(WidgetMaterial::NativeLiquidGlass)));
+        assert_eq!(theme.bg_color, "#000000");
+        assert!((theme.bg_opacity - 0.08).abs() < f32::EPSILON);
+        let card = theme.card_background.as_ref().unwrap();
+        assert_eq!(card.color, "#000000");
+        assert!((card.opacity - 0.08).abs() < f32::EPSILON);
+        assert!(theme.text_colors.iter().all(|color| color.opacity == Some(1.0)));
+        let json = serde_json::to_value(theme).unwrap();
+        assert_eq!(json["material"], "native-liquid-glass");
+        let restored: WidgetTheme = serde_json::from_value(json).unwrap();
+        assert!(matches!(restored.material, Some(WidgetMaterial::NativeLiquidGlass)));
+        assert!(matches!(serde_json::from_str::<WidgetMaterial>("\"liquid-glass\"").unwrap(), WidgetMaterial::NativeGlass));
+        assert!(!config.themes.iter().any(|theme| theme.id.ends_with("-liquid")));
+    }
 
     #[test]
     fn partial_theme_config_recovers_defaults_without_losing_assignments() {
@@ -985,6 +1006,19 @@ impl Default for WidgetThemeConfig {
             theme.name = name.into();
             theme.material = Some(WidgetMaterial::NativeGlass);
             theme.bg_opacity = 0.05;
+            #[cfg(target_os = "macos")]
+            {
+                theme.name = name.replace("Glass", "Liquid Glass");
+                theme.material = Some(WidgetMaterial::NativeLiquidGlass);
+                theme.bg_color = "#000000".into();
+                theme.bg_opacity = 0.08;
+                theme.card_background = Some(CardBackground { color: "#000000".into(), opacity: 0.08 });
+                for color in &mut theme.text_colors {
+                    if color.name == "Main Text" { color.value = "#ffffff".into(); }
+                    if color.name == "Sub Text" { color.value = "#f4f4f5".into(); }
+                    color.opacity = Some(1.0);
+                }
+            }
             theme
         };
         let gpu_glass = glass_theme(&gpu_light, "GPU Glass");

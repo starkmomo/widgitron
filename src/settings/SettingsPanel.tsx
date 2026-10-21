@@ -1,3 +1,4 @@
+import { isGlassMaterial } from "../utils/glassMaterial";
 import { useState, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Sun, Moon, X, Plus, RotateCcw, RefreshCw, Settings, Cpu, Calendar, BookOpen, Coins, Info, GripVertical, ChevronDown, PanelRight, ArrowLeft, ArrowUp, ArrowRight, ArrowDown, Copy, Pencil, Trash2, Keyboard, PanelsTopLeft } from "lucide-react";
 import { motion, AnimatePresence, Reorder, useDragControls } from "framer-motion";
@@ -2122,10 +2123,10 @@ export function SettingsPanel({
                       className={isWindows ? "floating-preview-scene relative isolate h-20 overflow-hidden rounded-t-[11px]" : "floating-preview-scene relative h-20 overflow-hidden"}
                     >
                       <div
-                        data-glass-tone={theme.material === "native-glass" ? (isLightColor(theme.background) ? "light" : "dark") : undefined}
-                        className={`absolute inset-0 p-2 ${isWindows ? "rounded-t-[11px] " : ""}${theme.material === "native-glass" ? `glass-surface glass-preview glass-sidebar${isWindows ? "" : " rounded-l-lg"}` : ""}`}
+                        data-glass-tone={isGlassMaterial(theme.material) ? (isLightColor(theme.background) ? "light" : "dark") : undefined}
+                        className={`absolute inset-0 p-2 ${isWindows ? "rounded-t-[11px] " : ""}${isGlassMaterial(theme.material) ? `glass-surface glass-preview glass-sidebar${isWindows ? "" : " rounded-l-lg"}` : ""}`}
                         style={{
-                          backgroundColor: hexToRgba(theme.background, theme.material === "native-glass" && !isWindows ? (isMacOS ? 0.14 : 0.30) : theme.background_opacity),
+                          backgroundColor: hexToRgba(theme.background, isGlassMaterial(theme.material) && theme.material !== "native-liquid-glass" && !isWindows ? (isMacOS ? 0.14 : 0.30) : theme.background_opacity),
                           backdropFilter: theme.blur > 0 ? `blur(${Math.min(theme.blur, 18)}px)` : undefined,
                         }}
                       >
@@ -2140,7 +2141,7 @@ export function SettingsPanel({
                               key={`${color}-${index}`}
                               className="rounded-md border"
                               style={{
-                                backgroundColor: hexToRgba(theme.background, isMacOS && theme.material === "native-glass" && !isLightColor(theme.background) ? 0.12 : theme.card_opacity),
+                                backgroundColor: hexToRgba(theme.background, isMacOS && isGlassMaterial(theme.material) && !isLightColor(theme.background) ? 0.12 : theme.card_opacity),
                                 ...widgetCardStyle(theme),
                                 borderColor: hexToRgba(color, 0.65),
                                 boxShadow: `inset 0 3px 0 ${hexToRgba(color, 0.55)}`,
@@ -2279,7 +2280,7 @@ export function SettingsPanel({
                     value={sidebarTheme[field.color]} opacity={sidebarTheme[field.opacity]}
                     onColor={value => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, { [field.color]: value }) })}
                     onOpacity={value => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, { [field.opacity]: value }) })} />)}
-                  {sidebarTheme.material === "native-glass" && <ColorControl label="Card background"
+                  {isGlassMaterial(sidebarTheme.material) && <ColorControl label="Card background"
                     value={sidebarCardBackground.color} opacity={sidebarCardBackground.opacity}
                     onColor={color => onSaveApp({ ...appConfig, sidebar_theme: updateSidebarTheme(appConfig.sidebar_theme, sidebarTheme.id, {
                       card_background: { ...sidebarCardBackground, color }, card_opacity: 0,
@@ -2288,7 +2289,7 @@ export function SettingsPanel({
                       card_background: { ...sidebarCardBackground, opacity }, card_opacity: 0,
                     }) })} />}
                   {[
-                    ...(sidebarTheme.material !== "native-glass" ? [{ key: "card_opacity" as const, label: "Card opacity", max: 100, factor: 100, unit: "%" }] : []),
+                    ...(!isGlassMaterial(sidebarTheme.material) ? [{ key: "card_opacity" as const, label: "Card opacity", max: 100, factor: 100, unit: "%" }] : []),
                     { key: "blur" as const, label: "Frosted blur", max: 40, factor: 1, unit: "px" },
                   ].map(field => <label key={field.key} className="space-y-3 rounded-xl border border-[var(--dashboard-border)] p-3">
                     <span className="flex h-6 items-center justify-between gap-2">

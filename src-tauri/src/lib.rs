@@ -736,7 +736,9 @@ pub fn run() {
         .run(|app, event| {
             #[cfg(target_os = "macos")]
             let open_main = match event {
-                tauri::RunEvent::Reopen { has_visible_windows: false, .. } => true,
+                // Desktop widgets and the sidebar count as visible windows too.
+                // Every Dock reopen request should restore the dashboard.
+                tauri::RunEvent::Reopen { .. } => true,
                 tauri::RunEvent::Opened { urls } => {
                     let mut handled = false;
                     for url in &urls {

@@ -4,7 +4,7 @@ Widgitron has four surfaces:
 
 | Surface | Purpose | How it opens on macOS | Closing behavior |
 | --- | --- | --- | --- |
-| Dashboard | Configure services, inspect data, control visibility | Application launch or left-click the menu bar icon | The app remains in the menu bar |
+| Dashboard | Configure services, inspect data, control visibility | Application launch, Dock icon, or left-click the menu bar icon | The app remains in the menu bar |
 | Sidebar | Read several modules together | Dashboard **Open Sidebar** or right-click the menu bar icon and choose **Sidebar** | Close button; **Pin Display** also opens it on the next launch |
 | Independent widget | Keep one module in its own movable window | Dashboard **Show Widget** | Widget close button or **Hide All Widgets** |
 | Native widgets | Glance at quotas, GPUs, or selected conference deadlines on the desktop or in Notification Center | Desktop **Edit Widgets** → search Widgitron | Remove them through macOS widget editing |
@@ -55,6 +55,15 @@ Widgitron has four surfaces:
   extension's timeline refresh, so it is not a live React window.
 
 ## Boundaries
+
+Floating widgets and the sidebar use **Liquid Glass** on macOS 26 and later,
+replacing the previous macOS Glass theme. Windows keeps its existing **Glass**
+theme and renderer. It uses `NSGlassEffectView` with an 8%
+black background and 8% black card fill; copies retain editable colors and
+opacities. Older macOS versions fall back to the existing glass material.
+Keeping Liquid Glass emphasized while inactive currently requires a scoped,
+undocumented AppKit appearance override, so it must be checked on future macOS
+releases. The override does not change key-window state or keyboard focus.
 
 Desktop fixation uses the existing live window at desktop level. The separate
 native widgets appear in the macOS widget gallery when the app and its

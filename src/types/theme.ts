@@ -9,6 +9,8 @@ export interface CardBackground {
   opacity: number;
 }
 
+export type WidgetMaterial = "native-glass" | "native-liquid-glass";
+
 export interface WidgetTheme {
   id: string;
   name: string;
@@ -18,7 +20,7 @@ export interface WidgetTheme {
   text_colors: ColorConfig[];
   primary_colors: ColorConfig[];
   widget_scope?: string;
-  material?: "native-glass";
+  material?: WidgetMaterial;
   card_background?: CardBackground;
 }
 

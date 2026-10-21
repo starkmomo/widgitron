@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] - 2026-10-20
+## [Unreleased] - 2026-10-21
 
 ### 中文
 
@@ -20,7 +20,7 @@
 #### 浮窗与侧边栏
 
 - **外观设置**：四个浮窗的主题集中管理，提供跟随主界面、浅色、深色、透明和玻璃，以及多个自定义主题。支持新建、复制、删除确认和卡片背景自定义，使用紧凑等高预览；侧边栏主题独立选择，编辑面板可展开、收起。
-- **玻璃与阅读**：优化玻璃配色、文字对比度和圆角高光，减少重复底色与失焦变色。关键词菜单和完整摘要匹配当前主题，虚化后方内容并保留圆角；菜单支持外部点击、Esc 收起，展开时阻断卡片手势。收紧摘要行距，保留滚动阅读。
+- **玻璃与阅读**：优化玻璃配色、文字对比度和圆角高光，减少重复底色与失焦变色。macOS 的玻璃主题升级为“液态玻璃”，背景与卡片默认使用 8% 黑色衬底，失焦保留效果；Windows 保持原有玻璃主题。修复主题切换时内容消失。关键词菜单和完整摘要匹配当前主题，虚化后方内容并保留圆角；菜单支持外部点击、Esc 收起，展开时阻断卡片手势。收紧摘要行距，保留滚动阅读。
 - **尺寸与排版**：侧边栏模块标题与操作合入彩色顶栏。额度、GPU、会议卡片可调整至完整内容高度，避免过小裁切或拉出空白；会议时间线展开时自动增高。统一普通浮窗最小高度，为 arXiv 保留更大阅读区域，调整大小时显示尺寸。
 - **显示与操作**：两平台默认解锁并置于桌面层，统一悬停显示锁定、置顶、隐藏按钮。隐藏/显示浮窗保留模块选择，全关后重置隐藏状态。macOS 浮窗与侧边栏支持普通桌面切换，修复闪现及点击、拖动问题。侧边栏可彻底停用，钉选与设置同步；修复会议时间线展开时宽度跳动。
 
@@ -33,7 +33,7 @@
 
 - **导航与页面**：统一模块顺序、名称、图标、研究页面工具栏与筛选布局，精简中英文说明和总览统计。页面内设置聚焦常用操作，外观等选项保留在完整设置页；修复切页闪动、设置选中框滑入和英文控件重叠，撤销及成功提示自动消退。
 - **Windows**：修复侧边栏主题、模块开关不即时生效、窗口不可见及拖动提示不消失的问题；调整卡片尺寸不再覆盖缩放设置，切换焦点不再出现多余标题栏。托盘左键打开主界面，右键打开菜单。
-- **macOS 窗口**：恢复原生窗口按钮、圆角与阴影，补齐顶部拖动和双击最大化区域，修复未激活窗口需要点击两次的问题。菜单栏使用适应系统明暗的单色图标和原生菜单。
+- **macOS 窗口**：恢复原生窗口按钮、圆角与阴影，补齐顶部拖动和双击最大化区域，修复未激活窗口需要点击两次的问题。菜单栏使用适应系统明暗的单色图标和原生菜单；点击 Dock 图标可恢复主窗口，不受浮窗或侧边栏是否可见影响。
 - **macOS 系统小组件**：新增额度、GPU、会议截止小组件，GPU 中号支持三台服务器，会议仅显示已关注项目。点击跳转到对应模块，支持冷启动跳转及临时签名构建的数据更新。
 
 #### 构建与测试
@@ -58,7 +58,7 @@
 #### Floating Widgets and Sidebar
 
 - **Appearance settings**: Manage all four widgets together with Follow main, Light, Dark, Transparent, Glass, and multiple custom themes. Support creation, copying, deletion confirmation, card backgrounds, and compact equal-height previews. Keep sidebar themes independent, with a collapsible editor.
-- **Glass and reading**: Refine glass colors, contrast, and edge highlights; reduce stacked fills and focus-related changes. Match keyword menus and full abstracts to the selected theme, blur underlying content, and preserve corners. Dismiss menus with outside clicks or Escape and block card gestures while open. Use tighter, scrollable abstract text.
+- **Glass and reading**: Refine glass colors, contrast, and edge highlights; reduce stacked fills and focus-related changes. Replace macOS Glass with native Liquid Glass, using 8% black backgrounds and card fills and preserving the inactive effect. Keep Windows Glass unchanged and fix disappearing content when switching themes. Match keyword menus and full abstracts to the selected theme, blur underlying content, and preserve corners. Dismiss menus with outside clicks or Escape and block card gestures while open. Use tighter, scrollable abstract text.
 - **Sizing and layout**: Move sidebar titles and actions into colored module headers. Resize quota, GPU, and conference cards up to their full content height without clipping or excess blank space; grow conference cards when timelines open. Share a minimum height for regular floating widgets, reserve more space for arXiv, and show dimensions while resizing.
 - **Visibility and controls**: Default both platforms to unlocked desktop widgets with consistent hover controls. Hide/show preserves selected modules; switching every widget off resets temporary hiding. Support ordinary macOS Spaces for widgets and the sidebar, and fix flashes, clicks, and dragging. Allow the sidebar to be disabled, synchronize its pin setting, and prevent conference timeline width shifts.
 
@@ -71,7 +71,7 @@
 
 - **Navigation and pages**: Align module order, names, icons, research toolbars, and filters. Simplify bilingual copy and overview metrics, keep inline settings focused on common actions, and centralize appearance options in Settings. Fix page flashes, sliding settings selections, and overlapping English controls; dismiss Undo and success notices automatically.
 - **Windows**: Fix delayed sidebar theme/module updates, invisible windows, and stuck drag notices. Preserve zoom when resizing sidebar cards and prevent extra native captions after focus changes. Left-clicking the tray icon opens the dashboard; right-clicking opens its menu.
-- **macOS windows**: Restore native window buttons, corners, and shadows; complete the top drag and double-click zoom areas and accept the first click in inactive windows. Use an appearance-aware monochrome menu bar icon and native menu.
+- **macOS windows**: Restore native window buttons, corners, and shadows; complete the top drag and double-click zoom areas and accept the first click in inactive windows. Use an appearance-aware monochrome menu bar icon and native menu. Clicking the Dock icon restores the dashboard even when widgets or the sidebar are visible.
 - **macOS system widgets**: Add quota, GPU, and conference widgets. The medium GPU widget supports three servers; conferences show followed entries only. Open the matching module on click, including cold launches, and support data updates in ad-hoc builds.
 
 #### Builds and Testing

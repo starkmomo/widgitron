@@ -1,10 +1,11 @@
+import { isGlassMaterial } from "./glassMaterial";
 import type { WidgetTheme } from "../types/theme";
 import { hexToRgba } from "./color";
 import { resolveWidgetCardBackground } from "./glassCardBackground";
 
 /** Shared popup material for keyword menus and full-abstract dialogs. */
 export function widgetOverlaySurface(theme: WidgetTheme, light: boolean) {
-  const glass = theme.material === "native-glass";
+  const glass = isGlassMaterial(theme.material);
   const translucent = glass || theme.bg_opacity < 0.5;
   return {
     glass, translucent,

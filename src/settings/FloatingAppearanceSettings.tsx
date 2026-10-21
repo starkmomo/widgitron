@@ -1,3 +1,4 @@
+import { isGlassMaterial } from "../utils/glassMaterial";
 import { useEffect, useRef, useState } from "react";
 import { Bookmark, Check, ChevronDown, Copy, EyeOff, Plus, Palette, Trash2 } from "lucide-react";
 import type { DashboardTheme } from "../types/config";
@@ -17,7 +18,7 @@ import { NativeGlassPreview } from "../components/NativeGlassPreview";
 const PRESETS: { mode: FloatingPreset; label: string }[] = [
   { mode: "follow", label: "Follow main" }, { mode: "light", label: "Light" },
   { mode: "dark", label: "Dark" }, { mode: "transparent", label: "Transparent" },
-  { mode: "glass", label: "Glass" },
+  { mode: "glass", label: isMacOS ? "Liquid Glass" : "Glass" },
 ];
 const WIDGET_LABELS: Record<string, string> = { quota: "Quota", gpu: "GPU", deadlines: "Conference", arxiv: "arXiv" };
 const colorValue = (theme: WidgetTheme, role: string, fallback: string, primary = false) => {
@@ -28,12 +29,12 @@ const colorValue = (theme: WidgetTheme, role: string, fallback: string, primary 
 // Approximate the native backdrop tint over the preview's reference scene.
 // A CSS preview cannot sample the real desktop behind the application window.
 const previewBackground = (theme: WidgetTheme) => hexToRgba(theme.bg_color,
-  theme.material === "native-glass" && !isWindows
+  isGlassMaterial(theme.material) && theme.material !== "native-liquid-glass" && !isWindows
     ? 1 - (1 - theme.bg_opacity) * (isMacOS ? 0.88 : 0.78)
     : theme.bg_opacity);
 
 function WidgetPreview({ theme, kind, label }: { theme: WidgetTheme; kind: WidgetThemeKind; label: string }) {
-  const glass = theme.material === "native-glass";
+  const glass = isGlassMaterial(theme.material);
   const main = colorValue(theme, "Main Text", "#fff");
   const sub = colorValue(theme, "Sub Text", "#94a3b8");
   const accent = colorValue(theme, "Accent", "#3b82f6", true);
@@ -185,8 +186,8 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
               mode === preset.mode ? "border-blue-500 bg-blue-500/5 ring-1 ring-blue-500" : "border-[var(--dashboard-border)] hover:border-blue-400"
             }`}>
             <div aria-hidden="true" className="floating-preview-scene relative h-9 rounded-md border border-slate-400/20 p-1.5">
-              {preview && <div className={`relative h-full overflow-hidden rounded-sm px-1.5 py-1 ${preview.material === "native-glass" ? "glass-surface glass-preview [--glass-radius:4px]" : ""}`} style={{ background: previewBackground(preview) }}>
-                {preview.material === "native-glass" && <NativeGlassPreview dark={!isLightColor(preview.bg_color)} />}
+              {preview && <div className={`relative h-full overflow-hidden rounded-sm px-1.5 py-1 ${isGlassMaterial(preview.material) ? "glass-surface glass-preview [--glass-radius:4px]" : ""}`} style={{ background: previewBackground(preview) }}>
+                {isGlassMaterial(preview.material) && <NativeGlassPreview dark={!isLightColor(preview.bg_color)} />}
                 <div className="h-1 w-2/3 rounded-full" style={{ background: colorValue(preview, "Main Text", "#fff") }} />
                 <div className="mt-1 h-1 w-1/3 rounded-full" style={{ background: colorValue(preview, "Accent", "#3b82f6", true) }} />
               </div>}
@@ -196,6 +197,7 @@ export function FloatingAppearanceSettings({ themeConfig, dashboardTheme, langua
           </button>;
         })}
       </div>
+      {isMacOS && mode === "glass" && <p className="text-[10px] leading-relaxed text-slate-500">Native effect appears in the floating window. The preview is approximate.</p>}
       {activeTheme && <div className="space-y-2">
         <div className="flex justify-between text-[10px] font-medium text-slate-500"><span>Preview</span><span>Example data</span></div>
         <div className="floating-preview-scene relative isolate overflow-hidden rounded-2xl border border-slate-400/20 p-3">

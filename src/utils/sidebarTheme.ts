@@ -7,7 +7,8 @@ import type {
 } from "../types/config";
 import { isMacOS, isWindows, supportsFloatingGlass } from "./platform";
 import { normalizeCardBackground } from "./glassCardBackground";
-import type { CardBackground } from "../types/theme";
+import { isGlassMaterial, LIQUID_GLASS_BACKGROUND, LIQUID_GLASS_CARD_BACKGROUND, platformGlassMaterial } from "./glassMaterial";
+import type { CardBackground, WidgetMaterial } from "../types/theme";
 
 export type SidebarThemePresetId = ConfigSidebarThemePresetId;
 
@@ -31,7 +32,7 @@ export type ResolvedSidebarTheme = SidebarThemeAppearance & {
   id: string;
   name: string;
   preset: SidebarThemeKind;
-  material?: "native-glass";
+  material?: WidgetMaterial;
   card_background?: CardBackground;
 };
 
@@ -97,22 +98,27 @@ export const SIDEBAR_THEME_PRESETS: SidebarThemePreset[] = [
   },
   {
     id: "glass",
-    label: "Glass",
-    description: "A glass backdrop with readable module cards.",
-    theme: {
+    label: isMacOS ? "Liquid Glass" : "Glass",
+    description: isMacOS ? "Native macOS glass with a subtle dark tint." : "A glass backdrop with readable module cards.",
+    theme: isMacOS ? {
+      ...MIDNIGHT_THEME, id: "glass", name: "Liquid Glass", preset: "glass",
+      material: "native-liquid-glass", background: LIQUID_GLASS_BACKGROUND.color, header: LIQUID_GLASS_BACKGROUND.color,
+      background_opacity: LIQUID_GLASS_BACKGROUND.opacity, header_opacity: 0.06, card_opacity: 0, blur: 0,
+      card_background: { ...LIQUID_GLASS_CARD_BACKGROUND },
+    } : {
       ...MIDNIGHT_THEME, id: "glass", name: "Glass", preset: "glass",
-      material: "native-glass", background: isWindows || isMacOS ? "#18181b" : "#0f172a",
-      header: isWindows || isMacOS ? "#18181b" : "#0f172a",
-      background_opacity: isWindows || isMacOS ? 0.02 : 0.10, header_opacity: isWindows || isMacOS ? 0.08 : 0.24,
+      material: "native-glass", background: isWindows ? "#18181b" : "#0f172a",
+      header: isWindows ? "#18181b" : "#0f172a",
+      background_opacity: isWindows ? 0.02 : 0.10, header_opacity: isWindows ? 0.08 : 0.24,
       // Module cards supply local contrast; don't darken them a second time.
-      card_opacity: isWindows || isMacOS ? 0 : 0.30, blur: 0,
+      card_opacity: isWindows ? 0 : 0.30, blur: 0,
     },
   },
 ];
 
 export const DEFAULT_SIDEBAR_THEME = MIDNIGHT_THEME;
 
-const builtInThemeIds = new Set<SidebarThemePresetId>(["follow", "midnight", "light", "glass"]);
+const builtInThemeIds = new Set<SidebarThemePresetId>(["follow", "midnight", "light", "glass", "liquid"]);
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -154,7 +160,7 @@ function normalizeCustomTheme(theme: SidebarThemeDefinition): ResolvedSidebarThe
     header_opacity: readOpacity(theme.header_opacity, MIDNIGHT_THEME.header_opacity),
     card_opacity: readOpacity(theme.card_opacity, MIDNIGHT_THEME.card_opacity),
     blur: readBlur(theme.blur, MIDNIGHT_THEME.blur),
-    material: theme.material === "native-glass" ? "native-glass" : undefined,
+    material: isGlassMaterial(theme.material) ? platformGlassMaterial(theme.material) : undefined,
     card_background: normalizeCardBackground(theme.card_background),
   };
 }
@@ -175,6 +181,7 @@ function customThemes(theme?: SidebarThemeConfig): ResolvedSidebarTheme[] {
 }
 
 export function sidebarThemePreset(id: SidebarThemePresetId, dashboardTheme?: DashboardTheme): ResolvedSidebarTheme {
+  if (id === "liquid") id = "glass";
   if (id === "follow") {
     return { ...(dashboardTheme === "dark" ? MIDNIGHT_THEME : LIGHT_THEME),
       id: "follow", name: "Follow main", preset: "follow" };
@@ -200,7 +207,8 @@ export function resolveSidebarTheme(theme?: SidebarThemeConfig, dashboardTheme?:
   // A saved glass theme remains resolvable on unsupported systems, where the
   // rendering layer supplies an opaque fallback instead of a missing preset.
   const options = [...sidebarThemeOptions(theme, dashboardTheme), sidebarThemePreset("glass")];
-  const activeId = theme?.active_theme_id?.trim();
+  const savedId = theme?.active_theme_id?.trim();
+  const activeId = savedId === "liquid" ? "glass" : savedId;
   if (activeId) {
     const active = options.find((candidate) => candidate.id === activeId);
     if (active) return active;
@@ -237,6 +245,7 @@ export function selectSidebarTheme(
   theme: SidebarThemeConfig | undefined,
   id: string
 ): SidebarThemeConfig {
+  if (id === "liquid") id = "glass";
   const selected = sidebarThemeOptions(theme).find((candidate) => candidate.id === id);
   if (!selected) return { ...(theme || {}) };
   return {
@@ -290,6 +299,7 @@ export function duplicateSidebarTheme(
   sourceId?: string,
   dashboardTheme?: DashboardTheme
 ): { config: SidebarThemeConfig; theme: ResolvedSidebarTheme } {
+  if (sourceId === "liquid") sourceId = "glass";
   const source =
     sidebarThemeOptions(theme, dashboardTheme).find((candidate) => candidate.id === sourceId) ??
     resolveSidebarTheme(theme, dashboardTheme);

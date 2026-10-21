@@ -1,3 +1,4 @@
+import { isGlassMaterial } from "./utils/glassMaterial";
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -339,7 +340,7 @@ function SidebarWidgetSection({
       ref={sectionRef}
       className="group/sidebar-tile h-full min-h-0 rounded-md border overflow-hidden flex flex-col relative"
       style={{
-        backgroundColor: theme.material === "native-glass" && theme.card_background ? "transparent" : isLight
+        backgroundColor: isGlassMaterial(theme.material) && theme.card_background ? "transparent" : isLight
           ? hexToRgba("#ffffff", theme.card_opacity)
           : hexToRgba(theme.background, theme.card_opacity),
         borderColor: hexToRgba(accentColor, isLight ? 0.28 : 0.22),
@@ -728,12 +729,13 @@ function App() {
     preview_edge: null,
   });
   const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme, appConfig.theme);
-  const sidebarGlass = sidebarTheme.material === "native-glass";
+  const sidebarGlass = isGlassMaterial(sidebarTheme.material);
   const nativeGlass = useFloatingGlass(windowLabel.startsWith("widget-") || windowLabel === "sidebar",
     windowLabel === "sidebar" || Boolean(currentTheme),
-    windowLabel === "sidebar" ? sidebarGlass && appConfig.sidebar_enabled !== false : currentTheme?.material === "native-glass",
+    windowLabel === "sidebar" ? sidebarGlass && appConfig.sidebar_enabled !== false : isGlassMaterial(currentTheme?.material),
     windowLabel === "sidebar" ? !isLightColor(sidebarTheme.background) : currentTheme ? !isLightColor(currentTheme.bg_color) : false,
-    windowLabel === "sidebar" ? sidebarDockState.edge : null);
+    windowLabel === "sidebar" ? sidebarDockState.edge : null,
+    windowLabel === "sidebar" ? sidebarTheme.material === "native-liquid-glass" : currentTheme?.material === "native-liquid-glass");
   const sidebarOrderRef = useRef<SidebarSectionKey[]>(DEFAULT_SIDEBAR_ORDER);
   const sidebarBoardRef = useRef<HTMLDivElement | null>(null);
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
@@ -2044,6 +2046,7 @@ function App() {
         data-sidebar-edge={sidebarDockState.edge}
         data-glass-tone={isWindows || sidebarGlass ? (sidebarIsLight ? "light" : "dark") : undefined}
         data-native-glass={sidebarGlass && nativeGlass ? "true" : undefined}
+        data-native-liquid={nativeGlass && sidebarTheme.material === "native-liquid-glass" ? "true" : undefined}
         className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarGlass ? "glass-surface glass-sidebar" : ""} ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
         }`}
@@ -2274,10 +2277,11 @@ function App() {
       onToggleLock={toggleLock} onTogglePin={() => togglePin()} onHide={handleClose} />;
 
     return (
-      <div className={`floating-window absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0 ${currentTheme?.material === "native-glass" ? "glass-surface" : ""}`}
-        role={currentTheme?.material === "native-glass" ? "group" : undefined} aria-label={currentTheme?.material === "native-glass" ? "Glass" : undefined}
+      <div className={`floating-window absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0 ${isGlassMaterial(currentTheme?.material) ? "glass-surface" : ""}`}
+        role={isGlassMaterial(currentTheme?.material) ? "group" : undefined} aria-label={currentTheme?.material === "native-liquid-glass" ? "Liquid Glass" : isGlassMaterial(currentTheme?.material) ? "Glass" : undefined}
         data-native-glass={nativeGlass ? "true" : undefined}
-        data-floating-surface={currentTheme && (currentTheme.bg_opacity >= 0.5 || currentTheme.material === "native-glass") && isLightColor(currentTheme.bg_color) ? "light" : undefined}>
+        data-native-liquid={nativeGlass && currentTheme?.material === "native-liquid-glass" ? "true" : undefined}
+        data-floating-surface={currentTheme && (currentTheme.bg_opacity >= 0.5 || isGlassMaterial(currentTheme.material)) && isLightColor(currentTheme.bg_color) ? "light" : undefined}>
 
         <div
           className="min-h-0 flex-1 p-3 flex flex-col relative overflow-hidden rounded-xl z-10"
@@ -2285,7 +2289,7 @@ function App() {
             windowLabel.startsWith("widget-") && currentTheme
               ? {
                   backgroundColor: hexToRgba(currentTheme.bg_color,
-                    currentTheme.material === "native-glass" && !nativeGlass ? (isWindows ? 0.86 : 0.84) : currentTheme.bg_opacity),
+                    isGlassMaterial(currentTheme.material) && !nativeGlass ? (isWindows ? 0.86 : 0.84) : currentTheme.bg_opacity),
                   color: currentTheme.text_colors?.find((c) => c.name === "Main Text")
                     ? hexToRgba(
                         currentTheme.text_colors.find((c) => c.name === "Main Text")!.value,

@@ -292,12 +292,12 @@ html[data-platform="macos"] .glass-surface .widget-paper-card {
 }
 
 html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is(.widget-item-card, .widget-paper-card, [data-widget-surface="server"], [data-widget-surface="empty"], [data-widget-surface="preview"]) {
-  background-color: rgba(0, 0, 0, 0.12);
+  background-color: rgba(0, 0, 0, 0.08);
   border-color: rgba(255, 255, 255, 0.18);
 }
 
 html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) .widget-item-card:hover {
-  background-color: rgba(0, 0, 0, 0.16);
+  background-color: rgba(0, 0, 0, 0.12);
 }
 
 html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is([data-widget-surface="server"], [data-widget-surface="preview"]) {
@@ -756,4 +756,11 @@ html[data-platform="macos"] .glass-preview > div > .widget-header {
 }
 .reading-dialog [data-dialog-close]:focus-visible {
   outline-color: #ef4444;
+}
+
+/* Native Liquid Glass draws its own optical rim. Keep the CSS
+   highlights for the existing Glass theme and in-window popup surfaces. */
+html[data-platform="macos"] .glass-surface[data-native-liquid="true"]::before,
+html[data-platform="macos"] .glass-surface[data-native-liquid="true"]::after {
+  display: none;
 }

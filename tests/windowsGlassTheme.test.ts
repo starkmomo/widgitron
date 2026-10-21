@@ -7,9 +7,10 @@ Object.defineProperty(globalThis, "navigator", {
   value: { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }, configurable: true,
 });
 const { resolveWidgetTheme } = await import("../src/utils/widgetTheme.ts");
-const { resolveSidebarTheme } = await import("../src/utils/sidebarTheme.ts");
+const { resolveSidebarTheme, sidebarThemeOptions } = await import("../src/utils/sidebarTheme.ts");
 const { widgetCardStyle, resolveGlassCardBackground } = await import("../src/utils/glassCardBackground.ts");
 const { widgetKeywordSurface } = await import("../src/utils/widgetOverlaySurface.ts");
+const { copyFloatingTheme, floatingAppearanceMode, assignFloatingPreset } = await import("../src/utils/floatingAppearance.ts");
 
 const glass: WidgetTheme = {
   id: "theme-quota-glass", name: "Quota Glass", is_default: true,
@@ -32,6 +33,10 @@ test("Windows native glass matches the thin Mac tint, bright text and dark cards
 
 test("Windows sidebar glass keeps white text without stacking dark module backgrounds", () => {
   const sidebar = resolveSidebarTheme({ active_theme_id: "glass" });
+  assert.equal(sidebar.name, "Glass");
+  assert.equal(sidebar.material, "native-glass");
+  assert.equal(sidebarThemeOptions().filter(theme => theme.material === "native-liquid-glass").length, 0);
+  assert.equal(resolveSidebarTheme({ active_theme_id: "liquid" }).material, "native-glass");
   assert.equal(sidebar.background, "#18181b");
   assert.equal(sidebar.background_opacity, 0.02);
   assert.equal(sidebar.card_opacity, 0);
@@ -65,4 +70,15 @@ test("custom glass themes keep their chosen colors and opacity", () => {
   assert.deepEqual(widgetCardStyle({ ...custom, card_background: { color: "#123456", opacity: 0 } }), {
     backgroundColor: "rgba(18, 52, 86, 0)",
   });
+});
+
+test("Windows Glass keeps its existing preset ID and copy behavior", () => {
+  const config = assignFloatingPreset({ themes: [glass], assignments: {} }, "widget-quota-default", "glass");
+  assert.equal(config.assignments["widget-quota-default"], "theme-quota-glass");
+  assert.equal(floatingAppearanceMode(config, "widget-quota-default"), "glass");
+  const copy = copyFloatingTheme(config, "widget-quota-default", "light", glass.id)!;
+  assert.equal(copy.theme.material, "native-glass");
+  assert.equal(copy.theme.bg_color, glass.bg_color);
+  assert.equal(copy.theme.bg_opacity, glass.bg_opacity);
+  assert.deepEqual(copy.theme.text_colors, glass.text_colors);
 });
