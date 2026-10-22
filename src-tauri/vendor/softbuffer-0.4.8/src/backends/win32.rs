@@ -556,6 +556,22 @@ impl<T> From<T> for OnlyUsedFromOrigin<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetGuiResources, GR_GDIOBJECTS,
+    };
+
+    fn bitmap_bytes(bitmap: Gdi::HBITMAP) -> i32 {
+        let mut info: Gdi::BITMAP = unsafe { mem::zeroed() };
+        // GetObjectType can report an encoded type for a stale GDI handle.
+        // Query the actual bitmap data instead of using it as a validity test.
+        unsafe {
+            Gdi::GetObjectW(
+                bitmap,
+                mem::size_of_val(&info) as i32,
+                (&mut info as *mut Gdi::BITMAP).cast(),
+            )
+        }
+    }
 
     #[test]
     fn allocation_failure_returns_an_error_instead_of_panicking() {
@@ -568,10 +584,18 @@ mod tests {
 
     #[test]
     fn repeated_resize_releases_every_old_bitmap() {
+        let size = NonZeroI32::new(16).unwrap();
+        drop(Buffer::new(ptr::null_mut(), size, size).unwrap());
+        Allocator::get().flush();
+        let before = unsafe { GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) };
         let mut buffer: Option<Buffer> = None;
         for step in 0..2000 {
             let size = NonZeroI32::new(16 + step % 64).unwrap();
             let next = Buffer::new(ptr::null_mut(), size, size).unwrap();
+            assert!(
+                bitmap_bytes(next.bitmap) > 0,
+                "the live bitmap must be queryable"
+            );
             let previous = buffer.replace(next);
             if let Some(previous) = previous {
                 let bitmap = previous.bitmap;
@@ -580,7 +604,7 @@ mod tests {
                 // for that work and its GDI batch before inspecting the handle.
                 Allocator::get().flush();
                 assert_eq!(
-                    unsafe { Gdi::GetObjectType(bitmap) },
+                    bitmap_bytes(bitmap),
                     0,
                     "resizing must release the previous bitmap"
                 );
@@ -590,6 +614,11 @@ mod tests {
         let bitmap = last.bitmap;
         drop(last);
         Allocator::get().flush();
-        assert_eq!(unsafe { Gdi::GetObjectType(bitmap) }, 0);
+        assert_eq!(bitmap_bytes(bitmap), 0);
+        let after = unsafe { GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) };
+        assert!(
+            after <= before + 4,
+            "2,000 resizes must not accumulate GDI objects: before={before}, after={after}"
+        );
     }
 }

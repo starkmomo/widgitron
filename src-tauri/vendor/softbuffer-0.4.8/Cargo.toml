@@ -235,6 +235,11 @@ features = [
     "Win32_Foundation",
 ]
 
+# Used only by the Windows resource-lifetime regression tests.
+[target.'cfg(target_os = "windows")'.dev-dependencies.windows-sys]
+version = "0.61.2"
+features = ["Win32_System_Threading"]
+
 [target.'cfg(target_vendor = "apple")'.dependencies.objc2]
 version = "0.6.0"
 

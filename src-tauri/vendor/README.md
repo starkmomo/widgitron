@@ -26,6 +26,11 @@ each old bitmap is released:
 cargo test --manifest-path src-tauri/vendor/softbuffer-0.4.8/tests/windows/Cargo.toml --lib --locked backends::win32::tests
 ```
 
+The tests query actual bitmap data with `GetObjectW` and compare process GDI
+object counts, rather than relying on `GetObjectType` for deleted handles.
+The softbuffer manifest also enables the process-query API as a Windows-only
+test dependency; it does not change production features.
+
 Original sources and licenses:
 
 - <https://crates.io/crates/softbuffer/0.4.8> (MIT / Apache-2.0)
