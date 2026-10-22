@@ -45,6 +45,8 @@ jobs:
           workspaces: src-tauri -> target
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Test Windows transparent-window resource recovery
+        run: cargo test --manifest-path src-tauri/vendor/softbuffer-0.4.8/tests/windows/Cargo.toml --lib --locked backends::win32::tests
       - name: Build NSIS installer
         run: pnpm tauri build --bundles nsis
       - name: Upload Windows build

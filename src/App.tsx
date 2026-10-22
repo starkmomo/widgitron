@@ -2041,7 +2041,7 @@ function App() {
       return {
         left: 0,
         top: edge - 2,
-        width: `calc(100% - ${SIDEBAR_TILE_GAP}px)`,
+        width: "100%",
         height: 3,
       };
     })();
@@ -2226,7 +2226,7 @@ function App() {
                     style={{
                       left: `${rect.x * 100}%`,
                       top: rect.y,
-                      width: horizontalSidebar ? `${rect.w * 100}%` : `calc(${rect.w * 100}% - ${SIDEBAR_TILE_GAP}px)`,
+                      width: `${rect.w * 100}%`,
                       height: rect.h,
                     }}
                   >
