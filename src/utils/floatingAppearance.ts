@@ -1,8 +1,10 @@
 import type { DashboardTheme } from "../types/config";
 import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
 import { defaultThemeIdForWidgetLabel, FOLLOW_DASHBOARD_THEME_ID, resolveWidgetTheme, widgetThemeKindFromLabel } from "./widgetTheme";
+import { canonicalGlassPresetId } from "./glassMaterial";
+import { isMacOS } from "./platform";
 
-export type FloatingAppearanceMode = "follow" | "light" | "dark" | "transparent" | "custom";
+export type FloatingAppearanceMode = "follow" | "light" | "dark" | "transparent" | "glass" | "custom";
 export type FloatingPreset = Exclude<FloatingAppearanceMode, "custom">;
 
 export function floatingPresetId(widgetId: string, mode: FloatingPreset): string {
@@ -11,8 +13,8 @@ export function floatingPresetId(widgetId: string, mode: FloatingPreset): string
 }
 
 export function floatingAppearanceMode(config: WidgetThemeConfig, widgetId: string): FloatingAppearanceMode {
-  const id = config.assignments[widgetId] || defaultThemeIdForWidgetLabel(widgetId);
-  for (const mode of ["follow", "light", "dark", "transparent"] as const) {
+  const id = canonicalGlassPresetId(config.assignments[widgetId] || defaultThemeIdForWidgetLabel(widgetId));
+  for (const mode of ["follow", "light", "dark", "transparent", "glass"] as const) {
     if (id === floatingPresetId(widgetId, mode)) return mode;
   }
   return config.themes.some(theme => theme.id === id && !theme.is_default) ? "custom"
@@ -37,7 +39,10 @@ export function editableFloatingTheme(config: WidgetThemeConfig, widgetId: strin
 
 export function copyFloatingTheme(config: WidgetThemeConfig, widgetId: string, dashboardTheme: DashboardTheme,
   sourceId?: string, baseName?: string): { config: WidgetThemeConfig; theme: WidgetTheme } | null {
-  const active = sourceId ? config.themes.find(theme => theme.id === sourceId)
+  const source = sourceId ? config.themes.find(theme => theme.id === sourceId) : undefined;
+  const active = sourceId
+    ? source && isMacOS
+      ? resolveWidgetTheme({ ...config, assignments: { ...config.assignments, [widgetId]: sourceId } }, widgetId, undefined, { dashboardTheme }) : source
     : resolveWidgetTheme(config, widgetId, undefined, { dashboardTheme });
   if (!active) return null;
   const base = baseName ?? `${widgetThemeKindFromLabel(widgetId)} custom`;
@@ -51,6 +56,7 @@ export function copyFloatingTheme(config: WidgetThemeConfig, widgetId: string, d
     is_default: false, widget_scope: widgetId,
     text_colors: active.text_colors.map(color => ({ ...color })),
     primary_colors: active.primary_colors.map(color => ({ ...color })),
+    card_background: active.card_background ? { ...active.card_background } : undefined,
   };
   return { theme, config: { ...config, themes: [...config.themes, theme],
     assignments: { ...config.assignments, [widgetId]: theme.id } } };

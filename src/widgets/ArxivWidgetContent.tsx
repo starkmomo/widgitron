@@ -1,29 +1,35 @@
-import { useState, useEffect } from "react";
-import { Activity, Check, ChevronDown } from "lucide-react";
+import { useState, useEffect, useId, useRef } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WidgetHeader } from "../components/WidgetHeader";
+import { Radar, Check, ChevronDown, ChevronLeft, ChevronRight, CloudOff } from "lucide-react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
 import type { ArxivConfig, ArxivPaper } from "../types/config";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
+import { widgetCardStyle } from "../utils/glassCardBackground";
+import { widgetKeywordSurface } from "../utils/widgetOverlaySurface";
 import { hexToRgba, isLightColor } from "../utils/color";
 import { handleWidgetAppConfigUpdate } from "../utils/widgetLifecycle";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveData";
-import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
+import { arxivQueryChanged } from "../utils/arxivSettings";
 import { ALL_ARXIV_KEYWORDS, UNCATEGORIZED_ARXIV_KEYWORD, hasArxivKeywords, filterArxivPapersByKeywords, formatArxivKeywordLabel, getArxivKeywords, getPaperArxivKeywords } from "../utils/arxivKeywords";
-import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { arxivPaperLinks } from "../utils/arxivPaperLinks";
-import { useArxivLibrary } from "../hooks/useArxivLibrary";
+import { arxivPaperKey, useArxivLibrary } from "../hooks/useArxivLibrary";
+import { arxivPaperArrowDirection, moveArxivPaperCursor, resolveArxivPaperCursor, type ArxivPaperCursor } from "../utils/arxivPaperNavigation";
 import { ArxivReadingActions } from "../components/ArxivReadingActions";
-import { ArxivSkippedDialog } from "../components/ArxivSkippedDialog";
 import { ArxivPaperActions } from "../components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
+import { ArxivPaperMetadata } from "../components/ArxivPaperMetadata";
 
 type SwipeDirection = "left" | "right" | "up";
 
 type ArxivWidgetContentProps = {
   hideHeader?: boolean;
+  headerControls?: ReactNode;
   appearance?: "light" | "dark";
 };
 
@@ -35,25 +41,33 @@ const paperCardVariants: Variants = {
     y: custom === "up" ? -500 : 0,
     opacity: 0,
     rotate: custom === "left" ? -20 : custom === "right" ? 20 : 0,
-    transition: { duration: 0.4 },
+    transition: { duration: custom ? 0.4 : 0.16 },
   }),
 };
 
 export function ArxivWidgetContent({
   hideHeader = false,
+  headerControls,
   appearance,
 }: ArxivWidgetContentProps) {
   const library = useArxivLibrary();
   const [papers, setPapers] = useState<ArxivPaper[]>([]);
   const [arxivConfig, setArxivConfig] = useState<ArxivConfig>({});
+  const arxivConfigRef = useRef<ArxivConfig>({});
   const [arxivBackendError, setArxivBackendError] = useState<string | null>(null);
   const [arxivRefreshError, setArxivRefreshError] = useState<string | null>(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [paperCursor, setPaperCursor] = useState<ArxivPaperCursor>({ key: null, index: 0 });
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [keywordMenuOpen, setKeywordMenuOpen] = useState(false);
+  const widgetRef = useRef<HTMLDivElement>(null);
+  const keywordControlRef = useRef<HTMLDivElement>(null);
+  const keywordTriggerRef = useRef<HTMLButtonElement>(null);
+  const keywordDismissRef = useRef<HTMLButtonElement>(null);
+  const keywordMenuOpenRef = useRef(false);
+  keywordMenuOpenRef.current = keywordMenuOpen;
+  const keywordMenuId = useId();
   const [exitDirection, setExitDirection] = useState<SwipeDirection | undefined>(undefined);
   const [serviceEnabled, setServiceEnabled] = useState(true);
-  const [dashboardTheme, setDashboardTheme] = useState<"light" | "dark">("dark");
   const currentTheme = useWidgetTheme("arxiv");
   const arxivKeywords = getArxivKeywords(arxivConfig.keywords);
   const hasOtherArxivMatches = papers.some((paper) => getPaperArxivKeywords(paper, arxivConfig.keywords).length === 0);
@@ -61,18 +75,82 @@ export function ArxivWidgetContent({
     ? [ALL_ARXIV_KEYWORDS]
     : hasOtherArxivMatches ? [...arxivKeywords, UNCATEGORIZED_ARXIV_KEYWORD] : arxivKeywords;
   const visiblePapers = !hasArxivKeywords(arxivConfig.keywords) ? [] : filterArxivPapersByKeywords(papers, selectedKeywords, arxivConfig.keywords);
+  const paperKeys = visiblePapers.map(arxivPaperKey);
+  const resolvedCursor = resolveArxivPaperCursor(paperKeys, paperCursor);
+  const currentIndex = resolvedCursor.index;
   const currentPaper = visiblePapers[currentIndex];
+  const browsePaper = (direction: -1 | 1) => {
+    if (!serviceEnabled || keywordMenuOpenRef.current || library.busy) return false;
+    const next = moveArxivPaperCursor(paperKeys, paperCursor, direction);
+    if (next.key === resolvedCursor.key) return false;
+    setExitDirection(undefined);
+    // The outgoing card may own keyboard focus. Keep it on the stable widget
+    // so repeated arrow presses also work inside the sidebar.
+    widgetRef.current?.focus({ preventScroll: true });
+    setPaperCursor(previous => moveArxivPaperCursor(paperKeys, previous, direction));
+    return true;
+  };
+  const browsePaperRef = useRef(browsePaper);
+  browsePaperRef.current = browsePaper;
+
+  useEffect(() => {
+    const floating = getCurrentWindow().label.startsWith("widget-arxiv-");
+    const onKeyDown = (event: KeyboardEvent) => {
+      const direction = arxivPaperArrowDirection(event);
+      if (direction === null || !document.hasFocus()) return;
+      if (!floating && !widgetRef.current?.contains(document.activeElement)) return;
+      if (document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
+      if (event.target instanceof Element && event.target.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="slider"], [role="spinbutton"], [role="combobox"], [role="listbox"], [role="menu"], [role="tablist"]'
+      )) return;
+      if (browsePaperRef.current(direction)) event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    setPaperCursor(previous => previous.key === resolvedCursor.key && previous.index === resolvedCursor.index
+      ? previous : resolvedCursor);
+  }, [resolvedCursor.key, resolvedCursor.index]);
+
+  useEffect(() => {
+    if (!keywordMenuOpen) return;
+    const outsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || keywordControlRef.current?.contains(target)
+        || keywordDismissRef.current?.contains(target)) return;
+      setKeywordMenuOpen(false);
+    };
+    const outsideFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !keywordControlRef.current?.contains(event.target)) {
+        setKeywordMenuOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Consume this Escape before the sidebar's window-level hide shortcut.
+      event.preventDefault();
+      event.stopPropagation();
+      setKeywordMenuOpen(false);
+      keywordTriggerRef.current?.focus({ preventScroll: true });
+    };
+    const blur = () => setKeywordMenuOpen(false);
+    document.addEventListener("pointerdown", outsidePointer, true);
+    document.addEventListener("focusin", outsideFocus);
+    document.addEventListener("keydown", escape, true);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerdown", outsidePointer, true);
+      document.removeEventListener("focusin", outsideFocus);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("blur", blur);
+    };
+  }, [keywordMenuOpen]);
 
   useEffect(() => {
     setSelectedKeywords((prev) => prev.filter((keyword) => arxivKeywordOptions.includes(keyword)));
-    setCurrentIndex(0);
   }, [arxivConfig.keywords, hasOtherArxivMatches]);
-
-  useEffect(() => {
-    if (visiblePapers.length > 0 && currentIndex >= visiblePapers.length) {
-      setCurrentIndex(0);
-    }
-  }, [currentIndex, visiblePapers.length]);
   useEffect(() => {
     let active = true;
     const unlisteners: (() => void)[] = [];
@@ -85,6 +163,7 @@ export function ArxivWidgetContent({
 
         const configArxiv = await tauriInvoke("get_arxiv_config");
         if (!active) return;
+        arxivConfigRef.current = configArxiv;
         setArxivConfig(configArxiv);
       } catch (e) {
         console.error("Arxiv widget load failed", e);
@@ -106,7 +185,6 @@ export function ArxivWidgetContent({
           {
             onArxivUpdate: (payload) => {
               setPapers(payload);
-              setCurrentIndex(0);
             },
           }
         );
@@ -118,10 +196,12 @@ export function ArxivWidgetContent({
 
         const u3 = await tauriListen("arxiv_config_update", (event) => {
           if (!active) return;
+          const queryChanged = arxivQueryChanged(arxivConfigRef.current, event.payload);
+          arxivConfigRef.current = event.payload;
           setArxivConfig(event.payload);
-          setArxivRefreshError(null);
-          setCurrentIndex(0);
-          // Saving filters already refreshes centrally and publishes arxiv_update.
+          if (queryChanged) {
+            setArxivRefreshError(null);
+          }
         });
         if (!active) {
           u3();
@@ -144,7 +224,6 @@ export function ArxivWidgetContent({
         let arxivEnabled = appConfig?.arxiv_enabled !== false;
         if (active) {
           setServiceEnabled(arxivEnabled);
-          setDashboardTheme(appConfig?.theme === "light" ? "light" : "dark");
         }
 
         const u5 = await tauriListen("app_config_update", async (event) => {
@@ -152,13 +231,12 @@ export function ArxivWidgetContent({
           arxivEnabled = await handleWidgetAppConfigUpdate(event.payload, arxivEnabled, {
             serviceField: "arxiv_enabled",
             setServiceEnabled: setServiceEnabled,
-            setDashboardTheme: setDashboardTheme,
             disableClears: {
               clearData: () => setPapers([]),
               clearRefreshError: () => setArxivRefreshError(null),
               clearBackendError: () => setArxivBackendError(null),
               onExtra: () => {
-                setCurrentIndex(0);
+                setPaperCursor({ key: null, index: 0 });
                 setKeywordMenuOpen(false);
               },
             },
@@ -185,6 +263,7 @@ export function ArxivWidgetContent({
   if (!currentTheme) return null;
 
   const handleAction = async (direction: SwipeDirection) => {
+    if (keywordMenuOpenRef.current) return;
     const paper = currentPaper;
     if (!paper) return;
 
@@ -215,61 +294,48 @@ export function ArxivWidgetContent({
   const isLightAppearance = appearance
     ? appearance === "light"
     : isLightColor(currentTheme.bg_color);
-  const keywordMenuText = isLightAppearance ? "#475569" : subText;
-  const keywordMenuBorder = isLightAppearance
-    ? "rgba(100, 116, 139, 0.28)"
-    : "rgba(148, 163, 184, 0.24)";
+  const { glass: keywordMenuGlass, translucent: keywordMenuTranslucent,
+    backgroundColor: keywordMenuBackground, backdropFilter: keywordMenuBlur,
+    color: keywordMenuText, borderColor: keywordMenuBorder } = widgetKeywordSurface(currentTheme, isLightAppearance);
+  const keywordMenuActiveText = keywordMenuTranslucent ? keywordMenuText : accent;
   const keywordMenuCheckboxBorder = isLightAppearance
     ? "rgba(71, 85, 105, 0.42)"
     : "rgba(148, 163, 184, 0.38)";
 
 
-  return (
-    <div className="h-full flex flex-col select-none" style={{ color: mainText }}>
-      {!hideHeader && (
-        <div className="flex items-center gap-2 mb-4">
-          <Activity size={16} style={{ color: accent }} className="pointer-events-none" />
-          <span
-            className="text-xs font-black uppercase tracking-widest pointer-events-none"
-            style={{ color: subText }}
-          >
-            Arxiv Radar
-          </span>
-        </div>
-      )}
+  const refreshFailed = serviceEnabled && Boolean(arxivBackendError || arxivRefreshError);
+  const failureLabel = papers.length > 0
+    ? "Showing cached papers. Open the app for error details."
+    : "Could not update papers. Open the app for error details.";
+  const refreshStatus = refreshFailed ? <button type="button" aria-label={failureLabel} title={failureLabel}
+    className="shrink-0 rounded p-1 text-amber-400 hover:bg-amber-400/10" data-no-drag="true"
+    onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}
+    onClick={() => void tauriInvoke("show_main")}><CloudOff size={13} aria-hidden="true" /></button> : undefined;
 
-      <ServiceErrorBanners
-        backendError={arxivBackendError}
-        refreshError={arxivRefreshError}
-        onDismissBackend={() => setArxivBackendError(null)}
-        onDismissRefresh={() => setArxivRefreshError(null)}
-        theme={dashboardTheme}
-        showBackend={serviceEnabled}
-        className="mb-2 space-y-2"
-        backendCachedLabel={cachedLabelWhen(
-          papers.length > 0,
-          CACHED_LABELS.arxiv.backend
-        )}
-        refreshCachedLabel={cachedLabelWhen(
-          papers.length > 0,
-          CACHED_LABELS.arxiv.refresh
-        )}
-      />
+  return (
+    <div ref={widgetRef} tabIndex={-1} data-widget-kind="arxiv" className="arxiv-widget h-full min-h-0 flex flex-col select-none outline-none"
+      onPointerDownCapture={event => {
+        if (event.target instanceof Element && !event.target.closest('button, a, input, textarea, select, [contenteditable]')) {
+          widgetRef.current?.focus({ preventScroll: true });
+        }
+      }}
+      style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
+      {!hideHeader && <WidgetHeader icon={<Radar size={16} style={{ color: accent }} />} title="Arxiv Radar" color={subText} status={refreshStatus} controls={headerControls} />}
+
       {serviceEnabled && arxivKeywordOptions.length > 0 && (
-        <div className="relative mb-3" data-no-drag="true">
+        <div className="relative z-[60] mb-3 flex shrink-0 items-center gap-2">
+        <div ref={keywordControlRef} className="relative min-w-0 flex-1" data-no-drag="true"
+          onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
           <button
+            ref={keywordTriggerRef}
             type="button"
+            aria-expanded={keywordMenuOpen}
+            aria-controls={keywordMenuOpen ? keywordMenuId : undefined}
             onClick={() => setKeywordMenuOpen((open) => !open)}
-            className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
+            className="arxiv-keyword-control w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-colors"
             style={{
               borderColor: keywordMenuOpen ? accent : keywordMenuBorder,
-              backgroundColor: keywordMenuOpen
-                ? isLightAppearance
-                  ? "rgba(236, 72, 153, 0.08)"
-                  : "rgba(236, 72, 153, 0.12)"
-                : isLightAppearance
-                  ? "rgba(255, 255, 255, 0.62)"
-                  : "rgba(255, 255, 255, 0.04)",
+              backgroundColor: keywordMenuBackground,
               color: selectedKeywords.length > 0 ? accent : keywordMenuText,
             }}
             title={selectedKeywords.length === 0 ? "All keywords" : selectedKeywords.map(formatArxivKeywordLabel).join(", ")}
@@ -288,12 +354,15 @@ export function ArxivWidgetContent({
           </button>
           {keywordMenuOpen && (
             <div
-              className="absolute left-0 right-0 top-full z-50 mt-1 max-h-40 overflow-y-auto rounded-lg border backdrop-blur-xl"
+              id={keywordMenuId}
+              data-glass-tone={keywordMenuGlass ? (isLightAppearance ? "light" : "dark") : undefined}
+              className={`absolute left-0 right-0 top-full z-50 isolate mt-1 max-h-40 touch-pan-y overflow-y-auto overscroll-contain rounded-lg border ${keywordMenuGlass ? "glass-surface glass-menu" : ""}`}
               style={{
-                borderColor: keywordMenuBorder,
-                backgroundColor: isLightAppearance
-                  ? "rgba(255, 255, 255, 0.94)"
-                  : "rgba(15, 23, 42, 0.94)",
+                borderColor: keywordMenuGlass ? "transparent" : keywordMenuBorder,
+                backgroundColor: keywordMenuBackground,
+                backdropFilter: keywordMenuBlur,
+                WebkitBackdropFilter: keywordMenuBlur,
+                textShadow: keywordMenuGlass ? undefined : "none",
                 boxShadow: isLightAppearance
                   ? "0 8px 24px rgba(15, 23, 42, 0.12)"
                   : "0 8px 24px rgba(0, 0, 0, 0.24)",
@@ -303,13 +372,13 @@ export function ArxivWidgetContent({
                 type="button"
                 onClick={() => {
                   setSelectedKeywords([]);
-                  setCurrentIndex(0);
+                  setPaperCursor({ key: null, index: 0 });
                   setKeywordMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
+                className={`arxiv-keyword-control w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
                   isLightAppearance ? "hover:bg-slate-900/5" : "hover:bg-white/10"
                 }`}
-                style={{ color: selectedKeywords.length === 0 ? accent : keywordMenuText }}
+                style={{ color: selectedKeywords.length === 0 ? keywordMenuActiveText : keywordMenuText }}
               >
                 <span
                   className="w-3 h-3 rounded border flex items-center justify-center shrink-0"
@@ -334,12 +403,12 @@ export function ArxivWidgetContent({
                           ? prev.filter((selected) => selected !== keyword)
                           : [...prev, keyword]
                       );
-                      setCurrentIndex(0);
+                      setPaperCursor({ key: null, index: 0 });
                     }}
-                    className={`w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
+                    className={`arxiv-keyword-control w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
                       isLightAppearance ? "hover:bg-slate-900/5" : "hover:bg-white/10"
                     }`}
-                    style={{ color: active ? accent : keywordMenuText }}
+                    style={{ color: active ? keywordMenuActiveText : keywordMenuText }}
                     title={keyword}
                   >
                     <span
@@ -355,14 +424,35 @@ export function ArxivWidgetContent({
             </div>
           )}
         </div>
+        {currentPaper && <nav aria-label="Paper navigation" data-no-drag="true"
+          className="flex shrink-0 items-center gap-0.5 text-[11px]"
+          style={{ color: subText }} onPointerDownCapture={event => event.stopPropagation()}>
+          <button type="button" aria-label="Previous paper" title="Previous paper"
+            disabled={currentIndex === 0 || library.busy || keywordMenuOpen}
+            onClick={() => browsePaper(-1)}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-blue-500/10 disabled:opacity-30 disabled:cursor-default">
+            <ChevronLeft size={15} aria-hidden="true" />
+          </button>
+          <span className="min-w-[5ch] whitespace-nowrap text-center font-medium tabular-nums" aria-live="polite">
+            <span className="sr-only">Paper</span> {currentIndex + 1} / {visiblePapers.length}
+          </span>
+          <button type="button" aria-label="Next paper" title="Next paper"
+            disabled={currentIndex === visiblePapers.length - 1 || library.busy || keywordMenuOpen}
+            onClick={() => browsePaper(1)}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-blue-500/10 disabled:opacity-30 disabled:cursor-default">
+            <ChevronRight size={15} aria-hidden="true" />
+          </button>
+        </nav>}
+        </div>
       )}
-      <div className="mb-2 flex shrink-0 items-center justify-end" data-no-drag="true"><ArxivSkippedDialog library={library} isLight={isLightAppearance} compact /></div>
       {library.error && <p role="alert" className="mb-2 text-[10px] text-red-500" title={library.error}>Could not update paper. Please try again.</p>}
-      <div className="flex-1 relative perspective-1000" data-no-drag="true">
+      <div className="flex-1 min-h-0 relative z-0 perspective-1000" data-no-drag="true"
+        style={keywordMenuOpen && keywordMenuTranslucent ? { filter: "blur(6px)", opacity: 0.55 } : undefined}>
         {!serviceEnabled ? (
           <div
+            data-widget-surface="empty"
             className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 rounded-xl border border-dashed"
-            style={{ borderColor: `${subText}33`, color: subText }}
+            style={{ ...widgetCardStyle(currentTheme), borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
             <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
@@ -372,7 +462,8 @@ export function ArxivWidgetContent({
           {currentPaper ? (
             <motion.div
               key={currentPaper.id}
-              drag
+              drag={!keywordMenuOpen}
+              inert={keywordMenuOpen}
               dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
               onDragEnd={(_, info) => {
                 if (info.offset.x < -100) handleAction("left");
@@ -388,34 +479,21 @@ export function ArxivWidgetContent({
                 if (definition === "exit") setExitDirection(undefined);
               }}
               data-no-drag="true"
-              className="absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-5 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
+              className="widget-paper-card absolute inset-0 bg-white/5 rounded-2xl border border-white/10 p-3 flex flex-col shadow-[0_2px_8px_rgba(15,23,42,0.10)] backdrop-blur-md cursor-grab active:cursor-grabbing overflow-hidden"
+              style={{ ...widgetCardStyle(currentTheme), pointerEvents: keywordMenuOpen ? "none" : undefined }}
             >
               <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1">
-                <h3 className="shrink-0 text-[10px] font-bold mb-3 leading-relaxed break-words">{currentPaper.title}</h3>
-                <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} />
+                <h3 className="arxiv-paper-title shrink-0 text-[10px] font-bold mb-2 leading-snug break-words">{currentPaper.title}</h3>
+                <ArxivPaperMetadata paper={currentPaper} compact isLight={isLightAppearance} color={subText} className="mb-2 shrink-0" />
+                <ArxivAbstractPreview paper={currentPaper} compact isLight={isLightAppearance} textColor={subText} theme={currentTheme} />
               </div>
-              <div className="shrink-0 pt-3 border-t border-white/5 space-y-2">
-                <div className="flex flex-wrap gap-1">
-                  <span
-                    className="text-[8px] bg-white/5 px-2 py-0.5 rounded-full font-medium"
-                    style={{ color: subText }}
-                  >
-                    {currentPaper.authors.length > 0 ? (
-                      <>
-                        {currentPaper.authors[0]}
-                        {currentPaper.authors.length > 1 ? " et al." : ""}
-                      </>
-                    ) : (
-                      "Unknown Author"
-                    )}
-                  </span>
-                </div>
+              <div className="shrink-0 pt-2 border-t border-white/5 space-y-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-1">
                   <ArxivReadingActions paper={currentPaper} library={library} allowSkip compact />
                   <ArxivPaperActions key={currentPaper.id} paper={currentPaper} compact />
                 </div>
                 {arxivConfig.show_card_hints !== false && (
-                  <div className="flex items-center justify-between mt-3 text-[8px] font-black uppercase tracking-widest">
+                  <div className="arxiv-paper-hints flex items-center justify-between mt-2 text-[8px] font-black uppercase tracking-widest">
                     <span className="text-red-400">← Ignore</span>
                     <span className="text-blue-400">Open arXiv ↑</span>
                     <span className="text-emerald-400">Save →</span>
@@ -428,18 +506,46 @@ export function ArxivWidgetContent({
               />
             </motion.div>
           ) : (
-            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-4">
-              <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center">
-                <Check size={32} className="text-emerald-500" />
+            <div data-widget-surface="empty" style={widgetCardStyle(currentTheme)} className="h-full min-h-0 flex flex-col items-center justify-center text-center p-4 space-y-2">
+              <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
+                {refreshFailed ? <CloudOff size={22} className="text-amber-400" /> : <Check size={22} className="text-emerald-500" />}
               </div>
               <div className="space-y-1">
-                <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No keywords configured" : "All caught up!"}</div>
-                <p className="text-[9px] text-slate-500">{arxivKeywords.length === 0 ? "Add keywords in Paper filters to fill To read." : "Check back later for matching papers."}</p>
+                <div className="text-[10px] font-bold">{arxivKeywords.length === 0 ? "No keywords configured" : refreshFailed ? "Could not update papers" : "All caught up!"}</div>
+                <p className="text-[9px] text-slate-500">{arxivKeywords.length === 0 ? "Add keywords in Paper filters to fill To read." : refreshFailed ? "Open the app for error details." : "Check back later for matching papers."}</p>
               </div>
             </div>
           )}
         </AnimatePresence>
         )}
+        {serviceEnabled && currentPaper && visiblePapers.length > 1 && !keywordMenuOpen && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-between">
+            {([-1, 1] as const).map(direction => (
+              <button key={direction} type="button" data-no-drag="true"
+                aria-label={direction < 0 ? "Previous paper" : "Next paper"}
+                title={direction < 0 ? "Previous paper" : "Next paper"}
+                disabled={library.busy || (direction < 0 ? currentIndex === 0 : currentIndex === visiblePapers.length - 1)}
+                onPointerDownCapture={event => event.stopPropagation()}
+                onClick={() => browsePaper(direction)}
+                className={`arxiv-edge-nav relative inline-flex size-6 shrink-0 items-center justify-center rounded-full border shadow-sm ${direction < 0 ? "-left-3" : "-right-3"}`}
+                style={{ color: mainText, backgroundColor: keywordMenuBackground, borderColor: keywordMenuBorder,
+                  backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}>
+                {direction < 0 ? <ChevronLeft size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+              </button>
+            ))}
+          </div>
+        )}
+        {keywordMenuOpen && <button
+          ref={keywordDismissRef}
+          type="button"
+          tabIndex={-1}
+          aria-label="Close keyword filter"
+          data-no-drag="true"
+          className="absolute inset-0 z-20 cursor-default border-0 bg-transparent p-0 outline-none"
+          onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }}
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => { event.stopPropagation(); setKeywordMenuOpen(false); }}
+        />}
       </div>
     </div>
   );

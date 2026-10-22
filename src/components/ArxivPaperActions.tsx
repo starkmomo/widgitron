@@ -13,7 +13,7 @@ export function ArxivPaperActions({ paper, compact = false }: {
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; detail: string } | null>(null);
   const iconSize = compact ? 14 : 16;
-  const buttonClass = `inline-flex items-center justify-center rounded-lg text-blue-500 hover:bg-blue-500/10 transition-colors disabled:opacity-50 disabled:cursor-default ${compact ? "p-1.5" : "p-2"}`;
+  const buttonClass = `arxiv-paper-action inline-flex items-center justify-center rounded-lg text-blue-500 hover:bg-blue-500/10 transition-colors disabled:opacity-50 disabled:cursor-default ${compact ? "p-1.5" : "p-2"}`;
 
   const openPage = async () => {
     if (!links) return;

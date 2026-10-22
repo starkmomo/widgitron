@@ -9,7 +9,7 @@ export function DeadlineTimeline({ deadline, now, language, compact = false }: {
   const rounds = new Set(events.map(event => event.round)).size;
   const next = events.find(event => event.deadline_utc && Date.parse(event.deadline_utc) > now);
   return (
-    <div className={compact ? "mt-3 border-t border-current/10 pt-3" : "mt-5 border-t border-[var(--dashboard-border)] pt-5"}>
+    <div className={`deadline-timeline ${compact ? "mt-3 border-t border-current/10 pt-3" : "mt-5 border-t border-[var(--dashboard-border)] pt-5"}`}>
       <p className="mb-3 text-[10px] text-slate-500"><span>Local time</span><span data-no-localize> · {Intl.DateTimeFormat().resolvedOptions().timeZone}</span></p>
       <ol className="space-y-3">
         {events.map((event, index) => {

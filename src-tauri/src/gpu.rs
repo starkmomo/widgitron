@@ -1200,7 +1200,7 @@ fn run_openssh_command(
 
 /// Stream stdout lines from a long-lived OpenSSH remote command.
 /// `on_line` returns `Ok(true)` to continue, `Ok(false)` to stop cleanly.
-fn stream_openssh_lines<F>(server: &ServerConfig, remote_cmd: &str, mut on_line: F) -> Result<(), String>
+fn stream_openssh_lines<F>(server: &ServerConfig, remote_cmd: &str, on_line: F) -> Result<(), String>
 where
     F: FnMut(&str) -> Result<bool, String>,
 {
@@ -1236,28 +1236,95 @@ where
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
 
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start ssh for {}: {}", target, e))?;
-    let stdout = child
-        .stdout
-        .take()
+    read_openssh_lines(child, &target, on_line)
+}
+
+// Dropping Child alone does not stop or reap the SSH process. Every exit path,
+// including a callback/read error when the monitor is disabled, must do both.
+struct SshStreamChild(std::process::Child);
+
+impl Drop for SshStreamChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn read_openssh_lines<F>(
+    child: std::process::Child,
+    target: &str,
+    mut on_line: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<bool, String>,
+{
+    let mut child = SshStreamChild(child);
+    let stdout = child.0.stdout.take()
         .ok_or_else(|| format!("ssh {} missing stdout pipe", target))?;
     let reader = std::io::BufReader::new(stdout);
     use std::io::BufRead;
     for line in reader.lines() {
         let l = line.map_err(|e| format!("ssh {} read error: {}", target, e))?;
-        match on_line(&l)? {
-            true => {}
-            false => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Ok(());
-            }
+        if !on_line(&l)? {
+            return Ok(());
         }
     }
-    let _ = child.wait();
     Err(format!("ssh {} stream closed EOF", target))
+}
+
+#[cfg(all(test, unix))]
+mod ssh_stream_cleanup_tests {
+    use super::*;
+
+    fn stream(script: &str) -> std::process::Child {
+        Command::new("sh")
+            .args(["-c", script])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    fn assert_reaped(pid: u32) {
+        let alive = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        if alive {
+            // Do not leave a process behind if the regression returns.
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        }
+        assert!(!alive, "stream child {pid} was not killed and reaped");
+    }
+
+    #[test]
+    fn callback_error_reaps_the_stream_process() {
+        let child = stream("printf 'ready\n'; exec sleep 60");
+        let pid = child.id();
+        let result = read_openssh_lines(child, "test", |_| Err("monitor disabled".into()));
+        assert_eq!(result, Err("monitor disabled".into()));
+        assert_reaped(pid);
+    }
+
+    #[test]
+    fn clean_cancellation_reaps_the_stream_process() {
+        let child = stream("printf 'ready\n'; exec sleep 60");
+        let pid = child.id();
+        assert_eq!(read_openssh_lines(child, "test", |_| Ok(false)), Ok(()));
+        assert_reaped(pid);
+    }
+
+    #[test]
+    fn invalid_stdout_reaps_the_stream_process() {
+        let child = stream("printf '\\377\n'; exec sleep 60");
+        let pid = child.id();
+        assert!(read_openssh_lines(child, "test", |_| Ok(true)).is_err());
+        assert_reaped(pid);
+    }
 }
 
 pub fn load_gpu_cache(app: &AppHandle) -> HashMap<String, ServerGpuData> {
@@ -1349,7 +1416,7 @@ pub fn clear_gpu_emit_cache_for_host(state: &GlobalState, host: &str) {
     }
 }
 
-fn gpu_server_fingerprint(server: &ServerConfig) -> String {
+fn gpu_server_fingerprint(server: &ServerConfig, update_interval: u64) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     server.host.hash(&mut hasher);
     server.port.unwrap_or(22).hash(&mut hasher);
@@ -1359,7 +1426,56 @@ fn gpu_server_fingerprint(server: &ServerConfig) -> String {
     server.key_file.as_deref().unwrap_or("").hash(&mut hasher);
     server.use_ssh_config.hash(&mut hasher);
     server.use_slurm.hash(&mut hasher);
+    server.show_squeue_list.unwrap_or(false).hash(&mut hasher);
+    server.squeue_all_users.unwrap_or(false).hash(&mut hasher);
+    update_interval.max(1).hash(&mut hasher);
     format!("{}:{:016x}", server.host, hasher.finish())
+}
+
+#[cfg(test)]
+mod worker_config_tests {
+    use super::*;
+
+    fn server() -> ServerConfig {
+        ServerConfig {
+            host: "gpu.example".into(),
+            use_slurm: Some(true),
+            ..ServerConfig::default()
+        }
+    }
+
+    #[test]
+    fn changing_slurm_queue_settings_restarts_the_worker() {
+        let mut server = server();
+        let original = gpu_server_fingerprint(&server, 2);
+        server.show_squeue_list = Some(true);
+        let showing_queue = gpu_server_fingerprint(&server, 2);
+        assert_ne!(original, showing_queue);
+        server.squeue_all_users = Some(true);
+        assert_ne!(showing_queue, gpu_server_fingerprint(&server, 2));
+    }
+
+    #[test]
+    fn changing_poll_interval_restarts_both_worker_and_remote_watch() {
+        let server = server();
+        assert_ne!(
+            gpu_server_fingerprint(&server, 2),
+            gpu_server_fingerprint(&server, 10),
+        );
+        assert_eq!(
+            gpu_server_fingerprint(&server, 0),
+            gpu_server_fingerprint(&server, 1),
+        );
+    }
+
+    #[test]
+    fn explicit_default_queue_settings_do_not_restart_the_worker() {
+        let mut server = server();
+        let original = gpu_server_fingerprint(&server, 2);
+        server.show_squeue_list = Some(false);
+        server.squeue_all_users = Some(false);
+        assert_eq!(original, gpu_server_fingerprint(&server, 2));
+    }
 }
 
 pub fn parse_nvidia_smi_output(output: &str) -> Vec<GpuInfo> {
@@ -1878,14 +1994,64 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
 
         let config = read_gpu_config(&app);
 
-        let mut current_server_ids = Vec::new();
+        let update_interval = config.update_interval.unwrap_or(2).max(1);
+        let current_server_ids: Vec<String> = if gpu_enabled {
+            config.servers.iter()
+                .filter(|server| !server.host.trim().is_empty())
+                .map(|server| gpu_server_fingerprint(server, update_interval))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Retire changed workers and their streams before starting replacements.
+        // Otherwise retiring the old fingerprint can prune a new stream for the same host.
+        {
+            let mut workers = state
+                .active_workers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            workers.retain(|id, handle| {
+                if !current_server_ids.contains(id) {
+                    handle.abort();
+                    // Also cleanup monitors for this host
+                    let host = id.split(':').next().unwrap_or_default();
+                    if !host.is_empty() {
+                        let mut monitors = state
+                            .active_monitors
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        let prefix = format!("{}:", host);
+                        monitors.retain(|k, h| {
+                            if k.starts_with(&prefix) {
+                                h.abort();
+                                false
+                            } else {
+                                true
+                            }
+                        });
+
+                        // Clean up gpu_data entry
+                        if let Ok(mut data) = state.gpu_data.lock() {
+                            if data.remove(host).is_some() {
+                                clear_gpu_emit_cache_for_host(state.as_ref(), host);
+                                let _ = app.emit("gpu_prune", host.to_string());
+                            }
+                        }
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+
         if gpu_enabled {
             for server in &config.servers {
                 if server.host.trim().is_empty() {
                     continue;
                 }
-                let server_id = gpu_server_fingerprint(server);
-                current_server_ids.push(server_id.clone());
+                let server_id = gpu_server_fingerprint(server, update_interval);
 
                 let mut workers = state
                     .active_workers
@@ -1900,8 +2066,6 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                     let state_inner = state.clone();
                     let server_inner = server.clone();
                     let smi_cmd_inner = smi_cmd.to_string();
-                    let update_interval = config.update_interval.unwrap_or(2).max(1);
-
                     let handle = tokio::spawn(async move {
                         log::info!(
                             "--- Starting persistent worker for host: {} ---",
@@ -2891,47 +3055,6 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
             clear_gpu_emit_cache(state.as_ref());
             let _ = config_store::write_config(&app, GPU_CACHE_FILE, &Vec::<ServerGpuData>::new());
             let _ = app.emit("gpu_clear", ());
-        }
-
-        // Cleanup workers for removed servers
-        {
-            let mut workers = state
-                .active_workers
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            workers.retain(|id, handle| {
-                if !current_server_ids.contains(id) {
-                    handle.abort();
-                    // Also cleanup monitors for this host
-                    let host = id.split(':').next().unwrap_or_default();
-                    if !host.is_empty() {
-                        let mut monitors = state
-                            .active_monitors
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        let prefix = format!("{}:", host);
-                        monitors.retain(|k, h| {
-                            if k.starts_with(&prefix) {
-                                h.abort();
-                                false
-                            } else {
-                                true
-                            }
-                        });
-
-                        // Clean up gpu_data entry
-                        if let Ok(mut data) = state.gpu_data.lock() {
-                            if data.remove(host).is_some() {
-                                clear_gpu_emit_cache_for_host(state.as_ref(), host);
-                                let _ = app.emit("gpu_prune", host.to_string());
-                            }
-                        }
-                    }
-                    false
-                } else {
-                    true
-                }
-            });
         }
 
         if last_cache_persist.elapsed() >= Duration::from_secs(30) {

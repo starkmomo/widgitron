@@ -20,6 +20,7 @@ import type {
 } from "../types/events";
 
 export interface TauriEventMap {
+  widget_glass_update: { enabled: boolean; dark: boolean; applied: boolean; dock_edge?: import("../types/tauri").SidebarDockState["edge"] | null };
   arxiv_library_update: import("../types/tauri").ArxivReadingState;
   app_config_update: AppConfigUpdatePayload;
   main_navigation_pending: UnitPayload;
@@ -50,6 +51,7 @@ export type TauriEventPayload<E extends TauriEvent> = TauriEventMap[E];
 
 /** All frontend/backend event names — useful for grep and runtime checks. */
 export const TAURI_EVENT_NAMES = [
+  "widget_glass_update",
   "arxiv_library_update",
   "app_config_update",
   "main_navigation_pending",

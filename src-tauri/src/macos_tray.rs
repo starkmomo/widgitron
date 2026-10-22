@@ -4,6 +4,7 @@ use tauri::{AppHandle, Manager};
 use crate::{commands, config_store, models};
 
 struct TrayItems {
+    menu: Menu<tauri::Wry>,
     dashboard: MenuItem<tauri::Wry>,
     sidebar: MenuItem<tauri::Wry>,
     hide_widgets: MenuItem<tauri::Wry>,
@@ -43,11 +44,7 @@ pub fn create_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let hide_widgets = MenuItem::with_id(
         app,
         "tray_hide_widgets",
-        if zh {
-            "隐藏全部浮窗"
-        } else {
-            "Hide All Widgets"
-        },
+        widgets_label(zh, false),
         true,
         None::<&str>,
     )?;
@@ -63,13 +60,28 @@ pub fn create_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         &[&dashboard, &sidebar, &hide_widgets, &separator, &quit],
     )?;
+    let config = config_store::read_config::<models::AppConfig>(app, "app_config.json");
+    hide_widgets.set_text(widgets_label(zh, config.widgets_hidden.unwrap_or(false)))?;
+    if crate::widget_visibility::selected_widgets(&config).is_empty() {
+        menu.remove(&hide_widgets)?;
+    }
     app.manage(TrayItems {
+        menu: menu.clone(),
         dashboard,
         sidebar,
         hide_widgets,
         quit,
     });
     Ok(menu)
+}
+
+fn widgets_label(zh: bool, hidden: bool) -> &'static str {
+    match (zh, hidden) {
+        (true, true) => "显示浮窗",
+        (true, false) => "隐藏浮窗",
+        (false, true) => "Show Widgets",
+        (false, false) => "Hide Widgets",
+    }
 }
 
 fn sidebar_label(zh: bool, expanded: bool) -> &'static str {
@@ -92,11 +104,17 @@ pub fn refresh_labels(app: &AppHandle, expanded: bool) {
         "Open Dashboard"
     });
     let _ = items.sidebar.set_text(sidebar_label(zh, expanded));
-    let _ = items.hide_widgets.set_text(if zh {
-        "隐藏全部浮窗"
-    } else {
-        "Hide All Widgets"
-    });
+    let config = config_store::read_config::<models::AppConfig>(app, "app_config.json");
+    let _ = items.hide_widgets.set_text(widgets_label(zh, config.widgets_hidden.unwrap_or(false)));
+    let wanted = !crate::widget_visibility::selected_widgets(&config).is_empty();
+    if let Ok(entries) = items.menu.items() {
+        let present = entries.iter().any(|entry| entry.id().0 == "tray_hide_widgets");
+        if wanted && !present {
+            let _ = items.menu.insert(&items.hide_widgets, 2);
+        } else if !wanted && present {
+            let _ = items.menu.remove(&items.hide_widgets);
+        }
+    }
     let _ = items.quit.set_text(if zh { "退出" } else { "Quit" });
 }
 
@@ -129,8 +147,8 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 let state = app.state::<models::GlobalState>();
-                if let Err(error) = commands::hide_all_widgets(app.clone(), state).await {
-                    log::warn!("Failed to hide widgets from menu bar: {error}");
+                if let Err(error) = commands::toggle_widgets_visibility(app.clone(), state).await {
+                    log::warn!("Failed to toggle widget visibility from menu bar: {error}");
                 }
             });
         }

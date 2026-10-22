@@ -27,15 +27,23 @@ mod antigravity;
 mod arxiv;
 mod arxiv_download;
 mod arxiv_library;
+mod arxiv_refresh;
 mod commands;
 mod config_store;
 mod deadlines;
 mod desktop;
 mod gpu;
+mod glass_shape;
 mod logger;
 mod main_navigation;
 #[cfg(target_os = "macos")]
 mod macos_setup;
+#[cfg(target_os = "macos")]
+mod macos_glass;
+#[cfg(target_os = "macos")]
+mod macos_widget_hover;
+#[cfg(target_os = "macos")]
+mod macos_sidebar_ordering;
 #[cfg(target_os = "macos")]
 mod macos_tray;
 #[cfg(target_os = "macos")]
@@ -57,13 +65,51 @@ mod sidebar_hotkey;
 mod sidebar_hotkey;
 mod sqlite_state;
 mod sidebar_startup;
+mod sidebar_placement;
+mod sidebar_geometry;
 mod ui_scale;
 mod utils;
 mod vscode_secrets;
 mod widget_layout;
+mod widget_minimum;
+mod widget_visibility;
+#[cfg(windows)]
+mod windows_glass;
+#[cfg(windows)]
+mod windows_frame;
+#[cfg(windows)]
+mod windows_desktop;
+#[cfg(windows)]
+mod windows_tray;
+#[cfg(windows)]
+mod windows_tray_menu;
 
 pub fn run() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    #[cfg(all(windows, debug_assertions))]
+    let context = {
+        // QA builds use independent configs and must not activate an installed copy.
+        let mut context = context;
+        context.config_mut().identifier.push_str(".dev");
+        context
+    };
+    let builder = tauri::Builder::default();
+    // Register first: secondary launches exit before windows, trays or workers start.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // A repeated autostart request must not interrupt the user's current work.
+        if args.iter().skip(1).any(|arg| arg == "--minimized") {
+            return;
+        }
+        log::info!("Repeated launch: activating the existing main window");
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = commands::show_main(handle).await {
+                log::warn!("Failed to activate the existing main window: {error}");
+            }
+        });
+    }));
+    builder
         .manage(main_navigation::MainNavigation::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -86,6 +132,9 @@ pub fn run() {
             commands::create_widget,
             commands::close_widget,
             commands::hide_all_widgets,
+            commands::set_widgets_hidden,
+            commands::toggle_widgets_visibility,
+            desktop::begin_widget_drag,
             commands::toggle_widget,
             desktop::set_desktop_mode,
             commands::save_gpu_config,
@@ -99,7 +148,9 @@ pub fn run() {
             commands::save_app_config,
             commands::save_sidebar_tile_layout,
             commands::set_widget_always_on_top,
-            commands::set_widget_desktop_fixed,
+            commands::set_widget_display_mode,
+            commands::set_widget_glass,
+            commands::set_widget_content_minimum,
             commands::get_deadlines,
             commands::get_conference_catalog,
             commands::refresh_paper_deadlines,
@@ -275,7 +326,53 @@ pub fn run() {
                 tray.set_show_menu_on_left_click(false)?;
             }
 
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            {
+                let menu = windows_tray::create_menu(&handle)?;
+                let mut tray_builder = TrayIconBuilder::with_id(windows_tray::TRAY_ID)
+                    .tooltip(if cfg!(debug_assertions) { "Widgitron (测试版)" } else { "Widgitron" })
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(windows_tray::handle_menu_event)
+                    .on_tray_icon_event(|tray, event| {
+                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                        match event {
+                            TrayIconEvent::Click {
+                                button: MouseButton::Right,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } => {
+                                // Update items on the persistent menu; never replace
+                                // the HMENU while Windows may be tracking its popup.
+                                windows_tray::refresh(tray.app_handle());
+                            }
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } | TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                                let app = tray.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = commands::show_main(app).await;
+                                });
+                            }
+                            _ => {}
+                        }
+                    });
+                if let Some(icon) = app.default_window_icon() {
+                    tray_builder = tray_builder.icon(icon.clone());
+                }
+                let _tray = tray_builder.build(&handle)?;
+                let refresh_app = handle.clone();
+                tauri::Listener::listen(&handle, "app_config_update", move |_| {
+                    let app = refresh_app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        windows_tray::refresh(&app);
+                    });
+                });
+            }
+
+            #[cfg(not(any(target_os = "macos", windows)))]
             {
                 let mut tray_builder = TrayIconBuilder::new()
                     .show_menu_on_left_click(false)
@@ -522,9 +619,13 @@ pub fn run() {
             });
 
             tauri::async_runtime::spawn(async move {
-                let active_map = app_config.active_widgets.unwrap_or_default();
-                let default_visible = cfg!(windows);
                 tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                let app_config = config_store::read_config::<models::AppConfig>(&handle_gpu, "app_config.json");
+                if app_config.widgets_hidden.unwrap_or(false) {
+                    return;
+                }
+                let active_map = app_config.active_widgets.unwrap_or_default();
+                let default_visible = false;
 
                 if app_config.gpu_enabled.unwrap_or(true)
                     && *active_map
@@ -589,11 +690,35 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             let label = window.label().to_string();
-            #[cfg(target_os = "macos")]
-            if label == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            #[cfg(any(target_os = "macos", windows))]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // OS shortcuts must follow the same hide/state-update paths as
+                // the custom close buttons. Destroying these persistent windows
+                // leaves the tray and sidebar controllers holding stale handles.
+                if label == "main" {
                     api.prevent_close();
                     let _ = window.hide();
+                    return;
+                }
+                if label == "sidebar" {
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = commands::hide_sidebar(app).await {
+                            log::warn!("Failed to hide sidebar after native close: {error}");
+                        }
+                    });
+                    return;
+                }
+                if widget_layout::is_tracked_widget(&label) {
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app.state::<models::GlobalState>();
+                        if let Err(error) = commands::close_widget(app.clone(), state, label).await {
+                            log::warn!("Failed to hide widget after native close: {error}");
+                        }
+                    });
                     return;
                 }
             }
@@ -607,6 +732,20 @@ pub fn run() {
                 let flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED;
                 let _ = window.app_handle().save_window_state(flags);
                 return;
+            }
+
+            #[cfg(windows)]
+            if label == "sidebar" || widget_layout::is_tracked_widget(&label) {
+                match event {
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                        | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                        if let Some(widget) = window.app_handle().get_webview_window(&label) {
+                            windows_glass::geometry_changed(&widget);
+                        }
+                    }
+                    tauri::WindowEvent::Destroyed => windows_glass::forget(&label),
+                    _ => {}
+                }
             }
 
             if !widget_layout::is_tracked_widget(&label) {
@@ -623,12 +762,14 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
             let open_main = match event {
-                tauri::RunEvent::Reopen { has_visible_windows: false, .. } => true,
+                // Desktop widgets and the sidebar count as visible windows too.
+                // Every Dock reopen request should restore the dashboard.
+                tauri::RunEvent::Reopen { .. } => true,
                 tauri::RunEvent::Opened { urls } => {
                     let mut handled = false;
                     for url in &urls {

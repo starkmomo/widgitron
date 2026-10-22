@@ -2,10 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type { TauriCommand, TauriCommandArgs, TauriInvokeResult } from "../types/tauri";
 
 type CommandsWithoutArgs = {
-  [C in TauriCommand]: TauriCommandArgs[C] extends undefined ? C : never;
+  [C in TauriCommand]: undefined extends TauriCommandArgs[C] ? C : never;
 }[TauriCommand];
 
-type CommandsWithArgs = Exclude<TauriCommand, CommandsWithoutArgs>;
+type CommandsWithArgs = {
+  [C in TauriCommand]: Exclude<TauriCommandArgs[C], undefined> extends never ? never : C;
+}[TauriCommand];
 
 export function tauriInvoke<C extends CommandsWithoutArgs>(
   command: C

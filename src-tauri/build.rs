@@ -30,6 +30,15 @@ fn sync_seed_configs() {
 }
 
 fn main() {
+    // Common-controls subclass helpers require v6. Embed the dependency in
+    // native integration tests too (Tauri embeds its own app manifest).
+    #[cfg(all(windows, target_env = "msvc"))]
+    {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("windows.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}", manifest.display());
+    }
     sync_seed_configs();
     tauri_build::build();
 }

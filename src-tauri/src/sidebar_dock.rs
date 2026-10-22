@@ -17,6 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::config_store;
 use crate::models::AppConfig;
+use crate::models::SidebarAxisGeometry;
+use crate::sidebar_geometry::SidebarGeometryMemory;
 
 const SIDEBAR_LABEL: &str = "sidebar";
 // A generous initial cross-axis size. The edge-axis length remains dynamic so
@@ -148,6 +150,8 @@ struct WorkArea {
     top: i32,
     right: i32,
     bottom: i32,
+    // Layout avoids taskbars; reveal hit-testing uses the monitor perimeter.
+    screen: RectPx,
     scale_factor: f64,
 }
 
@@ -202,10 +206,6 @@ impl WorkArea {
     fn height(self) -> i32 {
         (self.bottom - self.top).max(1)
     }
-
-    fn contains(self, point: POINT) -> bool {
-        point.x >= self.left && point.x < self.right && point.y >= self.top && point.y < self.bottom
-    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -227,6 +227,8 @@ struct DockRuntime {
     native_visible: bool,
     thickness_logical: f64,
     edge_length_logical: Option<f64>,
+    edge_offset: f64,
+    geometry: SidebarGeometryMemory,
     ui_scale: f64,
     reveal_dwell: Duration,
     reveal_cooldown: Duration,
@@ -245,9 +247,12 @@ struct DockRuntime {
     dragging: bool,
     drag_start: Option<POINT>,
     drag_has_moved: bool,
+    drag_allow_undock: bool,
     drag_offset: Option<POINT>,
+    drag_grip_inset: Option<(f64, f64)>,
     drag_preview_edge: Option<DockEdge>,
     drag_preview_area: Option<WorkArea>,
+    drag_preview_offset: Option<f64>,
     resizing: bool,
     was_left_down: bool,
     managed_rect: Option<RectPx>,
@@ -255,13 +260,29 @@ struct DockRuntime {
 }
 
 impl DockRuntime {
+    fn remember_current_geometry(&mut self) {
+        self.geometry.remember(self.edge.as_str(), SidebarAxisGeometry {
+            thickness: self.thickness_logical, length: self.edge_length_logical, offset: self.edge_offset,
+        });
+    }
+
+    fn change_edge(&mut self, edge: DockEdge) {
+        self.remember_current_geometry();
+        let next = self.geometry.for_edge(edge.as_str());
+        self.edge = edge;
+        self.thickness_logical = next.thickness;
+        self.edge_length_logical = next.length;
+        self.edge_offset = next.offset;
+    }
+
     fn payload(&self) -> SidebarDockState {
         SidebarDockState {
             edge: self.edge.as_str().to_string(),
             pinned: self.pinned,
             expanded: self.visual_expanded,
-            dragging: self.dragging,
-            preview_edge: self.drag_preview_edge.map(|edge| edge.as_str().to_string()),
+            dragging: self.dragging && self.drag_allow_undock && self.drag_has_moved,
+            preview_edge: self.drag_preview_edge.filter(|_| self.drag_allow_undock && self.drag_has_moved)
+                .map(|edge| edge.as_str().to_string()),
         }
     }
 
@@ -290,11 +311,12 @@ impl DockRuntime {
 
 pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(SIDEBAR_LABEL) {
+        crate::windows_frame::protect(&window)?;
         let _ = window.set_maximizable(false);
         return Ok(window);
     }
 
-    WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App("index.html".into()))
         .title("Widgitron Sidebar")
         .inner_size(DEFAULT_THICKNESS_LOGICAL, 900.0)
         .decorations(false)
@@ -306,7 +328,9 @@ pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .skip_taskbar(true)
         .visible(false)
         .build()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    crate::windows_frame::protect(&window)?;
+    Ok(window)
 }
 
 pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
@@ -338,6 +362,8 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         clamp_sensitivity(config.sidebar_hide_sensitivity, DEFAULT_HIDE_SENSITIVITY);
     let (reveal_dwell, reveal_cooldown) = reveal_timings(reveal_sensitivity);
     let hide_leave = hide_leave_delay(hide_sensitivity);
+    let geometry = SidebarGeometryMemory::from_config(config);
+    let active_geometry = geometry.for_edge(DockEdge::parse(config.sidebar_edge.as_deref()).as_str());
     let runtime = Arc::new(Mutex::new(DockRuntime {
         enabled: config.sidebar_enabled.unwrap_or(true),
         edge: DockEdge::parse(config.sidebar_edge.as_deref()),
@@ -345,8 +371,10 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         requested_expanded: config.sidebar_enabled.unwrap_or(true) && pinned,
         visual_expanded: false,
         native_visible: false,
-        thickness_logical: config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL),
-        edge_length_logical: config.sidebar_length,
+        thickness_logical: active_geometry.thickness,
+        edge_length_logical: active_geometry.length,
+        edge_offset: active_geometry.offset,
+        geometry,
         ui_scale,
         reveal_dwell,
         reveal_cooldown,
@@ -365,9 +393,12 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         dragging: false,
         drag_start: None,
         drag_has_moved: false,
+        drag_allow_undock: false,
         drag_offset: None,
+        drag_grip_inset: None,
         drag_preview_edge: None,
         drag_preview_area: None,
+        drag_preview_offset: None,
         resizing: false,
         was_left_down: false,
         managed_rect: None,
@@ -418,6 +449,7 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         state.resizing = false;
         state.drag_preview_edge = None;
         state.drag_preview_area = None;
+        state.drag_preview_offset = None;
         state.drag_start = None;
         state.drag_offset = None;
         state.reset_edge_reveal();
@@ -433,8 +465,12 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         state.raise_requested = true;
         state.grace_until = Instant::now() + SHOW_GRACE;
     }
-    let next_thickness = config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL);
-    let next_edge_length = config.sidebar_length;
+    let geometry = SidebarGeometryMemory::from_config(config);
+    let active_geometry = geometry.for_edge(next_edge.as_str());
+    state.geometry = geometry;
+    let next_thickness = active_geometry.thickness;
+    let next_edge_length = active_geometry.length;
+    let next_offset = active_geometry.offset;
     let now = Instant::now();
 
     if state.edge != next_edge {
@@ -453,13 +489,23 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         state.edge_length_logical = next_edge_length;
         state.layout_dirty = true;
     }
+    if (state.edge_offset - next_offset).abs() > 0.0001 {
+        state.edge_offset = next_offset;
+        state.layout_dirty = true;
+    }
     if (state.ui_scale - next_ui_scale).abs() >= 0.001 {
         state.ui_scale = next_ui_scale;
         state.layout_dirty = true;
     }
     if let (Some(x), Some(y)) = (config.sidebar_monitor_x, config.sidebar_monitor_y) {
         if let Some(area) = work_area_near_point(app, POINT { x, y }) {
-            if area.left != state.work_area.left || area.top != state.work_area.top {
+            if area.left != state.work_area.left
+                || area.top != state.work_area.top
+                || area.right != state.work_area.right
+                || area.bottom != state.work_area.bottom
+                || area.screen != state.work_area.screen
+                || (area.scale_factor - state.work_area.scale_factor).abs() >= 0.001
+            {
                 state.work_area = area;
                 state.layout_dirty = true;
                 state.start_reveal_cooldown(now);
@@ -496,6 +542,7 @@ pub fn show(app: &AppHandle, focus: bool) -> Result<(), String> {
             || area.top != state.work_area.top
             || area.right != state.work_area.right
             || area.bottom != state.work_area.bottom
+            || area.screen != state.work_area.screen
             || (area.scale_factor - state.work_area.scale_factor).abs() >= 0.001
         {
             state.work_area = area;
@@ -572,7 +619,7 @@ pub fn toggle_pinned(
     set_pinned(app, pinned, focus_when_pinning && pinned)
 }
 
-pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
+pub fn begin_drag(app: &AppHandle, allow_undock: bool) -> Result<SidebarDockState, String> {
     require_started()?;
     let runtime = DOCK_RUNTIME
         .get()
@@ -585,6 +632,7 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
     state.dragging = true;
     state.drag_start = cursor;
     state.drag_has_moved = false;
+    state.drag_allow_undock = allow_undock;
     state.drag_offset = match (cursor, current_rect) {
         (Some(cursor), Some(rect)) => Some(POINT {
             x: cursor.x.saturating_sub(rect.left),
@@ -592,8 +640,14 @@ pub fn begin_drag(app: &AppHandle) -> Result<SidebarDockState, String> {
         }),
         _ => None,
     };
+    state.drag_grip_inset = if allow_undock {
+        state.drag_offset.map(|grab|
+            (grab.x as f64 / state.work_area.scale_factor,
+             grab.y as f64 / state.work_area.scale_factor))
+    } else { None };
     state.drag_preview_edge = None;
     state.drag_preview_area = None;
+    state.drag_preview_offset = None;
     state.resizing = false;
     state.requested_expanded = true;
     state.awaiting_pointer_entry = false;
@@ -625,292 +679,349 @@ fn require_started() -> Result<(), String> {
 }
 
 fn run_dock_loop(app: AppHandle, window: WebviewWindow, runtime: Arc<Mutex<DockRuntime>>) {
-    let _ = window.set_always_on_top(true);
-
     loop {
         if !lock_runtime(&runtime).enabled {
             std::thread::sleep(Duration::from_millis(250));
             continue;
         }
-        let now = Instant::now();
-        let cursor = cursor_position();
-        let left_down = is_left_button_down();
-        let pointer_button_down = left_down || is_other_pointer_button_down();
-        let current_rect = native_window_rect(&window);
-        let mut should_persist = false;
-        let mut event_payload = None;
+        // Never hold DockRuntime on a worker while a synchronous HWND/Tauri
+        // call waits for the UI thread: get_state/begin_drag need the same lock.
+        let tick_app = app.clone();
+        let tick_window = window.clone();
+        let tick_runtime = runtime.clone();
+        let (done, completed) = std::sync::mpsc::sync_channel(1);
+        if window.run_on_main_thread(move || {
+            dock_tick(&tick_app, &tick_window, &tick_runtime);
+            let _ = done.send(());
+        }).is_err() || completed.recv().is_err() {
+            break;
+        }
+        // Acknowledge each tick before queuing another: no unbounded UI queue.
+        std::thread::sleep(Duration::from_millis(16));
+    }
+}
 
+fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRuntime>>) {
+    let now = Instant::now();
+    let cursor = cursor_position();
+    let left_down = is_left_button_down();
+    let pointer_button_down = left_down || is_other_pointer_button_down();
+    let current_rect = native_window_rect(&window);
+    // Native sizing runs a modal message loop. Completion can arrive without a
+    // polling tick observing the pressed mouse button, especially on fast drags.
+    let resize_finished = crate::windows_frame::take_sidebar_resize_finished();
+    let mut should_persist = false;
+    let mut event_payload = None;
+
+    {
+        let mut state = lock_runtime(&runtime);
+        if !state.enabled { return; }
+        crate::windows_frame::set_sidebar_axis(state.edge.is_vertical(),
+            (MIN_EDGE_LENGTH_LOGICAL * state.work_area.scale_factor * state.ui_scale).round() as i32);
+        let shown_rect = sidebar_rect_at(
+            state.work_area,
+            state.edge,
+            state.thickness_logical,
+            state.edge_length_logical,
+            state.ui_scale,
+            state.edge_offset,
+        );
+        if state.native_visible && !native_is_visible(&window) {
+            state.native_visible = false;
+            state.visual_expanded = false;
+        }
+
+        if state.dragging {
+            if let Some(point) = cursor {
+                let activation_distance = (DRAG_ACTIVATION_DISTANCE_LOGICAL
+                    * state.work_area.scale_factor)
+                    .round() as i32;
+                if let Some(start) = state.drag_start {
+                    let delta_x = point.x.saturating_sub(start.x) as i64;
+                    let delta_y = point.y.saturating_sub(start.y) as i64;
+                    let threshold = activation_distance.max(4) as i64;
+                    state.drag_has_moved |=
+                        delta_x * delta_x + delta_y * delta_y >= threshold * threshold;
+                } else {
+                    state.drag_has_moved = true;
+                }
+
+                if state.drag_has_moved {
+                    if let Some(next_area) = work_area_near_point(&app, point) {
+                        let next_area = if state.drag_allow_undock { next_area } else { state.work_area };
+                        let (edge, distance) = nearest_edge(next_area, point);
+                        let snap_distance =
+                            (SNAP_DISTANCE_LOGICAL * next_area.scale_factor).round() as i32;
+                        let parallel = !state.drag_allow_undock || (next_area.left == state.work_area.left && next_area.top == state.work_area.top
+                            && state.drag_start.is_some_and(|start| crate::sidebar_placement::stays_on_edge(
+                                state.edge.is_vertical(), (point.x - start.x) as f64, (point.y - start.y) as f64,
+                                next_area.scale_factor)));
+                        let preview_edge = if parallel { Some(state.edge) }
+                            else { (distance <= snap_distance.max(24)).then_some(edge) };
+                        let source_rect =
+                            state.managed_rect.or(current_rect).unwrap_or(shown_rect);
+                        let mut preview_offset = None;
+                        let preview_rect = match preview_edge {
+                            Some(edge) => {
+                                let geometry = state.geometry.for_edge(edge.as_str());
+                                let centered = sidebar_rect_at(next_area, edge, geometry.thickness,
+                                    geometry.length, state.ui_scale, 0.5);
+                                let grab = state.drag_offset.unwrap_or(POINT { x: centered.width / 2, y: 22 });
+                                let grab = crate::sidebar_placement::preview_grab(centered.width as f64, centered.height as f64,
+                                    (grab.x as f64, grab.y as f64), state.drag_grip_inset, next_area.scale_factor);
+                                let offset = crate::sidebar_placement::offset_from_origin(
+                                    if edge.is_vertical() { next_area.top } else { next_area.left } as f64,
+                                    if edge.is_vertical() { next_area.height() } else { next_area.width() } as f64,
+                                    if edge.is_vertical() { centered.height } else { centered.width } as f64,
+                                    if edge.is_vertical() { point.y as f64 - grab.1 } else { point.x as f64 - grab.0 });
+                                preview_offset = Some(offset);
+                                sidebar_rect_at(next_area, edge, geometry.thickness,
+                                    geometry.length, state.ui_scale, offset)
+                            },
+                            None => floating_drag_preview_rect(
+                                next_area,
+                                point,
+                                state.drag_offset,
+                                state.drag_grip_inset,
+                                source_rect,
+                                state.ui_scale,
+                            ),
+                        };
+
+                        if state.managed_rect != Some(preview_rect) {
+                            if native_set_window_rect(&window, preview_rect).is_ok() {
+                                state.managed_rect = Some(preview_rect);
+                            }
+                        }
+                        state.drag_preview_edge = preview_edge;
+                        state.drag_preview_area = Some(next_area);
+                        state.drag_preview_offset = preview_offset;
+                    }
+                }
+            }
+
+            if !left_down {
+                if let (Some(edge), Some(next_area)) =
+                    (state.drag_preview_edge, state.drag_preview_area)
+                {
+                    state.change_edge(edge);
+                    state.work_area = next_area;
+                    if let Some(offset) = state.drag_preview_offset { state.edge_offset = offset; }
+                }
+                state.dragging = false;
+                state.drag_start = None;
+                state.drag_has_moved = false;
+                state.drag_offset = None;
+                state.drag_grip_inset = None;
+                state.drag_preview_edge = None;
+                state.drag_preview_area = None;
+                state.drag_preview_offset = None;
+                state.layout_dirty = true;
+                state.requested_expanded = true;
+                state.grace_until = now + SHOW_GRACE;
+                state.awaiting_pointer_entry = true;
+                state.leave_at = None;
+                state.start_reveal_cooldown(now);
+                should_persist = true;
+            }
+        } else if left_down {
+            if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
+                if (actual.width - managed.width).abs() > 2
+                    || (actual.height - managed.height).abs() > 2
+                {
+                    state.resizing = true;
+                }
+            }
+        } else if (state.was_left_down && state.resizing) || resize_finished {
+            if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
+                let thickness_changed = if state.edge.is_vertical() {
+                    (actual.width - managed.width).abs() > 2
+                } else {
+                    (actual.height - managed.height).abs() > 2
+                };
+                let edge_length_changed = if state.edge.is_vertical() {
+                    (actual.height - managed.height).abs() > 2
+                } else {
+                    (actual.width - managed.width).abs() > 2
+                };
+
+                if thickness_changed {
+                    state.thickness_logical = logical_thickness_for_rect(
+                        state.work_area,
+                        state.edge,
+                        actual,
+                        state.ui_scale,
+                    );
+                }
+                if edge_length_changed {
+                    state.edge_length_logical = Some(logical_edge_length_for_rect(
+                        state.work_area,
+                        state.edge,
+                        actual,
+                        state.ui_scale,
+                    ));
+                }
+                state.edge_offset = crate::sidebar_placement::offset_from_origin(
+                    if state.edge.is_vertical() { state.work_area.top } else { state.work_area.left } as f64,
+                    if state.edge.is_vertical() { state.work_area.height() } else { state.work_area.width() } as f64,
+                    if state.edge.is_vertical() { actual.height } else { actual.width } as f64,
+                    if state.edge.is_vertical() { actual.top } else { actual.left } as f64);
+                state.layout_dirty = true;
+                should_persist = true;
+            }
+            state.resizing = false;
+            state.awaiting_pointer_entry = true;
+            state.leave_at = None;
+            state.grace_until = now + SHOW_GRACE;
+        }
+
+        state.was_left_down = left_down;
+
+        // Resize and drop may change the visible span during this same tick.
+        // Hit-testing against the old frame would immediately disarm protection.
+        let shown_rect = sidebar_rect_at(state.work_area, state.edge, state.thickness_logical,
+            state.edge_length_logical, state.ui_scale, state.edge_offset);
+
+        let previous_cursor = state.last_cursor;
+        state.last_cursor = cursor;
+        let edge_hovered = cursor
+            .map(|point| cursor_in_edge_trigger(state.work_area, shown_rect, state.edge, point))
+            .unwrap_or(false);
+        let entered_with_intent = match (previous_cursor, cursor) {
+            (Some(previous), Some(current)) => cursor_entered_edge_with_intent(
+                state.work_area,
+                shown_rect,
+                state.edge,
+                previous,
+                current,
+            ),
+            _ => false,
+        };
+        if state.suppress_reveal_until_edge_leave {
+            state.reset_edge_reveal();
+            if !edge_hovered {
+                state.suppress_reveal_until_edge_leave = false;
+            }
+        } else {
+            let reveal_blocked = state.pinned
+                || state.requested_expanded
+                || state.native_visible
+                || state.dragging
+                || pointer_button_down
+                || now < state.reveal_cooldown_until;
+            let reveal_dwell = state.reveal_dwell;
+            if state.edge_reveal_intent.update(
+                now,
+                edge_hovered,
+                entered_with_intent,
+                reveal_blocked,
+                reveal_dwell,
+            ) {
+                state.requested_expanded = true;
+                state.awaiting_pointer_entry = false;
+                state.grace_until = now + SHOW_GRACE;
+                state.leave_at = None;
+            }
+        }
+
+        if state.pinned {
+            state.requested_expanded = true;
+            state.awaiting_pointer_entry = false;
+            state.leave_at = None;
+        } else if state.requested_expanded && !state.dragging && !left_down {
+            let pointer_inside = cursor
+                .map(|point| pointer_inside_sidebar(&window, shown_rect, point))
+                .unwrap_or(false);
+            if pointer_inside {
+                state.awaiting_pointer_entry = false;
+            }
+            if pointer_inside || edge_hovered || state.awaiting_pointer_entry || now < state.grace_until {
+                state.leave_at = None;
+            } else if let Some(deadline) = state.leave_at {
+                if now >= deadline {
+                    state.requested_expanded = false;
+                    state.leave_at = None;
+                    state.start_reveal_cooldown(now);
+                }
+            } else {
+                state.leave_at = Some(now + state.hide_leave_delay);
+            }
+        }
+
+        if state.requested_expanded
+            && state.native_visible
+            && !state.dragging
+            && !state.resizing
         {
-            let mut state = lock_runtime(&runtime);
-            if !state.enabled { continue; }
-            let shown_rect = sidebar_rect(
+            if current_rect.is_none_or(|actual| !rects_close(actual, shown_rect)) {
+                state.layout_dirty = true;
+            }
+        }
+
+        if state.layout_dirty && !state.dragging && !left_down {
+            let target = sidebar_rect_at(
                 state.work_area,
                 state.edge,
                 state.thickness_logical,
                 state.edge_length_logical,
                 state.ui_scale,
+                state.edge_offset,
             );
-            if state.native_visible && !native_is_visible(&window) {
-                state.native_visible = false;
-                state.visual_expanded = false;
+            if native_set_window_rect(&window, target).is_ok() {
+                state.managed_rect = Some(target);
+                state.layout_dirty = false;
             }
+        }
 
-            if state.dragging {
-                if let Some(point) = cursor {
-                    let activation_distance = (DRAG_ACTIVATION_DISTANCE_LOGICAL
-                        * state.work_area.scale_factor)
-                        .round() as i32;
-                    if let Some(start) = state.drag_start {
-                        let delta_x = point.x.saturating_sub(start.x) as i64;
-                        let delta_y = point.y.saturating_sub(start.y) as i64;
-                        let threshold = activation_distance.max(4) as i64;
-                        state.drag_has_moved |=
-                            delta_x * delta_x + delta_y * delta_y >= threshold * threshold;
-                    } else {
-                        state.drag_has_moved = true;
-                    }
-
-                    if state.drag_has_moved {
-                        if let Some(next_area) = work_area_near_point(&app, point) {
-                            let (edge, distance) = nearest_edge(next_area, point);
-                            let snap_distance =
-                                (SNAP_DISTANCE_LOGICAL * next_area.scale_factor).round() as i32;
-                            let preview_edge = (distance <= snap_distance.max(24)).then_some(edge);
-                            let source_rect =
-                                state.managed_rect.or(current_rect).unwrap_or(shown_rect);
-                            let preview_rect = match preview_edge {
-                                Some(edge) => sidebar_rect(
-                                    next_area,
-                                    edge,
-                                    state.thickness_logical,
-                                    state.edge_length_logical,
-                                    state.ui_scale,
-                                ),
-                                None => floating_drag_preview_rect(
-                                    next_area,
-                                    point,
-                                    state.drag_offset,
-                                    source_rect,
-                                    state.ui_scale,
-                                ),
-                            };
-
-                            if state.managed_rect != Some(preview_rect) {
-                                if native_set_window_rect(&window, preview_rect).is_ok() {
-                                    state.managed_rect = Some(preview_rect);
-                                }
-                            }
-                            state.drag_preview_edge = preview_edge;
-                            state.drag_preview_area = Some(next_area);
-                        }
-                    }
-                }
-
-                if !left_down {
-                    if let (Some(edge), Some(next_area)) =
-                        (state.drag_preview_edge, state.drag_preview_area)
-                    {
-                        state.edge = edge;
-                        state.work_area = next_area;
-                    }
-                    state.dragging = false;
-                    state.drag_start = None;
-                    state.drag_has_moved = false;
-                    state.drag_offset = None;
-                    state.drag_preview_edge = None;
-                    state.drag_preview_area = None;
-                    state.layout_dirty = true;
-                    state.requested_expanded = true;
-                    state.grace_until = now + SHOW_GRACE;
-                    state.start_reveal_cooldown(now);
-                    should_persist = true;
-                }
-            } else if left_down {
-                if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
-                    if (actual.width - managed.width).abs() > 2
-                        || (actual.height - managed.height).abs() > 2
-                    {
-                        state.resizing = true;
-                    }
-                }
-            } else if state.was_left_down && state.resizing {
-                if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
-                    let thickness_changed = if state.edge.is_vertical() {
-                        (actual.width - managed.width).abs() > 2
-                    } else {
-                        (actual.height - managed.height).abs() > 2
-                    };
-                    let edge_length_changed = if state.edge.is_vertical() {
-                        (actual.height - managed.height).abs() > 2
-                    } else {
-                        (actual.width - managed.width).abs() > 2
-                    };
-
-                    if thickness_changed {
-                        state.thickness_logical = logical_thickness_for_rect(
-                            state.work_area,
-                            state.edge,
-                            actual,
-                            state.ui_scale,
-                        );
-                    }
-                    if edge_length_changed {
-                        state.edge_length_logical = Some(logical_edge_length_for_rect(
-                            state.work_area,
-                            state.edge,
-                            actual,
-                            state.ui_scale,
-                        ));
-                    }
-                    state.layout_dirty = true;
-                    should_persist = true;
-                }
-                state.resizing = false;
-            }
-
-            state.was_left_down = left_down;
-
-            let previous_cursor = state.last_cursor;
-            state.last_cursor = cursor;
-            let edge_hovered = cursor
-                .map(|point| cursor_in_edge_trigger(state.work_area, shown_rect, state.edge, point))
-                .unwrap_or(false);
-            let entered_with_intent = match (previous_cursor, cursor) {
-                (Some(previous), Some(current)) => cursor_entered_edge_with_intent(
-                    state.work_area,
-                    shown_rect,
-                    state.edge,
-                    previous,
-                    current,
-                ),
-                _ => false,
-            };
-            if state.suppress_reveal_until_edge_leave {
-                state.reset_edge_reveal();
-                if !edge_hovered {
-                    state.suppress_reveal_until_edge_leave = false;
-                }
-            } else {
-                let reveal_blocked = state.pinned
-                    || state.requested_expanded
-                    || state.native_visible
-                    || state.dragging
-                    || pointer_button_down
-                    || now < state.reveal_cooldown_until;
-                let reveal_dwell = state.reveal_dwell;
-                if state.edge_reveal_intent.update(
-                    now,
-                    edge_hovered,
-                    entered_with_intent,
-                    reveal_blocked,
-                    reveal_dwell,
-                ) {
-                    state.requested_expanded = true;
-                    state.awaiting_pointer_entry = false;
-                    state.grace_until = now + SHOW_GRACE;
-                    state.leave_at = None;
-                }
-            }
-
-            if state.pinned {
-                state.requested_expanded = true;
-                state.awaiting_pointer_entry = false;
-                state.leave_at = None;
-            } else if state.requested_expanded && !state.dragging && !left_down {
-                let pointer_inside = cursor
-                    .map(|point| pointer_inside_sidebar(&window, shown_rect, point))
-                    .unwrap_or(false);
-                if pointer_inside {
-                    state.awaiting_pointer_entry = false;
-                }
-                if pointer_inside || state.awaiting_pointer_entry || now < state.grace_until {
-                    state.leave_at = None;
-                } else if let Some(deadline) = state.leave_at {
-                    if now >= deadline {
-                        state.requested_expanded = false;
-                        state.leave_at = None;
-                        state.start_reveal_cooldown(now);
-                    }
-                } else {
-                    state.leave_at = Some(now + state.hide_leave_delay);
-                }
-            }
-
-            if state.requested_expanded
-                && state.native_visible
-                && !state.dragging
-                && !state.resizing
-            {
-                if current_rect.is_none_or(|actual| !rects_close(actual, shown_rect)) {
-                    state.layout_dirty = true;
-                }
-            }
-
-            if state.layout_dirty && !state.dragging && !left_down {
-                let target = sidebar_rect(
+        if state.requested_expanded {
+            if !state.native_visible || state.raise_requested {
+                let target = sidebar_rect_at(
                     state.work_area,
                     state.edge,
                     state.thickness_logical,
                     state.edge_length_logical,
                     state.ui_scale,
+                    state.edge_offset,
                 );
-                if native_set_window_rect(&window, target).is_ok() {
-                    state.managed_rect = Some(target);
-                    state.layout_dirty = false;
-                }
-            }
-
-            if state.requested_expanded {
-                if !state.native_visible || state.raise_requested {
-                    let target = sidebar_rect(
-                        state.work_area,
-                        state.edge,
-                        state.thickness_logical,
-                        state.edge_length_logical,
-                        state.ui_scale,
-                    );
-                    match show_sidebar_window(&window, target, state.focus_requested) {
-                        Ok(()) => {
-                            state.managed_rect = Some(target);
-                            state.native_visible = true;
-                            state.visual_expanded = true;
-                            state.raise_requested = false;
-                        }
-                        Err(error) => log::warn!("Failed to show Windows sidebar: {error}"),
+                match show_sidebar_window(&window, target, state.focus_requested) {
+                    Ok(()) => {
+                        state.managed_rect = Some(target);
+                        state.native_visible = true;
+                        state.visual_expanded = true;
+                        state.raise_requested = false;
                     }
-                } else if !state.visual_expanded {
-                    state.visual_expanded = true;
+                    Err(error) => log::warn!("Failed to show Windows sidebar: {error}"),
                 }
+            } else if !state.visual_expanded {
+                state.visual_expanded = true;
+            }
 
-                if state.focus_requested && state.native_visible {
-                    let _ = window.set_focus();
-                    state.focus_requested = false;
-                }
-            } else {
+            if state.focus_requested && state.native_visible {
+                let _ = window.set_focus();
                 state.focus_requested = false;
-                state.raise_requested = false;
-                state.visual_expanded = false;
-                if state.native_visible {
-                    native_hide(&window);
-                    state.native_visible = false;
-                }
             }
-
-            let payload = state.payload();
-            if state.last_emitted.as_ref() != Some(&payload) {
-                state.last_emitted = Some(payload.clone());
-                event_payload = Some(payload);
+        } else {
+            state.focus_requested = false;
+            state.raise_requested = false;
+            state.visual_expanded = false;
+            if state.native_visible {
+                native_hide(&window);
+                state.native_visible = false;
             }
         }
 
-        if should_persist {
-            persist_runtime_config(&app);
+        let payload = state.payload();
+        if state.last_emitted.as_ref() != Some(&payload) {
+            state.last_emitted = Some(payload.clone());
+            event_payload = Some(payload);
         }
-        if let Some(payload) = event_payload {
-            let _ = app.emit("sidebar_state_update", payload);
-        }
+    }
 
-        std::thread::sleep(Duration::from_millis(16));
+    if should_persist {
+        persist_runtime_config(&app);
+    }
+    if let Some(payload) = event_payload {
+        let _ = app.emit("sidebar_state_update", payload);
     }
 }
 
@@ -928,31 +1039,31 @@ fn persist_runtime_config(app: &AppHandle) {
     let Some(runtime) = DOCK_RUNTIME.get() else {
         return;
     };
-    let (edge, pinned, thickness, edge_length, monitor_x, monitor_y) = {
-        let state = lock_runtime(runtime);
+    let (edge, pinned, geometry, monitor_x, monitor_y) = {
+        let mut state = lock_runtime(runtime);
+        state.remember_current_geometry();
         (
             state.edge.as_str().to_string(),
             state.pinned,
-            state.thickness_logical,
-            state.edge_length_logical,
+            state.geometry,
             state.work_area.left,
             state.work_area.top,
         )
     };
 
-    let mut config = config_store::read_config::<AppConfig>(app, "app_config.json");
-    config.sidebar_edge = Some(edge);
-    config.sidebar_pinned = Some(pinned);
-    config.sidebar_width = Some(thickness.round());
-    if let Some(edge_length) = edge_length {
-        config.sidebar_length = Some(edge_length.round());
-    }
-    config.sidebar_monitor_x = Some(monitor_x);
-    config.sidebar_monitor_y = Some(monitor_y);
-    if let Err(err) = config_store::write_config(app, "app_config.json", &config) {
-        log::warn!("Failed to persist sidebar dock state: {err}");
-        return;
-    }
+    let config = match config_store::update_config::<AppConfig>(app, "app_config.json", |config| {
+        config.sidebar_edge = Some(edge);
+        config.sidebar_pinned = Some(pinned);
+        geometry.write_config(config);
+        config.sidebar_monitor_x = Some(monitor_x);
+        config.sidebar_monitor_y = Some(monitor_y);
+    }) {
+        Ok(config) => config,
+        Err(err) => {
+            log::warn!("Failed to persist sidebar dock state: {err}");
+            return;
+        }
+    };
     let _ = app.emit("app_config_update", config);
 }
 
@@ -991,16 +1102,23 @@ fn work_area_near_point(app: &AppHandle, point: POINT) -> Option<WorkArea> {
         top: info.rcWork.top,
         right: info.rcWork.right,
         bottom: info.rcWork.bottom,
+        screen: RectPx {
+            left: info.rcMonitor.left,
+            top: info.rcMonitor.top,
+            width: info.rcMonitor.right - info.rcMonitor.left,
+            height: info.rcMonitor.bottom - info.rcMonitor.top,
+        },
         scale_factor,
     })
 }
 
-fn sidebar_rect(
+fn sidebar_rect_at(
     area: WorkArea,
     edge: DockEdge,
     thickness_logical: f64,
     edge_length_logical: Option<f64>,
     ui_scale: f64,
+    offset: f64,
 ) -> RectPx {
     let dpi_scale = area.scale_factor.max(0.5);
     let content_scale = dpi_scale * crate::ui_scale::sanitize(Some(ui_scale));
@@ -1021,7 +1139,7 @@ fn sidebar_rect(
             edge_length_logical,
             content_scale,
         );
-        let top = area.top + (area.height() - height) / 2;
+        let top = crate::sidebar_placement::edge_origin(area.top as f64, area.height() as f64, height as f64, offset).round() as i32;
         return RectPx {
             left: if matches!(edge, DockEdge::Left) {
                 area.left
@@ -1039,7 +1157,7 @@ fn sidebar_rect(
         edge_length_logical,
         content_scale,
     );
-    let left = area.left + (area.width() - width) / 2;
+    let left = crate::sidebar_placement::edge_origin(area.left as f64, area.width() as f64, width as f64, offset).round() as i32;
     RectPx {
         left,
         top: if matches!(edge, DockEdge::Top) {
@@ -1050,6 +1168,11 @@ fn sidebar_rect(
         width,
         height: thickness,
     }
+}
+
+#[cfg(test)]
+fn sidebar_rect(area: WorkArea, edge: DockEdge, thickness: f64, length: Option<f64>, scale: f64) -> RectPx {
+    sidebar_rect_at(area, edge, thickness, length, scale, 0.5)
 }
 
 fn resolve_edge_length_px(
@@ -1077,6 +1200,7 @@ fn floating_drag_preview_rect(
     area: WorkArea,
     cursor: POINT,
     drag_offset: Option<POINT>,
+    grip_inset: Option<(f64, f64)>,
     source: RectPx,
     ui_scale: f64,
 ) -> RectPx {
@@ -1094,12 +1218,11 @@ fn floating_drag_preview_rect(
         .max(1);
     let width = source.width.clamp(min_width.min(max_width), max_width);
     let height = source.height.clamp(min_height.min(max_height), max_height);
-    let offset_x = drag_offset
-        .map(|offset| offset.x.clamp(0, width.saturating_sub(1)))
-        .unwrap_or(width / 2);
-    let offset_y = drag_offset
-        .map(|offset| offset.y.clamp(0, height.saturating_sub(1)))
-        .unwrap_or(height / 2);
+    let original = drag_offset.map(|offset| (offset.x as f64, offset.y as f64))
+        .unwrap_or((width as f64 / 2.0, height as f64 / 2.0));
+    let grab = crate::sidebar_placement::preview_grab(width as f64, height as f64, original, grip_inset, area.scale_factor);
+    let offset_x = grab.0.round() as i32;
+    let offset_y = grab.1.round() as i32;
     let min_left = area.left + margin;
     let max_left = (area.right - margin - width).max(min_left);
     let min_top = area.top + margin;
@@ -1139,33 +1262,34 @@ fn logical_edge_length_for_rect(
 }
 
 fn cursor_in_edge_trigger(area: WorkArea, sidebar: RectPx, edge: DockEdge, point: POINT) -> bool {
-    if !area.contains(point) {
+    let screen = area.screen;
+    if !screen.contains(point) {
         return false;
     }
     let trigger = (EDGE_TRIGGER_LOGICAL * area.scale_factor).round().max(2.0) as i32;
     let vertical_guard = ((EDGE_CORNER_GUARD_LOGICAL * area.scale_factor).round() as i32)
-        .min(area.height() / 4)
+        .min(screen.height / 4)
         .max(0);
     let horizontal_guard = ((EDGE_CORNER_GUARD_LOGICAL * area.scale_factor).round() as i32)
-        .min(area.width() / 4)
+        .min(screen.width / 4)
         .max(0);
-    let vertical_start = sidebar.top.max(area.top + vertical_guard);
-    let vertical_end = sidebar.bottom().min(area.bottom - vertical_guard);
-    let horizontal_start = sidebar.left.max(area.left + horizontal_guard);
-    let horizontal_end = sidebar.right().min(area.right - horizontal_guard);
+    let vertical_start = sidebar.top.max(screen.top + vertical_guard);
+    let vertical_end = sidebar.bottom().min(screen.bottom() - vertical_guard);
+    let horizontal_start = sidebar.left.max(screen.left + horizontal_guard);
+    let horizontal_end = sidebar.right().min(screen.right() - horizontal_guard);
 
     match edge {
         DockEdge::Left => {
-            point.x < area.left + trigger && point.y >= vertical_start && point.y < vertical_end
+            point.x < screen.left + trigger && point.y >= vertical_start && point.y < vertical_end
         }
         DockEdge::Right => {
-            point.x >= area.right - trigger && point.y >= vertical_start && point.y < vertical_end
+            point.x >= screen.right() - trigger && point.y >= vertical_start && point.y < vertical_end
         }
         DockEdge::Top => {
-            point.y < area.top + trigger && point.x >= horizontal_start && point.x < horizontal_end
+            point.y < screen.top + trigger && point.x >= horizontal_start && point.x < horizontal_end
         }
         DockEdge::Bottom => {
-            point.y >= area.bottom - trigger
+            point.y >= screen.bottom() - trigger
                 && point.x >= horizontal_start
                 && point.x < horizontal_end
         }
@@ -1179,7 +1303,7 @@ fn cursor_entered_edge_with_intent(
     previous: POINT,
     current: POINT,
 ) -> bool {
-    if !area.contains(previous)
+    if !area.screen.contains(previous)
         || !cursor_in_edge_trigger(area, sidebar, edge, current)
         || cursor_in_edge_trigger(area, sidebar, edge, previous)
     {
@@ -1190,11 +1314,12 @@ fn cursor_entered_edge_with_intent(
 }
 
 fn edge_distance(area: WorkArea, edge: DockEdge, point: POINT) -> i32 {
+    let screen = area.screen;
     match edge {
-        DockEdge::Left => point.x - area.left,
-        DockEdge::Top => point.y - area.top,
-        DockEdge::Right => area.right - 1 - point.x,
-        DockEdge::Bottom => area.bottom - 1 - point.y,
+        DockEdge::Left => point.x - screen.left,
+        DockEdge::Top => point.y - screen.top,
+        DockEdge::Right => screen.right() - 1 - point.x,
+        DockEdge::Bottom => screen.bottom() - 1 - point.y,
     }
 }
 
@@ -1334,6 +1459,7 @@ mod tests {
             top: 0,
             right: 1920,
             bottom: 1040,
+            screen: RectPx { left: 0, top: 0, width: 1920, height: 1080 },
             scale_factor: 1.0,
         }
     }
@@ -1394,6 +1520,60 @@ mod tests {
             DockEdge::Right,
             POINT { x: 1919, y: 100 }
         ));
+    }
+
+    #[test]
+    fn taskbar_reservation_does_not_move_the_screen_edge_trigger() {
+        for (edge, left, top, right, bottom, outer, inner) in [
+            (DockEdge::Bottom, 0, 0, 1920, 1040,
+                POINT { x: 960, y: 1079 }, POINT { x: 960, y: 1039 }),
+            (DockEdge::Top, 0, 40, 1920, 1080,
+                POINT { x: 960, y: 0 }, POINT { x: 960, y: 40 }),
+            (DockEdge::Left, 48, 0, 1920, 1080,
+                POINT { x: 0, y: 540 }, POINT { x: 48, y: 540 }),
+            (DockEdge::Right, 0, 0, 1872, 1080,
+                POINT { x: 1919, y: 540 }, POINT { x: 1871, y: 540 }),
+        ] {
+            let work = WorkArea { left, top, right, bottom, ..area() };
+            let sidebar = sidebar_rect(work, edge, 420.0, None, 1.0);
+            assert!(cursor_in_edge_trigger(work, sidebar, edge, outer), "{edge:?}");
+            assert!(!cursor_in_edge_trigger(work, sidebar, edge, inner), "{edge:?}");
+            // The visible sidebar still fits inside the area above/beside the taskbar.
+            assert!(sidebar.left >= left && sidebar.top >= top);
+            assert!(sidebar.right() <= right && sidebar.bottom() <= bottom);
+        }
+    }
+
+    #[test]
+    fn bottom_reveal_accepts_approaching_through_the_taskbar() {
+        let bottom = sidebar_rect(area(), DockEdge::Bottom, 420.0, None, 1.0);
+        assert!(cursor_entered_edge_with_intent(
+            area(), bottom, DockEdge::Bottom,
+            POINT { x: 960, y: 1070 }, POINT { x: 960, y: 1079 },
+        ));
+        assert!(!cursor_entered_edge_with_intent(
+            area(), bottom, DockEdge::Bottom,
+            POINT { x: 960, y: 1080 }, POINT { x: 960, y: 1079 },
+        ));
+    }
+
+    #[test]
+    fn bottom_trigger_keeps_saved_span_and_dpi_on_a_negative_monitor() {
+        let work = WorkArea {
+            left: -2880, top: 0, right: 0, bottom: 1548,
+            screen: RectPx { left: -2880, top: 0, width: 2880, height: 1620 },
+            scale_factor: 1.5,
+        };
+        let sidebar = sidebar_rect_at(work, DockEdge::Bottom, 320.0, Some(640.0), 1.0, 0.75);
+        let x = sidebar.left + sidebar.width / 2;
+        assert!(cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1619 }));
+        assert!(cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1615 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1614 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1547 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom, POINT { x, y: 1620 }));
+        assert!(!cursor_in_edge_trigger(work, sidebar, DockEdge::Bottom,
+            POINT { x: sidebar.left - 1, y: 1619 }));
+        assert!(sidebar.bottom() <= work.bottom);
     }
 
     #[test]
@@ -1535,6 +1715,7 @@ mod tests {
             area(),
             POINT { x: 960, y: 520 },
             Some(POINT { x: 210, y: 20 }),
+            None,
             sidebar_rect(area(), DockEdge::Right, 420.0, None, 1.0),
             1.0,
         );

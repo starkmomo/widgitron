@@ -137,7 +137,7 @@ fn paper_matches_keyword(haystack: &str, keyword: &str) -> bool {
     !terms.is_empty() && terms.iter().all(|term| haystack.contains(term))
 }
 
-fn matched_keywords_for_paper(paper: &ArxivPaper, keywords: &[String]) -> Vec<String> {
+pub(crate) fn matched_keywords_for_paper(paper: &ArxivPaper, keywords: &[String]) -> Vec<String> {
     let haystack = format!("{} {}", paper.title, paper.summary).to_lowercase();
     keywords
         .iter()
@@ -188,23 +188,7 @@ fn build_category_query(categories: &[String]) -> String {
     }
 }
 
-fn merge_papers(target: &mut Vec<ArxivPaper>, source: Vec<ArxivPaper>) {
-    for paper in source {
-        if let Some(existing) = target.iter_mut().find(|existing| existing.id == paper.id) {
-            for keyword in paper.matched_keywords {
-                if !existing.matched_keywords.iter().any(|existing_keyword| {
-                    normalize_keyword(existing_keyword) == normalize_keyword(&keyword)
-                }) {
-                    existing.matched_keywords.push(keyword);
-                }
-            }
-        } else {
-            target.push(paper);
-        }
-    }
-}
-
-fn sort_papers_by_updated_desc(papers: &mut [ArxivPaper]) {
+pub(crate) fn sort_papers_by_updated_desc(papers: &mut [ArxivPaper]) {
     papers.sort_by(|a, b| paper_updated_at(b).cmp(&paper_updated_at(a)));
 }
 
@@ -650,172 +634,103 @@ pub async fn fetch_paper_page(
     Ok(result)
 }
 
-pub async fn perform_arxiv_fetch(
-    app: &AppHandle,
-    state: &GlobalState,
-) -> Result<Vec<ArxivPaper>, String> {
-    let config = config_store::read_config::<ArxivConfig>(app, "arxiv_config.json");
-    if !has_reading_keywords(&config.keywords) {
-        let papers = crate::arxiv_library::replace_batch(app, state, Vec::new(), &config)?;
-        let _ = app.emit("arxiv_error", "");
-        return Ok(papers);
+static READING_REFRESH: crate::arxiv_refresh::RefreshCoordinator = crate::arxiv_refresh::RefreshCoordinator::new();
+static READING_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn invalidate_reading_refresh() {
+    READING_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+fn reading_request(app: &AppHandle) -> crate::arxiv_refresh::RefreshRequest {
+    let app_config = config_store::read_config::<AppConfig>(app, "app_config.json");
+    crate::arxiv_refresh::RefreshRequest {
+        config: config_store::read_config::<ArxivConfig>(app, "arxiv_config.json"),
+        proxy: app_config.arxiv_proxy.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+        enabled: app_config.arxiv_enabled.unwrap_or(true),
+        generation: READING_GENERATION.load(std::sync::atomic::Ordering::Acquire),
     }
+}
+
+async fn fetch_reading_papers(app: &AppHandle, config: ArxivConfig, reuse_cached: bool) -> Result<bool, String> {
+    if !has_reading_keywords(&config.keywords) { return Ok(reuse_cached); }
+    let cached = if reuse_cached { crate::arxiv_library::cached_keywords(app, &config)? } else { Vec::new() };
+    let missing: Vec<_> = get_unique_keywords(&config.keywords).into_iter()
+        .filter(|keyword| !cached.contains(&normalize_keyword(keyword))).collect();
+    // Removal/reordering needs no HTTP client or requests at all.
+    if missing.is_empty() { return Ok(reuse_cached); }
     let client = arxiv_client(app)?;
-
-    let kws = &config.keywords;
-    let cats = &config.categories;
-    let cat_query = build_category_query(cats);
+    let cat_query = build_category_query(&config.categories);
     let (today_start, tomorrow_start) = today_local_bounds()?;
-
-    let mut papers = Vec::new();
-
-    for keyword in get_unique_keywords(kws) {
+    for keyword in missing {
+        let latest = reading_request(app);
+        if !latest.enabled || crate::arxiv_refresh::query_changed(&config, &latest.config) { break; }
         if let Some(keyword_query) = arxiv_keyword_query(&keyword) {
             let query = format!("{} AND {}", cat_query, keyword_query);
             let keyword_papers = fetch_papers_for_query(
-                &client,
-                &query,
-                kws,
-                today_start,
-                tomorrow_start,
+                &client, &query, &config.keywords, today_start, tomorrow_start,
                 Some(ARXIV_MIN_PAPERS_PER_KEYWORD),
-            )
-            .await?;
-            merge_papers(&mut papers, keyword_papers);
+            ).await?;
+            crate::arxiv_library::cache_keyword(app, &config, &keyword, keyword_papers)?;
         }
     }
-    sort_papers_by_updated_desc(&mut papers);
+    Ok(reuse_cached)
+}
 
-    let papers = crate::arxiv_library::replace_batch(app, state, papers, &config)?;
-    let _ = app.emit("arxiv_error", "");
+async fn refresh_reading_papers(app: &AppHandle, state: &GlobalState, mode: crate::arxiv_refresh::RefreshMode)
+    -> Result<Option<Vec<ArxivPaper>>, String>
+{
+    let result = READING_REFRESH.refresh(mode, || reading_request(app),
+        |request, reuse_cached| fetch_reading_papers(app, request.config, reuse_cached),
+        |config, filters_changed| crate::arxiv_library::complete_cached_batch(app, state, config, filters_changed)).await;
+    match &result {
+        Ok(Some(_)) => { let _ = app.emit("arxiv_error", ""); }
+        Err(error) => {
+            log::warn!("Arxiv reading-list refresh failed: {error}");
+            let _ = app.emit("arxiv_error", error);
+        }
+        _ => {}
+    }
+    result
+}
 
-    Ok(papers)
+pub async fn perform_arxiv_fetch(app: &AppHandle, state: &GlobalState, filters_only: bool) -> Result<Vec<ArxivPaper>, String> {
+    let mode = if filters_only { crate::arxiv_refresh::RefreshMode::Filters }
+        else { crate::arxiv_refresh::RefreshMode::Manual };
+    Ok(refresh_reading_papers(app, state, mode).await?.unwrap_or_default())
 }
 
 pub async fn start_arxiv_monitor(app: AppHandle, state: std::sync::Arc<GlobalState>) {
-    // Populate state from cache on startup if empty
-    {
-        if let Ok(mut state_papers) = state.arxiv_papers.lock() {
-            if state_papers.is_empty() {
-                let cached_papers =
-                    config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_cache.json");
-                if !cached_papers.is_empty() {
-                    *state_papers = cached_papers;
-                }
-            }
-        }
-    }
-
-    // Startup delay to let frontend initialize cleanly
     tokio::time::sleep(Duration::from_secs(4)).await;
-
-    let mut is_startup = true;
-    let mut backoff_secs = 60;
-
+    let cache_path = crate::utils::get_config_path(&app, "arxiv_cache.json");
+    let fresh = std::fs::metadata(cache_path).ok().and_then(|meta| meta.modified().ok())
+        .and_then(|modified| modified.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(1800));
+    if fresh {
+        let papers = crate::arxiv_library::visible_papers(&app).unwrap_or_default();
+        let request = reading_request(&app);
+        let cached = crate::arxiv_library::cached_keywords(&app, &request.config).unwrap_or_default();
+        let complete = get_unique_keywords(&request.config.keywords).iter()
+            .filter(|keyword| arxiv_keyword_query(keyword).is_some())
+            .all(|keyword| cached.contains(&normalize_keyword(keyword)));
+        // Initialize old combined caches in the background, preserving their
+        // visible papers instead of leaving missing query caches idle for an hour.
+        if !papers.is_empty() && complete { READING_REFRESH.seed_cache(request, papers).await; }
+    }
+    let mut was_enabled = true;
     loop {
-        let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
-        let config = config_store::read_config::<ArxivConfig>(&app, "arxiv_config.json");
-
-        let interval = config.update_interval;
-
-        if !app_config.arxiv_enabled.unwrap_or(true) {
-            if let Ok(mut state_papers) = state.arxiv_papers.lock() {
-                state_papers.clear();
+        let request = reading_request(&app);
+        if !request.enabled {
+            if was_enabled {
+                if let Ok(mut papers) = state.arxiv_papers.lock() { papers.clear(); }
+                let _ = config_store::write_config(&app, "arxiv_cache.json", &Vec::<ArxivPaper>::new());
+                let _ = app.emit("arxiv_update", Vec::<ArxivPaper>::new());
             }
-            // Clear cache file too
-            let _ = config_store::write_config(&app, "arxiv_cache.json", &Vec::<ArxivPaper>::new());
-            let _ = app.emit("arxiv_update", Vec::<ArxivPaper>::new());
-
-            for _ in 0..interval {
-                let ac = config_store::read_config::<AppConfig>(&app, "app_config.json");
-                if ac.arxiv_enabled.unwrap_or(true) {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            is_startup = false;
-            continue;
+        } else {
+            // This shares the foreground fetch's result and due time. Settings
+            // polling cannot enqueue a second request or repeat a failed one.
+            let _ = refresh_reading_papers(&app, &state, crate::arxiv_refresh::RefreshMode::Scheduled).await;
         }
-
-        let mut skip_fetch = false;
-        if is_startup {
-            is_startup = false;
-            let cache_path = crate::utils::get_config_path(&app, "arxiv_cache.json");
-            if let Ok(metadata) = std::fs::metadata(&cache_path) {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(elapsed) = modified.elapsed() {
-                        let has_cached_papers =
-                            !config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_cache.json")
-                                .is_empty();
-                        if elapsed < Duration::from_secs(1800) && has_cached_papers {
-                            // 30 minutes
-                            skip_fetch = true;
-                            log::info!(
-                                "Arxiv cache is fresh (< 30m). Skipping initial fetch on startup."
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        if !skip_fetch {
-            match perform_arxiv_fetch(&app, &state).await {
-                Ok(_) => {
-                    // Success: reset backoff
-                    backoff_secs = 60;
-                }
-                Err(e) => {
-                    log::error!(
-                        "Error fetching Arxiv: {}. Retrying in {}s.",
-                        e,
-                        backoff_secs
-                    );
-                    let _ = app.emit("arxiv_error", e.clone());
-                    let cached_papers = {
-                        if let Ok(state_papers) = state.arxiv_papers.lock() {
-                            if !state_papers.is_empty() {
-                                state_papers.clone()
-                            } else {
-                                config_store::read_config::<Vec<ArxivPaper>>(
-                                    &app,
-                                    "arxiv_cache.json",
-                                )
-                            }
-                        } else {
-                            config_store::read_config::<Vec<ArxivPaper>>(&app, "arxiv_cache.json")
-                        }
-                    };
-                    if !cached_papers.is_empty() {
-                        let _ = app.emit("arxiv_update", &cached_papers);
-                    }
-                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-                    // Exponential backoff: double the sleep time up to 15 minutes (900s)
-                    backoff_secs = std::cmp::min(backoff_secs * 2, 900);
-                    continue;
-                }
-            }
-        }
-
-        let last_config = config_store::read_config::<ArxivConfig>(&app, "arxiv_config.json");
-        let check_interval = 5;
-        let loops = interval / check_interval;
-        for _ in 0..loops {
-            tokio::time::sleep(Duration::from_secs(check_interval)).await;
-            let ac = config_store::read_config::<AppConfig>(&app, "app_config.json");
-            if !ac.arxiv_enabled.unwrap_or(true) {
-                break;
-            }
-
-            let current_config =
-                config_store::read_config::<ArxivConfig>(&app, "arxiv_config.json");
-            if current_config.keywords != last_config.keywords
-                || current_config.categories != last_config.categories
-                || current_config.update_interval != last_config.update_interval
-            {
-                break;
-            }
-        }
+        was_enabled = request.enabled;
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 

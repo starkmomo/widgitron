@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Search, X } from "lucide-react";
 import type { PaperConfig, PaperDeadlineInfo } from "../types/config";
 import type { UiLanguage } from "../utils/localization";
@@ -11,15 +11,25 @@ import { ResearchPageHeader, ResearchTabs } from "./ResearchPageHeader";
 
 type View = "all" | "followed";
 
-export function DeadlineConferenceBrowser({ deadlines, config, now, language, isLight, onPreference, onAdjustFilters, headerActions, saveError, children }: {
+export interface ConferenceNavigationRequest { view: View; id: number }
+
+export function DeadlineConferenceBrowser({ deadlines, config, now, language, isLight, onPreference, onAdjustFilters, headerActions, saveError, navigationRequest, children }: {
   deadlines: PaperDeadlineInfo[]; config: PaperConfig; now: number; language: UiLanguage; isLight: boolean;
   onPreference: (ids: string[], action: ConferencePreference, undoable?: boolean) => void;
   onAdjustFilters: () => void; headerActions: ReactNode; saveError?: boolean; children?: ReactNode;
+  navigationRequest?: ConferenceNavigationRequest | null;
 }) {
-  const [view, setView] = useState<View>("all");
+  const [view, setView] = useState<View>(navigationRequest?.view ?? "all");
   const [query, setQuery] = useState("");
   const [batch, setBatch] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!navigationRequest) return;
+    setView(navigationRequest.view);
+    setQuery("");
+    setBatch(false);
+    setSelected(new Set());
+  }, [navigationRequest]);
   const preferences = resolveConferencePreferences(config, deadlines, now);
   const rows = conferenceManagementRows(deadlines, preferences, now);
   const lists = {

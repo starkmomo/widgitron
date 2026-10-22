@@ -21,16 +21,20 @@ export interface AppConfig {
   sidebar_theme?: SidebarThemeConfig;
   sidebar_width?: number;
   sidebar_length?: number;
+  sidebar_offset?: number;
+  sidebar_axis_geometry?: Record<string, { thickness: number; length?: number | null; offset: number }>;
   sidebar_widgets?: Record<string, boolean>;
   sidebar_layout?: Record<string, number>;
   sidebar_order?: string[];
   sidebar_tile_sizes?: Record<string, string>;
   sidebar_tile_layout?: Record<string, SidebarTileLayoutConfig>;
+  sidebar_horizontal_tile_widths?: Record<string, number>;
   /** 1–10. Lower = harder to open from the screen edge (default 4). */
   sidebar_reveal_sensitivity?: number;
   /** 1–10. Higher = hides sooner after the pointer leaves (default 8). */
   sidebar_hide_sensitivity?: number;
   active_widgets?: Record<string, boolean>;
+  widgets_hidden?: boolean;
   language?: "zh-CN" | "en";
   macos_setup_version?: number;
 }
@@ -42,7 +46,7 @@ export interface SidebarTileLayoutConfig {
   h?: number;
 }
 
-export type SidebarThemePresetId = "midnight" | "light";
+export type SidebarThemePresetId = "follow" | "midnight" | "light" | "glass" | "liquid";
 
 /** `transparent` remains readable so existing profiles migrate to Light. */
 export type SidebarThemeKind = SidebarThemePresetId | "transparent" | "custom";
@@ -61,6 +65,8 @@ export interface SidebarThemeDefinition {
   header_opacity?: number;
   card_opacity?: number;
   blur?: number;
+  material?: import("./theme").WidgetMaterial;
+  card_background?: import("./theme").CardBackground;
 }
 
 export interface SidebarThemeConfig {

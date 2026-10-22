@@ -48,6 +48,28 @@ body {
   background-color: var(--dashboard-bg) !important;
 }
 
+/* Windows and macOS share balanced rows at their default window width.
+   Query the content area so sidebar width and UI zoom are accounted for. */
+html:is([data-platform="windows"], [data-platform="macos"]) .desktop-overview {
+  container: overview / inline-size;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) .overview-stats-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container overview (min-width: 1008px) {
+  html:is([data-platform="windows"], [data-platform="macos"]) .overview-stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container overview (max-width: 495px) {
+  html:is([data-platform="windows"], [data-platform="macos"]) .overview-stats-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .glass {
   background: var(--dashboard-bg);
   border: 1px solid var(--dashboard-border);
@@ -84,6 +106,631 @@ body {
 .macos-dashboard {
   border: none;
   border-radius: 0;
+}
+
+/* Clip the entire transparent widget surface, including composited shadows.
+   Clipping only the inner card leaves grey wedges outside its rounded corners
+   where its shadow meets the rectangular native webview bounds. */
+.floating-window {
+  border-radius: 12px;
+  clip-path: inset(0 round 12px);
+}
+
+/* Reveal refresh and window controls together. Pointer clicks don't leave
+   them stuck open; keyboard navigation still reveals focused controls. */
+.floating-window .widget-header-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+html:not([data-platform="macos"]) .floating-window:hover .widget-header-actions,
+.floating-window .widget-header-actions:has(:focus-visible),
+html[data-widget-hovered="true"] .floating-window .widget-header-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+html[data-widget-hovered="true"] .floating-window .widget-resize-handle {
+  opacity: 1;
+}
+
+/* Opening a conference timeline must not change its card's available width. */
+.widget-content-list {
+  overflow-y: scroll;
+}
+
+/* Keep browser-native inertia and rubber-banding local to the sidebar. */
+.sidebar-widget-scroll {
+  overscroll-behavior: contain;
+}
+
+/* Only fitting macOS content gets a tiny native track, with one resting point.
+   Match the viewport padding so the snap target is scroll offset zero. */
+.sidebar-widget-scroll[data-native-bounce-fit="true"][data-sidebar-scroll="vertical"] {
+  scroll-snap-type: y mandatory;
+  scroll-padding-top: 0.5rem;
+}
+
+.sidebar-widget-scroll[data-native-bounce-fit="true"][data-sidebar-scroll="horizontal"] {
+  scroll-snap-type: x mandatory;
+  scroll-padding-left: 0.5rem;
+}
+
+/* White translucent cards need a darker outline on an opaque light surface.
+   Transparent and dark themes retain their existing glass styling. */
+.floating-window[data-floating-surface="light"] :is(.widget-item-card, .widget-item-surface, .widget-paper-card) {
+  background-color: rgba(15, 23, 42, 0.035);
+  border-color: rgba(100, 116, 139, 0.22);
+}
+
+.floating-window[data-floating-surface="light"] .widget-item-card:hover {
+  background-color: rgba(15, 23, 42, 0.055);
+  border-color: rgba(100, 116, 139, 0.30);
+}
+
+.floating-window[data-floating-surface="light"] .widget-server-header {
+  border-color: rgba(100, 116, 139, 0.28);
+}
+
+/* Glass already blends the desktop into the background. Keep foreground
+   labels opaque and give glyphs a subtle dark edge over busy wallpapers. */
+.glass-surface {
+  isolation: isolate;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+
+html[data-platform="windows"] .sidebar-theme-preview {
+  isolation: isolate;
+  /* Keep the selection ring outside while clipping the preview's backdrop. */
+  overflow: hidden;
+}
+
+html[data-platform="windows"] .sidebar-theme-preview .floating-preview-scene {
+  clip-path: inset(0 round 11px 11px 0 0);
+}
+
+html[data-platform="windows"] .sidebar-theme-preview .glass-surface {
+  --surface-radii: 11px 11px 0 0;
+}
+
+/* A narrow, curved rim suggests a lens without washing out the content.
+   These highlights are decorative: all controls remain in the web content
+   above a stable native blur, and no layer reads or captures the desktop. */
+.glass-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1.25px;
+  background: conic-gradient(from 135deg,
+    rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.80) 12%,
+    rgba(255, 255, 255, 0.13) 28%, rgba(255, 255, 255, 0.08) 42%,
+    rgba(255, 255, 255, 0.88) 58%, rgba(255, 255, 255, 0.22) 72%,
+    rgba(255, 255, 255, 0.06) 86%, rgba(255, 255, 255, 0.12));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+.glass-surface::after {
+  content: "";
+  position: absolute;
+  inset: 1.25px;
+  z-index: 20;
+  pointer-events: none;
+  border-radius: calc(var(--glass-radius, 12px) - 1.25px);
+  background: radial-gradient(ellipse 75% 22% at 20% 0%, rgba(255, 255, 255, 0.12), transparent 80%);
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.23),
+    inset -1px -1px 2px rgba(0, 0, 0, 0.22),
+    inset 0 -4px 8px -7px rgba(255, 255, 255, 0.65);
+}
+
+.glass-surface :is(span, p):is(.opacity-50, .opacity-60, .opacity-65, .opacity-70, .opacity-80) {
+  opacity: 1;
+}
+
+.glass-surface [data-floating-controls] button {
+  color: #f1f5f9;
+}
+
+.glass-surface .arxiv-reading-action {
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.glass-surface .arxiv-reading-action[aria-pressed="true"] {
+  color: #dbeafe;
+}
+
+.glass-surface :is(.arxiv-paper-action, .arxiv-abstract-action) {
+  color: #bfdbfe;
+}
+
+.glass-surface :is(.arxiv-paper-action, .arxiv-abstract-action):hover {
+  color: #fff;
+}
+
+/* The settings preview blurs its reference scene; the real widget uses the
+   native desktop material. Both use the same rim, shading and action colors. */
+.glass-preview {
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+}
+
+/* A docked sidebar rounds only the pair of corners facing the desktop. */
+.glass-sidebar::before {
+  opacity: 0.55;
+}
+
+.glass-sidebar::after {
+  border-radius: inherit;
+  opacity: 0.6;
+}
+
+.glass-menu {
+  --glass-radius: 8px;
+}
+
+.glass-menu::before {
+  opacity: 0.55;
+}
+
+.glass-menu::after {
+  opacity: 0.5;
+}
+
+.floating-preview-scene {
+  background:
+    radial-gradient(ellipse at 16% 26%, rgba(204, 229, 233, 0.7), transparent 45%),
+    linear-gradient(135deg, #466a83 5%, #638da0 32%, #d3b28a 57%, #a56956 76%, #4c4565);
+}
+
+/* Keep the Mac window clear rather than whitening the wallpaper. A small
+   dark scrim belongs to each content card, with no second sidebar tint. */
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) {
+  text-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.65),
+    0 0 1px rgba(0, 0, 0, 0.65);
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) button {
+  text-shadow: inherit;
+}
+
+/* Native glass already softens the desktop. Use that same material inside
+   paper cards in both hosts, without another backdrop-blur-md layer. Popup
+   menus and full abstracts keep their own blur to separate foreground text. */
+html[data-platform="macos"] .glass-surface .widget-paper-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is(.widget-item-card, .widget-paper-card, [data-widget-surface="server"], [data-widget-surface="empty"], [data-widget-surface="preview"]) {
+  background-color: rgba(0, 0, 0, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) .widget-item-card:hover {
+  background-color: rgba(0, 0, 0, 0.12);
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is([data-widget-surface="server"], [data-widget-surface="preview"]) {
+  border-radius: 10px;
+  padding: 8px;
+}
+
+html[data-platform="macos"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) svg {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
+}
+
+/* Aqua glass uses dark foregrounds on a lightly tinted native backdrop.
+   Keep the light palette scoped to glass, including menus and previews. */
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) {
+  text-shadow: 0 0.5px 0.75px rgba(255, 255, 255, 0.5);
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) [data-floating-controls] button {
+  color: #475569;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action {
+  color: #1e293b;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action[aria-pressed="true"] {
+  color: #1e40af;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action) {
+  color: #1d4ed8;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action):hover {
+  color: #1e40af;
+}
+
+html[data-platform="macos"] :is(.floating-window, .glass-preview).glass-surface[data-floating-surface="light"] :is(.widget-item-card, .widget-item-surface, .widget-paper-card) {
+  background-color: rgba(255, 255, 255, 0.04);
+  border-color: rgba(100, 116, 139, 0.20);
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-red-400 {
+  color: #b91c1c;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-blue-400 {
+  color: #1d4ed8;
+}
+
+html[data-platform="macos"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-emerald-400 {
+  color: #047857;
+}
+
+/* Windows keeps a thin native background layer, including while inactive.
+   These selectors never change the macOS material, preview, or highlights. */
+html[data-platform="windows"] .glass-surface {
+  clip-path: inset(0 round var(--surface-radii, var(--glass-radius, 12px)));
+  text-shadow: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(71, 85, 105, 0.12);
+}
+
+html[data-platform="windows"] .glass-surface::before {
+  display: block;
+  opacity: 1;
+  padding: 1.25px;
+  background: linear-gradient(135deg,
+    rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.3) 35%,
+    rgba(100, 116, 139, 0.14) 65%, rgba(255, 255, 255, 0.8));
+}
+
+html[data-platform="windows"] .glass-surface::after {
+  display: block;
+  opacity: 1;
+  background: radial-gradient(ellipse 90% 18% at 20% 0%, rgba(255, 255, 255, 0.18), transparent 85%);
+  box-shadow: inset 1px 1px 1px rgba(255, 255, 255, 0.4),
+    inset -1px -1px 1px rgba(255, 255, 255, 0.12);
+}
+
+html[data-platform="windows"] .glass-preview {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Match the Mac foreground/card relationship without stacking native blur
+   and CSS blur, or darkening the sidebar's module container a second time. */
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) {
+  font-weight: 600;
+  /* Solid white glyphs with a narrow dark edge stay legible over bright
+     wallpaper without adding a pale halo or darkening the glass itself. */
+  text-shadow: -0.5px 0 rgba(0, 0, 0, 0.85), 0.5px 0 rgba(0, 0, 0, 0.85),
+    0 -0.5px rgba(0, 0, 0, 0.85), 0 0.5px rgba(0, 0, 0, 0.85),
+    0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is(.font-normal, .font-medium) {
+  font-weight: 600;
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) [data-widget-kind] {
+  font-weight: 600;
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) button {
+  text-shadow: inherit;
+}
+
+html[data-platform="windows"] .glass-surface .widget-paper-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) :is(.widget-item-card, .widget-paper-card, [data-widget-surface="server"], [data-widget-surface="empty"], [data-widget-surface="preview"]) {
+  background-color: rgba(0, 0, 0, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) .widget-item-card:hover {
+  background-color: rgba(0, 0, 0, 0.16);
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) [data-widget-kind] :is(.text-slate-400, .text-slate-500) {
+  color: var(--widget-secondary-color, #f4f4f5);
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) [data-widget-kind] :is(.opacity-40, .opacity-50, .opacity-55, .opacity-60, .opacity-65, .opacity-70, .opacity-80) {
+  opacity: 1;
+}
+
+html[data-platform="windows"] .glass-surface:not([data-floating-surface="light"]):not([data-glass-tone="light"]) svg {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
+}
+
+html[data-platform="windows"] .windows-glass-preview-material {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  backdrop-filter: blur(20px) saturate(1.1);
+}
+
+html[data-platform="windows"] :is([data-floating-surface="light"], [data-glass-tone="light"]) [data-floating-controls] button {
+  color: #475569;
+}
+
+html[data-platform="windows"] :is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action {
+  color: #1e293b;
+}
+
+html[data-platform="windows"] :is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action) {
+  color: #334155;
+}
+
+/* Keep the desktop visible through the content as well as the window.
+   A fine light glyph edge separates dark text from busy wallpaper without
+   putting a milky panel behind whole paragraphs. */
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) {
+  text-shadow: -0.5px 0 rgba(255, 255, 255, 0.85),
+    0.5px 0 rgba(255, 255, 255, 0.85),
+    0 -0.5px rgba(255, 255, 255, 0.85),
+    0 0.5px rgba(255, 255, 255, 0.85),
+    0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+/* Small labels need solid strokes rather than a bright outline. The same
+   content components are mounted in the floating windows and the sidebar. */
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) [data-widget-kind],
+html[data-platform="windows"] .glass-preview[data-floating-surface="light"]:not([data-widget-kind="arxiv"]),
+html[data-platform="windows"] .glass-sidebar[data-glass-tone="light"] > header {
+  text-shadow: 0 0.5px 0.75px rgba(255, 255, 255, 0.5);
+}
+
+html[data-platform="windows"] .glass-sidebar[data-glass-tone="light"] > header {
+  color: #0b1220;
+}
+
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) [data-widget-kind] :is(.text-slate-400, .text-slate-500) {
+  color: var(--widget-secondary-color);
+}
+
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) [data-widget-kind] :is(.opacity-40, .opacity-50, .opacity-55, .opacity-60, .opacity-65, .opacity-70, .opacity-80) {
+  opacity: 1;
+}
+
+/* Keep widget type readable on both desktop platforms, independently of
+   material. Settings previews and sidebar modules use the same scale. */
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) {
+  font-weight: 500;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) [class~="text-[6px]"] {
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[7px]"], [class~="text-[8px]"]) {
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: normal;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[9px]"], [class~="text-[11px]"]) {
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) :where([data-widget-kind]:not([data-widget-kind="arxiv"])) :is([class~="text-[10px]"], .text-xs, [data-widget-text="title"]) {
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: normal;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) [data-sidebar-theme] > header > span {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="deadline"] .deadline-timeline [class~="text-[10px]"] {
+  font-size: 12px;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="deadline"] .deadline-timeline time {
+  font-size: 11px;
+}
+
+[data-widget-kind="deadline"] :is(.deadline-widget-location, .deadline-widget-stage p, .deadline-widget-countdown) {
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: normal;
+}
+
+[data-widget-kind="deadline"] .deadline-widget-countdown {
+  font-weight: 700;
+}
+
+[data-widget-kind="deadline"] .deadline-widget-category {
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="gpu"] .widget-item-surface {
+  min-height: 40px;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) [data-widget-kind="gpu"] .widget-item-surface.h-11 {
+  height: auto;
+  min-height: 54px;
+}
+
+html[data-platform="windows"] :is(.floating-window, .glass-preview).glass-surface[data-floating-surface="light"] :is(.widget-item-card, .widget-item-surface, .widget-paper-card, [data-widget-surface]) {
+  background-color: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+html[data-platform="windows"] :is(.floating-window, .glass-preview).glass-surface[data-floating-surface="light"] .widget-item-card:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+html[data-platform="windows"] :is(.floating-window, .glass-preview, .glass-sidebar).glass-surface [data-widget-surface="server"],
+html[data-platform="windows"] .glass-preview [data-widget-surface] {
+  border-radius: 10px;
+  padding: 8px;
+}
+
+/* Balance the new inset so a compact server still fits its saved sidebar height. */
+html[data-platform="windows"] .glass-sidebar [data-widget-surface="server"].space-y-4 > :not(:last-child) {
+  margin-block-end: 8px;
+}
+
+html[data-platform="windows"] .glass-surface[data-floating-surface="light"] .widget-paper-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-reading-action[aria-pressed="true"] {
+  color: #1e40af;
+}
+
+/* Match the lightweight author label; selection is conveyed by text and icon. */
+.arxiv-widget :is(.arxiv-paper-meta, .arxiv-reading-action) {
+  background-color: rgba(255, 255, 255, 0.05);
+  box-shadow: none;
+}
+
+.arxiv-widget .arxiv-reading-action:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.09);
+}
+
+.arxiv-abstract-action[data-returned-focus="true"] {
+  outline: none;
+}
+
+.arxiv-edge-nav {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.arxiv-widget:hover .arxiv-edge-nav,
+html[data-widget-hovered="true"] .floating-window .arxiv-edge-nav {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.arxiv-widget:hover .arxiv-edge-nav:disabled,
+html[data-widget-hovered="true"] .floating-window .arxiv-edge-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action):hover {
+  color: #1d4ed8;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget .arxiv-paper-title {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget .arxiv-abstract-preview {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+html[data-platform="windows"] .arxiv-widget .arxiv-abstract-text {
+  opacity: 1;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget :is(.arxiv-keyword-control, .arxiv-paper-meta, .arxiv-paper-hints, .arxiv-reading-action, .arxiv-abstract-action) {
+  font-size: 11px;
+  letter-spacing: normal;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) .arxiv-widget .arxiv-paper-hints {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-red-400 {
+  color: #b91c1c;
+}
+
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-blue-400 {
+  color: #1d4ed8;
+}
+
+html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) .arxiv-paper-hints .text-emerald-400 {
+  color: #047857;
+}
+
+html:is([data-platform="windows"], [data-platform="macos"]) .abstract-reading-dialog[data-compact="true"] [tabindex="0"] {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Native dialogs enter the top layer, outside the widget's clipping context.
+   Clip a viewport-sized host, including its backdrop and panel shadow. */
+body:has(.floating-window) {
+  --reading-window-radii: 12px;
+}
+
+body:has([data-sidebar-edge="left"]) {
+  --reading-window-radii: 0 8px 8px 0;
+}
+
+body:has([data-sidebar-edge="right"]) {
+  --reading-window-radii: 8px 0 0 8px;
+}
+
+body:has([data-sidebar-edge="top"]) {
+  --reading-window-radii: 0 0 8px 8px;
+}
+
+body:has([data-sidebar-edge="bottom"]) {
+  --reading-window-radii: 8px 8px 0 0;
+}
+
+.abstract-reading-dialog {
+  clip-path: inset(0 round var(--reading-window-radii, 0px));
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.abstract-reading-dialog[open] {
+  display: flex;
+}
+
+.abstract-reading-dialog::backdrop {
+  background: transparent;
+}
+
+body:has(.abstract-reading-dialog[data-compact="true"][open]) > #root {
+  clip-path: inset(0 round var(--reading-window-radii, 0px));
+}
+
+/* Blur the background without allowing the filter to spill beyond its mask. */
+body:has(.abstract-reading-dialog[data-translucent="true"][open]) > #root {
+  filter: blur(6px);
+  opacity: 0.55;
+}
+
+.abstract-reading-dialog[data-translucent="true"] {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+/* Widget headers remain distinct from their larger body labels. */
+html[data-platform="macos"] .widget-header .text-xs,
+html[data-platform="macos"] .glass-preview > div > .widget-header {
+  font-size: 14px;
+  line-height: 1.4;
 }
 
 /* Custom Scrollbar */
@@ -150,4 +797,11 @@ body {
 }
 .reading-dialog [data-dialog-close]:focus-visible {
   outline-color: #ef4444;
+}
+
+/* Native Liquid Glass draws its own optical rim. Keep the CSS
+   highlights for the existing Glass theme and in-window popup surfaces. */
+html[data-platform="macos"] .glass-surface[data-native-liquid="true"]::before,
+html[data-platform="macos"] .glass-surface[data-native-liquid="true"]::after {
+  display: none;
 }

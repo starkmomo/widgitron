@@ -16,17 +16,19 @@ const SAVE_DEBOUNCE_MS: u64 = 300;
 // move/resize events. Keep those events out of the user-layout debounce so a
 // transient DPI-adjusted size cannot overwrite the normalized layout.
 // Must cover the longest first-run desktop-lock stagger in the frontend
-// (quota at 1900ms) plus SetParent/DPI settle time.
+// (quota at 1900ms) plus native window initialization time.
 const PROGRAMMATIC_LAYOUT_SETTLE_MS: u64 = 2500;
 const MONITOR_POLL_INTERVAL_MS: u64 = 2000;
-const MIN_WIDGET_WIDTH: u32 = 220;
-const MIN_WIDGET_HEIGHT: u32 = 180;
+const MIN_WIDGET_WIDTH: u32 = crate::widget_minimum::MIN_WIDTH_CSS;
+#[cfg(test)]
+const MIN_WIDGET_HEIGHT: u32 = crate::widget_minimum::FALLBACK_HEIGHT_CSS;
 
 // First-run target sizes in logical CSS pixels (before OS DPI / UI scale).
 const DEFAULT_TARGET_WIDTH_LOGICAL: f64 = 400.0;
 const DEFAULT_TARGET_HEIGHT_TALL_LOGICAL: f64 = 460.0;
 const DEFAULT_TARGET_HEIGHT_SHORT_LOGICAL: f64 = 340.0;
 const MACOS_TARGET_HEIGHT_SHORT_LOGICAL: f64 = 260.0;
+const DEFAULT_LAYOUT_MIN_HEIGHT_LOGICAL: f64 = 220.0;
 const DEFAULT_MARGIN_X_FRAC: f64 = 0.018;
 const DEFAULT_MARGIN_Y_FRAC: f64 = 0.028;
 const DEFAULT_COLUMN_GAP_FRAC: f64 = 0.014;
@@ -61,6 +63,7 @@ pub struct WidgetLayoutStore {
 pub struct WidgetLayoutSaveState {
     pub pending: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
     pub suppress_events_until: Mutex<HashMap<String, Instant>>,
+    pub content_minimum_heights: Mutex<HashMap<String, f64>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -161,7 +164,6 @@ fn layout_event_persist_is_suppressed(app: &AppHandle, label: &str) -> bool {
 
 pub fn schedule_layout_persist(app: AppHandle, label: String) {
     if !is_tracked_widget(&label)
-        || crate::desktop::is_desktop_mode(&app, &label)
         || layout_event_persist_is_suppressed(&app, &label)
     {
         return;
@@ -184,8 +186,7 @@ pub fn schedule_layout_persist(app: AppHandle, label: String) {
     let label_clone = label.clone();
     let handle = tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(SAVE_DEBOUNCE_MS)).await;
-        if !crate::desktop::is_desktop_mode(&app_clone, &label_clone)
-            && !layout_event_persist_is_suppressed(&app_clone, &label_clone)
+        if !layout_event_persist_is_suppressed(&app_clone, &label_clone)
         {
             if let Some(win) = app_clone.get_webview_window(&label_clone) {
                 if let Err(err) = persist_layout_for_window(&app_clone, &win, &label_clone) {
@@ -209,7 +210,7 @@ pub fn schedule_layout_persist(app: AppHandle, label: String) {
 }
 
 pub fn persist_layout_now(app: &AppHandle, label: &str) -> Result<(), String> {
-    if !is_tracked_widget(label) || crate::desktop::is_desktop_mode(app, label) {
+    if !is_tracked_widget(label) {
         return Ok(());
     }
     if let Some(win) = app.get_webview_window(label) {
@@ -219,8 +220,7 @@ pub fn persist_layout_now(app: &AppHandle, label: &str) -> Result<(), String> {
 }
 
 /// Restores zoom and physical bounds while preserving the widget's current
-/// desktop-embedded state. A desktop child window must be made top-level for
-/// the update, otherwise Windows may apply the parent DPI scale a second time.
+/// desktop layer. Windows widgets retain their own monitor DPI in either mode.
 pub fn restore_widget_layout_preserving_desktop_mode(
     app: &AppHandle,
     label: &str,
@@ -263,33 +263,14 @@ pub fn apply_scale_to_open_widgets(app: &AppHandle, scale: f64) {
     }
 }
 
-/// Desktop-locked widgets are Win32 child windows. Apply geometry updates only
-/// while they are top-level windows, otherwise Windows can apply the desktop
-/// parent's DPI transform a second time and make a scale change visibly larger.
+/// Geometry updates never need to change the Windows window's topology.
 fn with_top_level_widget_layout<T>(
     app: &AppHandle,
     label: &str,
     operation: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     suppress_layout_event_persist(app, label);
-    let was_desktop_embedded = crate::desktop::is_desktop_mode(app, label);
-    if was_desktop_embedded {
-        crate::desktop::set_desktop_mode_now(app, label, false)?;
-    }
-
-    let result = operation();
-
-    if was_desktop_embedded {
-        if let Err(err) = crate::desktop::set_desktop_mode_now(app, label, true) {
-            log::warn!(
-                "Failed to restore desktop mode for {} after layout update: {}",
-                label,
-                err
-            );
-        }
-    }
-
-    result
+    operation()
 }
 
 pub fn ensure_widget_layout_for_window(
@@ -299,6 +280,49 @@ pub fn ensure_widget_layout_for_window(
 ) -> Result<(), String> {
     let config = config_store::read_config::<AppConfig>(app, "app_config.json");
     ensure_widget_layout_for_window_at_scale(app, win, label, ui_scale::from_config(&config))
+}
+
+/// Update the native constraint without undoing a user's taller window size.
+pub fn set_content_minimum_height(win: &WebviewWindow, height: f64) -> Result<(), String> {
+    let label = win.label();
+    if !is_tracked_widget(label) || label == "widget-arxiv-default" {
+        return Err("Content minimums are only supported for quota, GPU and conference widgets".into());
+    }
+    let height = crate::widget_minimum::sanitize_content_height(height)
+        .ok_or_else(|| "Invalid widget content height".to_string())?;
+    let app = win.app_handle();
+    let config = config_store::read_config::<AppConfig>(app, "app_config.json");
+    let scale = ui_scale::from_config(&config);
+    let monitor = resolve_window_monitor(app, win)?
+        .or_else(|| preferred_monitor(app))
+        .ok_or_else(|| "No monitor available for widget content size".to_string())?;
+    let area = monitor_work_area(&monitor);
+    {
+        let state = app.state::<WidgetLayoutSaveState>();
+        state.content_minimum_heights.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()).insert(label.to_string(), height);
+    }
+    let minimum = cached_widget_minimum_size(app, label, area, monitor.scale_factor(), scale);
+    let current = win.inner_size().map_err(|error| error.to_string())?;
+    win.set_min_size(Some(Size::Physical(minimum))).map_err(|error| error.to_string())?;
+    if let Some((width, height)) = crate::widget_minimum::required_growth(
+        (current.width, current.height), (minimum.width, minimum.height),
+    ) {
+        let size = PhysicalSize::new(width, height);
+        win.set_size(Size::Physical(size)).map_err(|error| error.to_string())?;
+        let position = win.outer_position().map_err(|error| error.to_string())?;
+        let x = if size.width <= area.width {
+            position.x.clamp(area.x, area.x + (area.width - size.width) as i32)
+        } else { position.x };
+        let y = if size.height <= area.height {
+            position.y.clamp(area.y, area.y + (area.height - size.height) as i32)
+        } else { position.y };
+        if x != position.x || y != position.y {
+            win.set_position(Position::Physical(PhysicalPosition::new(x, y)))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_widget_layout_for_window_at_scale(
@@ -342,11 +366,12 @@ fn ensure_widget_layout_for_window_at_scale(
         .ok_or_else(|| format!("No default widget layout for {}", label))?;
 
     ui_scale::apply_to_window(win, scale)?;
-    apply_layout_to_window(win, &target_monitor, layout, scale)?;
+    apply_layout_to_window(win, label, &target_monitor, layout, scale)?;
 
     // Persist the post-clamp geometry so stored fractions match what is on screen
     // (UI scale / min-size clamps can otherwise drift from the ideal default).
-    let (applied_position, applied_size) = normalized_to_physical(layout, &target_monitor, scale);
+    let (applied_position, applied_size) =
+        normalized_to_physical(app, layout, label, &target_monitor, scale);
     let applied_layout =
         physical_to_normalized(applied_position, applied_size, &target_monitor, scale);
 
@@ -435,7 +460,7 @@ fn persist_layout_for_window_at_scale(
 
     if let Some(stored_layout) = stored_layout {
         let (expected_position, expected_size) =
-            normalized_to_physical(stored_layout, &monitor, scale);
+            normalized_to_physical(app, stored_layout, label, &monitor, scale);
         if geometry_matches(position, size, expected_position, expected_size) {
             return Ok(());
         }
@@ -458,11 +483,21 @@ fn persist_layout_for_window_at_scale(
 
 fn apply_layout_to_window(
     win: &WebviewWindow,
+    label: &str,
     monitor: &Monitor,
     layout: NormalizedWidgetLayout,
     scale: f64,
 ) -> Result<(), String> {
-    let (position, size) = normalized_to_physical(layout, monitor, scale);
+    let minimum = cached_widget_minimum_size(
+        win.app_handle(),
+        label,
+        monitor_work_area(monitor),
+        monitor.scale_factor(),
+        scale,
+    );
+    win.set_min_size(Some(Size::Physical(minimum)))
+        .map_err(|e| e.to_string())?;
+    let (position, size) = normalized_to_physical(win.app_handle(), layout, label, monitor, scale);
     win.set_size(Size::Physical(size))
         .map_err(|e| e.to_string())?;
     win.set_position(Position::Physical(position))
@@ -507,8 +542,38 @@ fn default_layout_for_widget(
     let right_margin = DEFAULT_RIGHT_MARGIN_FRAC * area_w;
     let bottom_margin = DEFAULT_BOTTOM_MARGIN_FRAC * area_h;
 
-    let min_w = (MIN_WIDGET_WIDTH as f64 * scale).max(1.0);
-    let min_h = (MIN_WIDGET_HEIGHT as f64 * scale).max(1.0);
+    let min_w = (MIN_WIDGET_WIDTH as f64 * dpi * scale).max(1.0);
+    // First-run placement stays comfortably spaced. This is a placement target,
+    // independent of the much smaller pre-measurement native resize constraint.
+    let min_h = (DEFAULT_LAYOUT_MIN_HEIGHT_LOGICAL * dpi * scale).max(1.0);
+    let tall_min_h = (crate::widget_minimum::ARXIV_HEIGHT_CSS as f64 * dpi * scale).max(1.0);
+
+    // When arXiv plus one short widget cannot fit vertically, use three
+    // columns if there is room. Don't enlarge windows into their neighbours
+    // afterwards just to satisfy the native minimum size.
+    let usable_w = area_w - left - right_margin;
+    let usable_h = area_h - top - bottom_margin;
+    if tall_min_h + min_h + row_gap > usable_h
+        && min_w * 3.0 + column_gap * 2.0 <= usable_w
+    {
+        let width = (DEFAULT_TARGET_WIDTH_LOGICAL * dpi * scale)
+            .min((usable_w - column_gap * 2.0) / 3.0)
+            .max(min_w);
+        let short = ((usable_h - row_gap) / 2.0).max(min_h);
+        let tall = (DEFAULT_TARGET_HEIGHT_TALL_LOGICAL * dpi * scale)
+            .max(tall_min_h).min(usable_h);
+        let (x, y, height) = match label {
+            "widget-gpu-default" => (left, top, short),
+            "widget-quota-default" => (left, top + short + row_gap, short),
+            "widget-deadlines-default" => (left + width + column_gap, top, short),
+            "widget-arxiv-default" => (left + 2.0 * (width + column_gap), top, tall),
+            _ => return None,
+        };
+        return Some(sanitize_layout(NormalizedWidgetLayout {
+            x: x / area_w, y: y / area_h,
+            width: width / scale / area_w, height: height / scale / area_h,
+        }));
+    }
 
     let max_cell_w = ((area_w - left - right_margin - column_gap) / 2.0).max(min_w);
     let available_h = (area_h - top - bottom_margin - row_gap).max(min_h * 2.0);
@@ -529,7 +594,7 @@ fn default_layout_for_widget(
         tall_h *= fit;
         short_h *= fit;
     }
-    tall_h = tall_h.clamp(min_h, available_h);
+    tall_h = tall_h.clamp(tall_min_h, (available_h - min_h).max(tall_min_h));
     short_h = short_h.clamp(min_h, (available_h - tall_h).max(min_h));
 
     let right = left + want_w + column_gap;
@@ -571,28 +636,83 @@ fn physical_to_normalized(
 }
 
 fn normalized_to_physical(
+    app: &AppHandle,
     layout: NormalizedWidgetLayout,
+    label: &str,
     monitor: &Monitor,
     scale: f64,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    normalized_to_physical_in_area(layout, monitor_work_area(monitor), scale)
+    let area = monitor_work_area(monitor);
+    let minimum = cached_widget_minimum_size(app, label, area, monitor.scale_factor(), scale);
+    normalized_to_physical_with_minimum(layout, area, scale, minimum)
 }
 
+/// Minimum content area in CSS pixels, converted once for OS DPI and UI zoom.
+/// Cap to the work area so a small display cannot leave the controls offscreen.
+#[cfg(test)]
+fn widget_minimum_size(
+    label: &str,
+    area: MonitorWorkArea,
+    dpi: f64,
+    scale: f64,
+) -> PhysicalSize<u32> {
+    widget_minimum_size_with_content(label, area, dpi, scale, None)
+}
+
+fn cached_widget_minimum_size(
+    app: &AppHandle,
+    label: &str,
+    area: MonitorWorkArea,
+    dpi: f64,
+    scale: f64,
+) -> PhysicalSize<u32> {
+    let state = app.state::<WidgetLayoutSaveState>();
+    let measured = state.content_minimum_heights.lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()).get(label).copied();
+    widget_minimum_size_with_content(label, area, dpi, scale, measured)
+}
+
+fn widget_minimum_size_with_content(
+    label: &str,
+    area: MonitorWorkArea,
+    dpi: f64,
+    scale: f64,
+    measured: Option<f64>,
+) -> PhysicalSize<u32> {
+    let dpi = if dpi.is_finite() && dpi > 0.0 {
+        dpi
+    } else {
+        1.0
+    };
+    let zoom = dpi * ui_scale::sanitize(Some(scale));
+    let (width, height) = crate::widget_minimum::minimum_size(label, measured, zoom, area.width, area.height);
+    PhysicalSize::new(width, height)
+}
+
+#[cfg(test)]
 fn normalized_to_physical_in_area(
     layout: NormalizedWidgetLayout,
     area: MonitorWorkArea,
     scale: f64,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    let minimum = widget_minimum_size("widget-quota-default", area, 1.0, scale);
+    normalized_to_physical_with_minimum(layout, area, scale, minimum)
+}
+
+fn normalized_to_physical_with_minimum(
+    layout: NormalizedWidgetLayout,
+    area: MonitorWorkArea,
+    scale: f64,
+    minimum: PhysicalSize<u32>,
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
     let layout = sanitize_layout(layout);
     let scale = ui_scale::sanitize(Some(scale));
-    let min_width = ((MIN_WIDGET_WIDTH as f64 * scale).round() as u32).max(1);
-    let min_height = ((MIN_WIDGET_HEIGHT as f64 * scale).round() as u32).max(1);
 
     let width = ((layout.width * area.width as f64 * scale).round() as u32)
-        .max(min_width)
+        .max(minimum.width)
         .min(area.width.max(1));
     let height = ((layout.height * area.height as f64 * scale).round() as u32)
-        .max(min_height)
+        .max(minimum.height)
         .min(area.height.max(1));
 
     let desired_x = area.x + (layout.x * area.width as f64).round() as i32;
@@ -777,6 +897,82 @@ mod tests {
         let (ax, ay, aw, ah) = a;
         let (bx, by, bw, bh) = b;
         ax < bx + bw as i32 && bx < ax + aw as i32 && ay < by + bh as i32 && by < ay + ah as i32
+    }
+
+    #[test]
+    fn minimum_sizes_account_for_content_dpi_and_zoom() {
+        let area = sample_area(2560, 1440);
+        assert_eq!(
+            widget_minimum_size("widget-quota-default", area, 1.0, 1.0),
+            PhysicalSize::new(300, 96)
+        );
+        assert_eq!(
+            widget_minimum_size("widget-deadlines-default", area, 1.0, 1.0),
+            widget_minimum_size("widget-quota-default", area, 1.0, 1.0)
+        );
+        assert_eq!(
+            widget_minimum_size("widget-gpu-default", area, 2.0, 1.25),
+            PhysicalSize::new(750, 240)
+        );
+        assert_eq!(
+            widget_minimum_size("widget-arxiv-default", area, 2.0, 1.25),
+            PhysicalSize::new(750, 1100)
+        );
+    }
+
+    #[test]
+    fn tiny_saved_layout_is_enlarged_and_kept_inside_work_area() {
+        let area = MonitorWorkArea {
+            x: -1200,
+            y: 40,
+            width: 1200,
+            height: 760,
+        };
+        let minimum = widget_minimum_size("widget-arxiv-default", area, 1.5, 1.25);
+        let layout = NormalizedWidgetLayout {
+            x: 0.95,
+            y: 0.95,
+            width: 0.08,
+            height: 0.08,
+        };
+        let (position, size) = normalized_to_physical_with_minimum(layout, area, 1.25, minimum);
+        assert_eq!(size, minimum);
+        assert!(
+            position.x >= area.x && position.x + size.width as i32 <= area.x + area.width as i32
+        );
+        assert!(
+            position.y >= area.y && position.y + size.height as i32 <= area.y + area.height as i32
+        );
+    }
+
+    #[test]
+    fn minimum_cannot_exceed_a_small_work_area() {
+        let area = sample_area(500, 400);
+        assert_eq!(
+            widget_minimum_size("widget-arxiv-default", area, 2.0, 2.0),
+            PhysicalSize::new(500, 400)
+        );
+    }
+
+    #[test]
+    fn small_screen_defaults_respect_each_widgets_native_minimum_without_overlap() {
+        let area = sample_area(1280, 720);
+        let scale = 1.25;
+        let labels = ["widget-gpu-default", "widget-arxiv-default", "widget-quota-default", "widget-deadlines-default"];
+        let rects: Vec<_> = labels.iter().map(|label| {
+            let layout = default_layout_for_widget(label, area, 1.0, scale).expect("default layout");
+            let minimum = widget_minimum_size(label, area, 1.0, scale);
+            let (position, size) = normalized_to_physical_with_minimum(layout, area, scale, minimum);
+            assert!(size.width >= minimum.width && size.height >= minimum.height);
+            assert!(position.x + size.width as i32 <= area.width as i32);
+            assert!(position.y + size.height as i32 <= area.height as i32);
+            (position.x, position.y, size.width, size.height)
+        }).collect();
+        for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                assert!(!rects_overlap(rects[i], rects[j]), "overlapping defaults: {:?}", rects);
+            }
+        }
     }
 
     #[test]

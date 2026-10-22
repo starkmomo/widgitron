@@ -16,6 +16,11 @@ export interface ToggleWidgetResponse {
   visible: boolean;
 }
 
+export interface MainNavigationRequest {
+  destination: "quota" | "gpu" | "deadlines";
+  conference_view: "all" | "followed" | null;
+}
+
 export interface SshConfigHostEntry {
   alias: string;
   user: string | null;
@@ -134,12 +139,17 @@ export interface TauriCommandMap {
   save_app_config: void;
   save_sidebar_tile_layout: AppConfig;
   set_widget_always_on_top: AppConfig;
-  set_widget_desktop_fixed: AppConfig;
+  set_widget_display_mode: AppConfig;
+  set_widget_glass: boolean;
+  set_widget_content_minimum: void;
   save_theme_config: void;
   download_and_install_update: void;
   create_widget: void;
   close_widget: void;
   hide_all_widgets: void;
+  set_widgets_hidden: AppConfig;
+  toggle_widgets_visibility: AppConfig;
+  begin_widget_drag: void;
   restore_widget_position: void;
   open_log_dir: void;
   open_config_dir: void;
@@ -150,7 +160,7 @@ export interface TauriCommandMap {
   remove_arxiv_discarded_paper: void;
   update_manual_quota: void;
   show_main: void;
-  take_pending_main_navigation: "quota" | "gpu" | "deadlines" | null;
+  take_pending_main_navigation: MainNavigationRequest | null;
   show_sidebar: void;
   hide_sidebar: void;
   toggle_sidebar_visibility: void;
@@ -206,12 +216,17 @@ export const TAURI_COMMAND_NAMES = [
   "save_app_config",
   "save_sidebar_tile_layout",
   "set_widget_always_on_top",
-  "set_widget_desktop_fixed",
+  "set_widget_display_mode",
+  "set_widget_glass",
+  "set_widget_content_minimum",
   "save_theme_config",
   "download_and_install_update",
   "create_widget",
   "close_widget",
   "hide_all_widgets",
+  "set_widgets_hidden",
+  "toggle_widgets_visibility",
+  "begin_widget_drag",
   "restore_widget_position",
   "open_log_dir",
   "open_config_dir",
@@ -268,7 +283,7 @@ export interface TauriCommandArgs {
   get_quota_data: undefined;
   refresh_gpu_data: undefined;
   refresh_paper_deadlines: undefined;
-  refresh_arxiv: undefined;
+  refresh_arxiv: { filtersOnly: boolean } | undefined;
   refresh_quota: undefined;
   get_arxiv_saved_papers: undefined;
   get_arxiv_discarded_papers: undefined;
@@ -280,14 +295,17 @@ export interface TauriCommandArgs {
   save_paper_config: { config: PaperConfig };
   save_arxiv_config: { config: ArxivConfig };
   save_quota_config: { config: QuotaConfig };
-  save_app_config: { config: AppConfig };
+  save_app_config: { config: AppConfig; baseConfig?: AppConfig };
   save_sidebar_tile_layout: {
     order: string[];
     layout: Record<string, SidebarTileLayoutConfig>;
     widgets: Record<string, boolean> | null;
+    horizontalWidths?: Record<string, number> | null;
   };
   set_widget_always_on_top: { label: string; pinned: boolean };
-  set_widget_desktop_fixed: { label: string; fixed: boolean };
+  set_widget_display_mode: { label: string; mode: "topmost" | "desktop" };
+  set_widget_glass: { enabled: boolean; dark: boolean; dockEdge?: SidebarDockState["edge"] | null; liquid?: boolean };
+  set_widget_content_minimum: { height: number };
   save_theme_config: { config: WidgetThemeConfig };
   toggle_widget: { id: string; title: string };
   create_widget: { id: string; title: string };
@@ -311,6 +329,9 @@ export interface TauriCommandArgs {
   show_main: undefined;
   take_pending_main_navigation: undefined;
   hide_all_widgets: undefined;
+  set_widgets_hidden: { hidden: boolean };
+  toggle_widgets_visibility: undefined;
+  begin_widget_drag: { label: string };
   show_sidebar: undefined;
   hide_sidebar: undefined;
   toggle_sidebar_visibility: undefined;
@@ -318,7 +339,7 @@ export interface TauriCommandArgs {
   toggle_sidebar: undefined;
   get_sidebar_state: undefined;
   set_sidebar_pinned: { pinned: boolean };
-  begin_sidebar_drag: undefined;
+  begin_sidebar_drag: { allowUndock?: boolean };
   exit_app: undefined;
   open_log_dir: undefined;
   open_config_dir: undefined;

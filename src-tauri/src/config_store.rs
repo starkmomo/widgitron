@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
@@ -52,6 +53,14 @@ fn recover_config_via_soft_merge<T: DeserializeOwned + Default + Serialize>(
 /// user settings; only falls back to a full default (+ corrupt backup) if recovery fails.
 pub fn read_config<T: DeserializeOwned + Default + Serialize>(app: &AppHandle, filename: &str) -> T {
     let _guard = config_lock();
+    read_config_unlocked(app, filename)
+}
+
+// Call only while holding CONFIG_LOCK (including update_config transactions).
+fn read_config_unlocked<T: DeserializeOwned + Default + Serialize>(
+    app: &AppHandle,
+    filename: &str,
+) -> T {
     let path = get_config_path(app, filename);
     if !path.exists() {
         return T::default();
@@ -67,8 +76,8 @@ pub fn read_config<T: DeserializeOwned + Default + Serialize>(app: &AppHandle, f
                         filename,
                         e
                     );
-                    if let Ok(pretty) = serde_json::to_string_pretty(&recovered) {
-                        let _ = fs::write(&path, pretty);
+                    if let Err(error) = write_config_unlocked(app, filename, &recovered) {
+                        log::warn!("Could not persist recovered config '{}': {}", filename, error);
                     }
                     return recovered;
                 }
@@ -100,28 +109,157 @@ pub fn write_config<T: Serialize>(
     config: &T,
 ) -> Result<(), String> {
     let _guard = config_lock();
+    write_config_unlocked(app, filename, config)
+}
+
+// Call only while holding CONFIG_LOCK (including update_config transactions).
+fn write_config_unlocked<T: Serialize>(
+    app: &AppHandle,
+    filename: &str,
+    config: &T,
+) -> Result<(), String> {
     let path = get_config_path(app, filename);
-
     let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    stage_and_replace_config(&path, &content, |from, to| fs::rename(from, to))
+}
 
-    let parent = path
-        .parent()
+/// Modify the latest persisted config without losing concurrent changes to other
+/// fields. The callback must not call another config-store function (the shared
+/// lock is intentionally held through reading, mutation, and atomic replacement).
+pub fn update_config<T: DeserializeOwned + Default + Serialize>(
+    app: &AppHandle,
+    filename: &str,
+    update: impl FnOnce(&mut T),
+) -> Result<T, String> {
+    update_config_transaction(
+        || read_config_unlocked(app, filename),
+        update,
+        |config| write_config_unlocked(app, filename, config),
+    )
+}
+
+fn update_config_transaction<T>(
+    read: impl FnOnce() -> T,
+    update: impl FnOnce(&mut T),
+    write: impl FnOnce(&T) -> Result<(), String>,
+) -> Result<T, String> {
+    let _guard = config_lock();
+    let mut config = read();
+    update(&mut config);
+    write(&config)?;
+    Ok(config)
+}
+
+fn stage_and_replace_config(
+    path: &Path,
+    content: &str,
+    replace: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let parent = path.parent()
         .ok_or_else(|| "No parent directory for config path".to_string())?;
-    let temp_filename = format!("{}.tmp", filename);
+    let filename = path.file_name()
+        .ok_or_else(|| "No file name for config path".to_string())?;
+    let mut temp_filename = filename.to_os_string();
+    temp_filename.push(".tmp");
     let temp_path = parent.join(temp_filename);
+    fs::write(&temp_path, content)
+        .map_err(|e| format!("Failed to write to temp file: {}", e))?;
 
-    // Write to temp file
-    fs::write(&temp_path, &content).map_err(|e| format!("Failed to write to temp file: {}", e))?;
+    // std::fs::rename replaces an existing file on Windows as well as Unix.
+    // Keep the previous config intact if replacement fails, or the app exits
+    // after staging the new file. Never unlink the destination first.
+    replace(&temp_path, path)
+        .map_err(|e| format!("Failed to rename config file: {}", e))
+}
 
-    // On Windows, rename fails if destination exists.
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| format!("Failed to remove old config file: {}", e))?;
+#[cfg(test)]
+mod atomic_config_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TestDir(PathBuf);
+    impl TestDir {
+        fn new() -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "widgitron-config-write-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+                COUNTER.fetch_add(1, Ordering::Relaxed),
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 
-    // Move temp file to actual file path
-    fs::rename(&temp_path, &path).map_err(|e| format!("Failed to rename config file: {}", e))?;
+    #[test]
+    fn successful_replace_updates_an_existing_config() {
+        let dir = TestDir::new();
+        let path = dir.0.join("settings.json");
+        fs::write(&path, "old settings").unwrap();
+        stage_and_replace_config(&path, "new settings", |from, to| fs::rename(from, to)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new settings");
+        assert!(!dir.0.join("settings.json.tmp").exists());
+    }
 
-    Ok(())
+    #[test]
+    fn concurrent_transactions_keep_all_updates() {
+        let dir = TestDir::new();
+        let path = dir.0.join("counter.txt");
+        fs::write(&path, "0").unwrap();
+        let threads: Vec<_> = (0..4).map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                for _ in 0..25 {
+                    update_config_transaction(
+                        || fs::read_to_string(&path).unwrap().parse::<u32>().unwrap(),
+                        |value| {
+                            // Widen the race window between read and write.
+                            std::thread::yield_now();
+                            *value += 1;
+                        },
+                        |value| stage_and_replace_config(
+                            &path, &value.to_string(), |from, to| fs::rename(from, to),
+                        ),
+                    ).unwrap();
+                }
+            })
+        }).collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(fs::read_to_string(&path).unwrap(), "100");
+    }
+
+    #[test]
+    fn transaction_reports_write_failure() {
+        let result = update_config_transaction(
+            || 1u32,
+            |value| *value = 2,
+            |_| Err("disk write failed".to_string()),
+        );
+        assert_eq!(result, Err("disk write failed".to_string()));
+    }
+
+    #[test]
+    fn failed_replace_preserves_the_previous_config() {
+        let dir = TestDir::new();
+        let path = dir.0.join("settings.json");
+        fs::write(&path, "old settings").unwrap();
+        let result = stage_and_replace_config(&path, "new settings", |_, _| {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "file is busy"))
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old settings");
+        assert_eq!(fs::read_to_string(dir.0.join("settings.json.tmp")).unwrap(), "new settings");
+    }
 }
 
 /// Specialized theme configuration loader that handles legacy format migration.
@@ -232,15 +370,10 @@ pub fn read_theme_config(app: &AppHandle) -> WidgetThemeConfig {
 
                             refresh_builtin_macos_widget_opacity(&mut migrated);
 
-                            // Save migrated config atomically
-                            if let Some(parent) = path.parent() {
-                                let temp_path = parent.join("widget_themes.json.tmp");
-                                if let Ok(content) = serde_json::to_string_pretty(&migrated) {
-                                    if fs::write(&temp_path, &content).is_ok() {
-                                        let _ = fs::remove_file(&path);
-                                        let _ = fs::rename(&temp_path, &path);
-                                    }
-                                }
+                            if let Err(error) = write_config_unlocked(
+                                app, "widget_themes.json", &migrated,
+                            ) {
+                                log::warn!("Could not persist migrated widget themes: {error}");
                             }
                             migrated
                         }
@@ -305,11 +438,10 @@ pub async fn update_widget_visibility_config(
     id: &str,
     visible: bool,
 ) -> Result<(), String> {
-    let mut config = read_config::<AppConfig>(app, "app_config.json");
-    let mut active = config.active_widgets.unwrap_or_default();
-    active.insert(id.to_string(), visible);
-    config.active_widgets = Some(active);
-    write_config(app, "app_config.json", &config)?;
+    let config = update_config(app, "app_config.json", |config: &mut AppConfig| {
+        config.active_widgets.get_or_insert_with(Default::default).insert(id.to_string(), visible);
+        crate::widget_visibility::reset_hidden_when_empty(config);
+    })?;
     let _ = app.emit(
         "widget_visibility_changed",
         WidgetVisibilityPayload {
@@ -318,5 +450,7 @@ pub async fn update_widget_visibility_config(
         },
     );
     let _ = app.emit("app_config_update", &config);
+    #[cfg(target_os = "macos")]
+    crate::macos_tray::refresh(app);
     Ok(())
 }

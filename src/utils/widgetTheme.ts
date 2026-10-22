@@ -1,6 +1,7 @@
 import type { WidgetTheme, WidgetThemeConfig } from "../types/theme";
 import type { DashboardTheme } from "../types/config";
-import { isMacOS } from "./platform";
+import { isMacOS, isWindows } from "./platform";
+import { canonicalGlassPresetId, isGlassMaterial, LIQUID_GLASS_BACKGROUND, LIQUID_GLASS_CARD_BACKGROUND, platformGlassMaterial } from "./glassMaterial";
 
 export type WidgetThemeKind = "gpu" | "deadline" | "arxiv" | "quota";
 export const FOLLOW_DASHBOARD_THEME_ID = "@follow-dashboard";
@@ -19,11 +20,25 @@ const SIDEBAR_THEME_IDS: Record<WidgetThemeKind, string> = {
   quota: "theme-quota-default",
 };
 
+function lightGlassPrimaryColors(theme: WidgetTheme, kind: WidgetThemeKind) {
+  const accents = { gpu: "#1d4ed8", deadline: "#6d28d9", arxiv: "#be185d", quota: "#0e7490" };
+  const colors: Record<string, string> = {
+    Accent: accents[kind], Highlight: "#92400e", Success: "#047857", Warning: "#92400e", Danger: "#b91c1c",
+  };
+  return theme.primary_colors.map(color => colors[color.name]
+    ? { ...color, value: colors[color.name], opacity: 1 } : color);
+}
+
+function lightGlassTextColor(role: "Main Text" | "Sub Text", kind: WidgetThemeKind) {
+  if (kind === "arxiv") return role === "Main Text" ? "#0f172a" : "#334155";
+  return role === "Main Text" ? "#0b1220" : "#1e293b";
+}
+
 export const PRESET_THEME_IDS: Record<WidgetThemeKind, readonly string[]> = {
-  gpu: ["theme-gpu-default", "theme-gpu-light", "theme-gpu-transparent"],
-  deadline: ["theme-deadline-default", "theme-deadline-light", "theme-deadline-transparent"],
-  arxiv: ["theme-arxiv-default", "theme-arxiv-light", "theme-arxiv-transparent"],
-  quota: ["theme-quota-default", "theme-quota-light", "theme-quota-transparent"],
+  gpu: ["theme-gpu-default", "theme-gpu-light", "theme-gpu-transparent", "theme-gpu-glass", "theme-gpu-liquid"],
+  deadline: ["theme-deadline-default", "theme-deadline-light", "theme-deadline-transparent", "theme-deadline-glass", "theme-deadline-liquid"],
+  arxiv: ["theme-arxiv-default", "theme-arxiv-light", "theme-arxiv-transparent", "theme-arxiv-glass", "theme-arxiv-liquid"],
+  quota: ["theme-quota-default", "theme-quota-light", "theme-quota-transparent", "theme-quota-glass", "theme-quota-liquid"],
 };
 
 export function widgetThemeKindFromLabel(label: string): WidgetThemeKind {
@@ -46,19 +61,23 @@ export function resolveWidgetTheme(
   config: WidgetThemeConfig,
   windowLabel: string,
   kind?: WidgetThemeKind,
-  options?: { sidebarLight?: boolean; dashboardTheme?: DashboardTheme }
+  options?: { sidebarLight?: boolean; sidebarGlass?: boolean; dashboardTheme?: DashboardTheme }
 ): WidgetTheme | null {
   if (windowLabel === "sidebar" && kind) {
     const base = config.themes.find((theme) => theme.id === SIDEBAR_THEME_IDS[kind]);
     if (!base) return null;
-    if (!options?.sidebarLight) return base;
+    if (!options?.sidebarLight && !options?.sidebarGlass) return base;
+    const lightGlass = (isWindows || isMacOS) && options?.sidebarGlass && options.sidebarLight;
+    const brightGlassText = options?.sidebarGlass && !lightGlass;
     return {
       ...base,
+      primary_colors: lightGlass
+        ? lightGlassPrimaryColors(base, kind) : base.primary_colors,
       text_colors: base.text_colors.map((color) =>
         color.name === "Main Text"
-          ? { ...color, value: "#0f172a", opacity: 1 }
+          ? { ...color, value: brightGlassText ? "#ffffff" : lightGlass ? lightGlassTextColor("Main Text", kind) : "#0f172a", opacity: 1 }
           : color.name === "Sub Text"
-            ? { ...color, value: "#475569", opacity: 1 }
+            ? { ...color, value: brightGlassText ? (isWindows ? "#ffffff" : "#f1f5f9") : lightGlass ? lightGlassTextColor("Sub Text", kind) : "#475569", opacity: 1 }
             : color
       ),
     };
@@ -69,7 +88,38 @@ export function resolveWidgetTheme(
   const resolvedId = themeId === FOLLOW_DASHBOARD_THEME_ID
     ? `theme-${kind ?? widgetThemeKindFromLabel(windowLabel)}-${options?.dashboardTheme === "light" ? "light" : "default"}`
     : themeId;
-  const theme =
-    config.themes.find((t) => t.id === resolvedId) || config.themes.find((t) => t.id === defaultId);
+  const saved = config.themes.find((t) => t.id === (resolvedId ? canonicalGlassPresetId(resolvedId) : resolvedId))
+    || config.themes.find((t) => t.id === resolvedId) || config.themes.find((t) => t.id === defaultId);
+  const material = platformGlassMaterial(saved?.material);
+  const theme = saved && material !== saved.material ? { ...saved, material } : saved;
+  if (isMacOS && isGlassMaterial(theme?.material) && theme?.is_default) {
+    return { ...theme, name: theme.name.replace(/\b(?:Liquid )?Glass\b/, "Liquid Glass"),
+      bg_color: LIQUID_GLASS_BACKGROUND.color, bg_opacity: LIQUID_GLASS_BACKGROUND.opacity,
+      card_background: { ...LIQUID_GLASS_CARD_BACKGROUND },
+      text_colors: theme.text_colors.map(color => ({ ...color,
+        value: color.name === "Main Text" ? "#ffffff" : color.name === "Sub Text" ? "#f4f4f5" : color.value, opacity: 1 })),
+    };
+  }
+  if (theme?.material === "native-glass" && theme.is_default) {
+    return {
+      ...theme,
+      // Native glass keeps the whole window nearly clear; bright foregrounds
+      // and local content scrims provide contrast on light and dark wallpaper.
+      // Custom themes retain their chosen palette.
+      bg_color: isWindows || isMacOS ? "#18181b" : "#0f172a",
+      bg_opacity: isWindows || isMacOS ? 0.02 : 0.10,
+      text_colors: theme.text_colors.map(color => {
+        // Secondary labels must stay opaque too: desktop colors already show
+        // through the material, so fading the glyphs compounds the contrast loss.
+        if (color.name === "Main Text") {
+          return { ...color, value: "#ffffff", opacity: 1 };
+        }
+        if (color.name === "Sub Text") {
+          return { ...color, value: isWindows ? "#ffffff" : isMacOS ? "#f4f4f5" : "#f1f5f9", opacity: 1 };
+        }
+        return color;
+      }),
+    };
+  }
   return theme || null;
 }

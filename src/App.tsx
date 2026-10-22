@@ -1,4 +1,6 @@
-import { useState, useEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { isGlassMaterial } from "./utils/glassMaterial";
+import { arxivQueryChanged } from "./utils/arxivSettings";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import {
   LayoutDashboard,
@@ -9,20 +11,16 @@ import {
   Minus,
   Square,
   Activity,
-  Lock,
-  Unlock,
   Pin,
   PinOff,
-  Monitor,
   Copy,
   RefreshCw,
   GripVertical,
-  Maximize2,
   Globe,
   User,
-  Plus,
   ChevronDown,
-  EyeOff
+  EyeOff,
+  Eye
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { APP_VERSION, APP_NAME } from "./constants";
@@ -37,10 +35,12 @@ import { tauriInvoke } from "./utils/tauriInvoke";
 import { tauriListen } from "./utils/tauriListen";
 import { ArxivPaperActions } from "./components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "./components/ArxivAbstractPreview";
+import { ArxivPaperMetadata } from "./components/ArxivPaperMetadata";
 import { useArxivPaperPages } from "./hooks/useArxivPaperPages";
 import { ArxivDateFilter } from "./components/ArxivDateFilter";
 import { ArxivPagination } from "./components/ArxivPagination";
 import { startWindowSnapshotSync } from "./utils/windowSnapshotSync";
+import { createAppConfigWriter } from "./utils/appConfigWrites";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -63,7 +63,7 @@ import { formatArxivKeywordLabel, groupArxivPapersByKeyword, hasArxivKeywords } 
 import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaBarDisplay, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
 import type { SidebarDockState, UpdateInfo } from "./types/tauri";
 import { resolveWidgetTheme } from "./utils/widgetTheme";
-import { isMacOS } from "./utils/platform";
+import { isMacOS, isWindows } from "./utils/platform";
 import { resolveLanguage, useUiLocalization } from "./utils/localization";
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel, messageShowsCached } from "./utils/cachedLabels";
 import { MODULE_NAVIGATION } from "./utils/moduleNavigation";
@@ -75,32 +75,34 @@ import { ServiceErrorBanners } from "./components/ServiceErrorBanners";
 import { QuotaVisualizations } from "./components/QuotaVisualizations";
 import { StatCard } from "./components/StatCard";
 import { SectionEmptyState } from "./components/SectionEmptyState";
+import { FloatingWindowControls } from "./components/FloatingWindowControls";
+import { SidebarWidgetHeaderContext } from "./components/WidgetHeader";
+import { WidgetResizeHandle } from "./components/WidgetResizeHandle";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
-import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
+import { DeadlineConferenceBrowser, type ConferenceNavigationRequest } from "./components/DeadlineConferenceBrowser";
 import { ResearchPageHeader, ResearchTabs } from "./components/ResearchPageHeader";
 import { ConferenceUndoNotice } from "./components/ConferenceUndoNotice";
 import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
 import { conferencePreferenceIds, isConferenceFollowed, isConferenceIgnored, resolveConferencePreferences, updateConferencePreferences, type ConferencePreference } from "./utils/deadlineKeys";
 import { resolveSidebarTheme, type ResolvedSidebarTheme } from "./utils/sidebarTheme";
+import { observeSidebarContentHeight } from "./utils/sidebarContentHeight";
+import { findDockedSidebarInsertion, layoutDockedSidebar, reorderDockedSidebar, sidebarCardWidth } from "./utils/sidebarDockLayout";
+import { useFloatingGlass } from "./hooks/useFloatingGlass";
 import {
   compactSidebarTileLayout,
-  findSidebarInsertionGuide,
-  insertSidebarTileAtGuide,
+  constrainSidebarTileHeights,
+  sidebarTileHeightLimits,
   reconcileSidebarTileVisibility,
-  resolveSidebarTileCollisions,
   resizeSidebarTileRect,
   sidebarRectsOverlap,
-  sidebarRowsFromLayout,
-  sidebarTileWithinBounds,
   SIDEBAR_TILE_GAP,
-  SIDEBAR_TILE_MIN_HEIGHT,
   SIDEBAR_TILE_MIN_WIDTH_RATIO,
-  type SidebarCollisionAxis,
   type SidebarInsertionGuide,
   type SidebarSectionKey,
   type SidebarResizeDirection,
   type SidebarTileRect,
+  type SidebarTileHeightLimitMap,
 } from "./utils/sidebarTileLayout";
 import { GPUWidgetContent } from "./widgets/GPUWidgetContent";
 import { DeadlineWidgetContent } from "./widgets/DeadlineWidgetContent";
@@ -155,7 +157,6 @@ const LEGACY_SIDEBAR_GRID_COLUMNS = 4;
 const LEGACY_SIDEBAR_GRID_GAP = 8;
 const LEGACY_SIDEBAR_GRID_ROW_HEIGHT = 72;
 const SIDEBAR_WINDOW_RESIZE_GUTTER = 16;
-const SIDEBAR_SCROLL_BOTTOM_GAP = 12;
 
 const DEFAULT_SIDEBAR_TILE_LAYOUT: Record<SidebarSectionKey, SidebarTileRect> = {
   quota: { x: 0, y: 0, w: 1, h: 152 },
@@ -181,14 +182,9 @@ const SIDEBAR_RESIZE_HANDLES: Array<{
   direction: SidebarResizeDirection;
   className: string;
 }> = [
-  { direction: "n", className: "top-0 left-2 right-2 h-1.5 cursor-n-resize" },
   { direction: "s", className: "bottom-0 left-2 right-2 h-1.5 cursor-s-resize" },
   { direction: "e", className: "right-0 top-2 bottom-2 w-1.5 cursor-e-resize" },
   { direction: "w", className: "left-0 top-2 bottom-2 w-1.5 cursor-w-resize" },
-  { direction: "ne", className: "right-0 top-0 w-2.5 h-2.5 cursor-ne-resize" },
-  { direction: "nw", className: "left-0 top-0 w-2.5 h-2.5 cursor-nw-resize" },
-  { direction: "sw", className: "left-0 bottom-0 w-2.5 h-2.5 cursor-sw-resize" },
-  { direction: "se", className: "right-0 bottom-0 w-5 h-5 cursor-se-resize" },
 ];
 
 const normalizeSidebarOrder = (order?: string[]): SidebarSectionKey[] => {
@@ -243,7 +239,7 @@ const normalizeSidebarTileLayout = (
       const x = Math.min(1 - w, Math.max(0, legacyX / LEGACY_SIDEBAR_GRID_COLUMNS));
       const y = Math.max(0, legacyY * (LEGACY_SIDEBAR_GRID_ROW_HEIGHT + LEGACY_SIDEBAR_GRID_GAP));
       const h = Math.max(
-        SIDEBAR_TILE_MIN_HEIGHT,
+        sidebarTileHeightLimits(key, window.innerHeight).min,
         legacyH * LEGACY_SIDEBAR_GRID_ROW_HEIGHT + Math.max(0, legacyH - 1) * LEGACY_SIDEBAR_GRID_GAP
       );
       return { x, y, w, h };
@@ -255,7 +251,7 @@ const normalizeSidebarTileLayout = (
         : fallback.w;
     const h =
       typeof source?.h === "number" && Number.isFinite(source.h)
-        ? Math.max(SIDEBAR_TILE_MIN_HEIGHT, source.h)
+        ? Math.max(sidebarTileHeightLimits(key, window.innerHeight).min, source.h)
         : fallback.h;
     const x =
       typeof source?.x === "number" && Number.isFinite(source.x)
@@ -301,19 +297,27 @@ const normalizeSidebarTileLayout = (
 };
 
 function SidebarWidgetSection({
+  sectionKey,
+  onContentHeight,
   title,
   accentColor,
   theme,
   isLight,
+  showHeader,
+  horizontal,
   onClose,
   onMoveStart,
   onResizeStart,
   children,
 }: {
+  sectionKey: SidebarSectionKey;
+  onContentHeight: (key: SidebarSectionKey, height: number, expanded: boolean, minimumHeight?: number) => void;
   title: string;
   accentColor: string;
   theme: ResolvedSidebarTheme;
   isLight: boolean;
+  showHeader: boolean;
+  horizontal: boolean;
   onClose: () => void;
   onMoveStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onResizeStart: (
@@ -322,11 +326,20 @@ function SidebarWidgetSection({
   ) => void;
   children: ReactNode;
 }) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [headerTarget, setHeaderTarget] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (sectionKey === "arxiv") return;
+    const section = sectionRef.current;
+    if (!section) return;
+    return observeSidebarContentHeight(section, (height, expanded, minimumHeight) => onContentHeight(sectionKey, height, expanded, minimumHeight));
+  }, [sectionKey, onContentHeight]);
   return (
     <section
+      ref={sectionRef}
       className="group/sidebar-tile h-full min-h-0 rounded-md border overflow-hidden flex flex-col relative"
       style={{
-        backgroundColor: isLight
+        backgroundColor: isGlassMaterial(theme.material) && theme.card_background ? "transparent" : isLight
           ? hexToRgba("#ffffff", theme.card_opacity)
           : hexToRgba(theme.background, theme.card_opacity),
         borderColor: hexToRgba(accentColor, isLight ? 0.28 : 0.22),
@@ -336,7 +349,7 @@ function SidebarWidgetSection({
       }}
     >
       <div
-        className="h-5 shrink-0 px-1.5 flex items-center justify-between border-b cursor-grab active:cursor-grabbing touch-none"
+        className={`${showHeader ? "h-7" : "h-5"} shrink-0 px-1.5 flex items-center gap-1 border-b cursor-grab active:cursor-grabbing touch-none`}
         style={{
           backgroundColor: hexToRgba(
             accentColor,
@@ -351,12 +364,13 @@ function SidebarWidgetSection({
             size={9}
             className={isLight ? "text-slate-400" : "text-slate-500"}
           />
-          <span
+          {!showHeader && <span
             className="w-1.5 h-1.5 rounded-full"
             style={{ backgroundColor: accentColor }}
-          />
+          />}
           <span className="sr-only">Move {title}</span>
         </div>
+        <div ref={setHeaderTarget} className="min-w-0 flex-1" />
         <div className="flex items-center gap-1" onPointerDown={(event) => event.stopPropagation()}>
           <button
             type="button"
@@ -372,26 +386,20 @@ function SidebarWidgetSection({
           </button>
         </div>
       </div>
-      <div className="flex-1 min-h-0 p-2 overflow-hidden">{children}</div>
-      {SIDEBAR_RESIZE_HANDLES.map((handle) => (
+      <div className="flex-1 min-h-0 p-2 overflow-hidden">
+        <SidebarWidgetHeaderContext.Provider value={{ target: headerTarget, onMoveStart }}>{children}</SidebarWidgetHeaderContext.Provider>
+      </div>
+      {SIDEBAR_RESIZE_HANDLES.filter((handle) => horizontal
+        ? handle.direction === "e" || handle.direction === "w"
+        : handle.direction === "s").map((handle) => (
         <button
           key={handle.direction}
           type="button"
           onPointerDown={(event) => onResizeStart(event, handle.direction)}
-          className={`absolute z-30 touch-none transition-colors ${handle.className} ${
-            handle.direction === "se"
-              ? `flex items-center justify-center rounded-md opacity-55 group-hover/sidebar-tile:opacity-100 ${
-                  isLight
-                    ? "text-slate-500 hover:text-slate-900 hover:bg-slate-100/80"
-                    : "text-white/50 hover:text-white hover:bg-white/10"
-                }`
-              : "opacity-0 hover:opacity-100 hover:bg-blue-400/25"
-          }`}
+          className={`absolute z-30 touch-none transition-colors opacity-0 hover:opacity-100 hover:bg-blue-400/25 ${handle.className}`}
           aria-label={`Resize ${title} from ${handle.direction}`}
           title={`Resize ${title}`}
-        >
-          {handle.direction === "se" ? <Maximize2 size={12} /> : null}
-        </button>
+        />
       ))}
     </section>
   );
@@ -420,6 +428,7 @@ const renderProviderIcon = (provider: string, isManual = false, lightBackground 
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
+  const [conferenceNavigation, setConferenceNavigation] = useState<ConferenceNavigationRequest | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -434,10 +443,14 @@ function App() {
       queue = queue.then(async () => {
         if (!active) return;
         try {
-          const destination = await tauriInvoke("take_pending_main_navigation");
-          if (active && destination) {
+          const request = await tauriInvoke("take_pending_main_navigation");
+          if (active && request) {
             setInlineSettingsSection(null);
-            setActiveTab(destination);
+            if (request.destination === "deadlines" && request.conference_view) {
+              const view = request.conference_view;
+              setConferenceNavigation(previous => ({ view, id: (previous?.id ?? 0) + 1 }));
+            }
+            setActiveTab(request.destination);
           }
         } catch (error) {
           console.error("Widget navigation failed", error);
@@ -452,9 +465,8 @@ function App() {
     return () => { active = false; unlisten?.(); };
   }, [windowLabel]);
   const [nativeWidgetsAvailable, setNativeWidgetsAvailable] = useState(false);
-  const [isLocked, setIsLocked] = useState(!isMacOS);
+  const [isLocked, setIsLocked] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
-  const [isDesktopFixed, setIsDesktopFixed] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
   const { conferences: deadlineConferences, now: deadlineNow } = useDeadlineConferences(deadlines);
@@ -483,6 +495,7 @@ function App() {
   const arxivConfigRef = useRef(arxivConfig);
   const arxivSaveQueue = useRef<Promise<boolean>>(Promise.resolve(true));
   const arxivSaveRevision = useRef(0);
+  const arxivFilterRevision = useRef(0);
   const arxivPendingWrites = useRef(0);
   const [arxivFilterState, setArxivFilterState] = useState<FilterStatusState>("idle");
   useEffect(() => {
@@ -640,6 +653,24 @@ function App() {
       return { theme: "dark" };
     }
   });
+  const appConfigWriterRef = useRef<ReturnType<typeof createAppConfigWriter> | null>(null);
+  if (!appConfigWriterRef.current) {
+    appConfigWriterRef.current = createAppConfigWriter({
+      initial: appConfig,
+      save: (config, baseConfig) => tauriInvoke("save_app_config", { config, baseConfig }),
+      read: () => tauriInvoke("get_app_config"),
+      apply: config => {
+        setAppConfig(config);
+        try {
+          if (config.theme) localStorage.setItem("widgitron-theme", config.theme);
+        } catch (error) {
+          console.warn("Could not cache the application theme", error);
+        }
+      },
+      onError: error => console.error("Application settings save failed", error),
+    });
+  }
+  const appConfigWriter = appConfigWriterRef.current;
   const appConfigSync = useRef<ReturnType<typeof startWindowSnapshotSync<AppConfig>> | null>(null);
   useUiLocalization(resolveLanguage(appConfig.language));
   const pagedArxivView = arxivView === "all" || (arxivView === "unread" && hasReadingKeywords && arxivDate !== "");
@@ -661,6 +692,9 @@ function App() {
   }, [pagedArxivView, pagedArxiv.page, pagedArxiv.data_date, pagedArxiv.loaded]);
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
+  const [widgetsVisibilityBusy, setWidgetsVisibilityBusy] = useState(false);
+  const hasFloatingWidgets = MODULE_NAVIGATION.some(({ field }) =>
+    appConfig[field] !== false && activeWidgets.includes(serviceWidgetMeta(field).id));
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
   const currentTheme = resolveWidgetTheme(themeConfig, windowLabel, undefined, { dashboardTheme: appConfig.theme });
   const themePendingWrites = useRef(0);
@@ -673,6 +707,34 @@ function App() {
   const [serviceToggleErrorDismissed, setServiceToggleErrorDismissed] = useState(false);
   const [sidebarTileLayoutDraft, setSidebarTileLayoutDraft] =
     useState<Record<SidebarSectionKey, SidebarTileRect> | null>(null);
+  const [sidebarContentHeights, setSidebarContentHeights] = useState<Partial<Record<SidebarSectionKey, { height: number; minimumHeight?: number }>>>({});
+  const [sidebarHorizontalWidthsDraft, setSidebarHorizontalWidthsDraft] = useState<Record<string, number> | null>(null);
+  const [sidebarViewport, setSidebarViewport] = useState(() => ({ width: window.innerWidth - 16, height: window.innerHeight - 80 }));
+  const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, _expanded: boolean, minimumHeight?: number) => {
+    setSidebarContentHeights((previous) => previous[key]?.height === height && previous[key]?.minimumHeight === minimumHeight
+      ? previous : { ...previous, [key]: { height, minimumHeight } });
+  }, []);
+  useEffect(() => {
+    if (windowLabel !== "sidebar" || appConfig.sidebar_enabled === false) return;
+    const viewport = sidebarScrollRef.current;
+    if (!viewport) return;
+    const update = () => {
+      const style = getComputedStyle(viewport);
+      const next = {
+        width: Math.max(1, viewport.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+        height: Math.max(1, viewport.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)),
+      };
+      setSidebarViewport(previous => previous.width === next.width && previous.height === next.height ? previous : next);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [windowLabel, appConfig.sidebar_enabled]);
   const [activeSidebarTile, setActiveSidebarTile] = useState<SidebarSectionKey | null>(null);
   const [sidebarTileDragPreview, setSidebarTileDragPreview] = useState<{
     key: SidebarSectionKey;
@@ -687,6 +749,14 @@ function App() {
     dragging: false,
     preview_edge: null,
   });
+  const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme, appConfig.theme);
+  const sidebarGlass = isGlassMaterial(sidebarTheme.material);
+  const nativeGlass = useFloatingGlass(windowLabel.startsWith("widget-") || windowLabel === "sidebar",
+    windowLabel === "sidebar" || Boolean(currentTheme),
+    windowLabel === "sidebar" ? sidebarGlass && appConfig.sidebar_enabled !== false : isGlassMaterial(currentTheme?.material),
+    windowLabel === "sidebar" ? !isLightColor(sidebarTheme.background) : currentTheme ? !isLightColor(currentTheme.bg_color) : false,
+    windowLabel === "sidebar" ? sidebarDockState.edge : null,
+    windowLabel === "sidebar" ? sidebarTheme.material === "native-liquid-glass" : currentTheme?.material === "native-liquid-glass");
   const sidebarOrderRef = useRef<SidebarSectionKey[]>(DEFAULT_SIDEBAR_ORDER);
   const sidebarBoardRef = useRef<HTMLDivElement | null>(null);
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
@@ -698,6 +768,13 @@ function App() {
   useEffect(() => {
     setSidebarTileLayoutDraft(null);
   }, [appConfig.sidebar_tile_layout, appConfig.sidebar_widgets, appConfig.sidebar_order]);
+  useEffect(() => {
+    setSidebarHorizontalWidthsDraft(null);
+  }, [appConfig.sidebar_horizontal_tile_widths]);
+  useEffect(() => {
+    // Scroll offsets from the other orientation must not hide the first card.
+    sidebarScrollRef.current?.scrollTo(0, 0);
+  }, [sidebarDockState.edge]);
 
   useEffect(() => {
     const prevTab = prevActiveTabRef.current;
@@ -822,7 +899,8 @@ function App() {
       }
     };
     const summary = (config: AppConfig) => JSON.stringify({
-      theme: resolveSidebarTheme(config.sidebar_theme).id,
+      theme: resolveSidebarTheme(config.sidebar_theme, config.theme).id,
+      dashboardTheme: config.theme,
       widgets: config.sidebar_widgets,
       hideHeaders: config.sidebar_hide_widget_headers,
     });
@@ -852,33 +930,20 @@ function App() {
       },
       apply: (config) => {
         const update = () => {
-          setAppConfig((previous) => {
-            if (JSON.stringify(previous) === JSON.stringify(config)) return previous;
-            applyServiceDisableClears(previous, config, serviceDisableHandlers);
-            return config;
-          });
+          const previous = appConfigWriter.current();
+          const next = appConfigWriter.receive(config);
+          applyServiceDisableClears(previous, next, serviceDisableHandlers);
           if (windowLabel.startsWith("widget-")) {
-            setIsPinned(config.always_on_top?.[windowLabel] ?? false);
-            setIsDesktopFixed(config.embedded?.[windowLabel] ?? false);
+            setIsPinned(next.always_on_top?.[windowLabel] ?? false);
           }
-          if (windowLabel === "main") {
-            setActiveWidgets(activeWidgetLabelsFromConfig(config) ?? (isMacOS ? [] : [
-              ...(config.gpu_enabled !== false ? [serviceWidgetMeta("gpu_enabled").id] : []),
-              ...(config.deadline_enabled !== false ? [serviceWidgetMeta("deadline_enabled").id] : []),
-              ...(config.arxiv_enabled !== false ? [serviceWidgetMeta("arxiv_enabled").id] : []),
-              ...(config.quota_enabled !== false ? [serviceWidgetMeta("quota_enabled").id] : []),
-            ]));
+          if (windowLabel === "main" || windowLabel === "tray-menu") {
+            setActiveWidgets(activeWidgetLabelsFromConfig(next) ?? []);
           }
         };
         // Native IPC callbacks run outside React input events. Commit sidebar
         // settings synchronously so the DOM is updated before the callback ends.
         if (windowLabel === "sidebar" && !isMacOS) flushSync(update);
         else update();
-        try {
-          if (config.theme) localStorage.setItem("widgitron-theme", config.theme);
-        } catch (error) {
-          console.warn("Could not cache the application theme", error);
-        }
       },
       onError: (error) => {
         console.error("Application settings sync failed", error);
@@ -937,7 +1002,6 @@ function App() {
 
           const pinned = ac.always_on_top?.[label] ?? false;
           setIsPinned(pinned);
-          setIsDesktopFixed(ac.embedded?.[label] ?? false);
 
           if (!isMacOS) {
             const stagger = WIDGET_DESKTOP_STAGGER_MS[label] ?? 500;
@@ -1238,11 +1302,7 @@ function App() {
     void savePaperConfig({ ...paperConfigRef.current, followed_conference_ids, ignored_conference_ids, subscribed_titles, ignored_titles, pinned_titles, pinned_deadline_ids });
   };
 
-  const onSaveApp = async (config: AppConfig) => {
-    setAppConfig(config);
-    if (config.theme) localStorage.setItem("widgitron-theme", config.theme);
-    await tauriInvoke("save_app_config", { config });
-  };
+  const onSaveApp = (config: AppConfig) => appConfigWriter.save(appConfig, config);
 
   const saveSidebarWidgetVisibility = async (key: SidebarSectionKey, visible: boolean) => {
     const sidebarWidgets = appConfig.sidebar_widgets || {};
@@ -1279,7 +1339,7 @@ function App() {
       layout: nextLayout,
       widgets: nextWidgets,
     });
-    setAppConfig(updated);
+    appConfigWriter.receive(updated);
   };
 
   const handleMasterServiceToggle = createMasterServiceToggleHandler({
@@ -1293,42 +1353,60 @@ function App() {
 
   const saveArxivConfig = async (changes: Partial<ArxivConfig>): Promise<FilterSaveResult> => {
     const newConfig = { ...arxivConfigRef.current, ...changes };
+    const queryChanged = arxivQueryChanged(arxivConfigRef.current, newConfig);
     const revision = ++arxivSaveRevision.current;
+    const filterRevision = queryChanged ? ++arxivFilterRevision.current : null;
     arxivConfigRef.current = newConfig;
     arxivPendingWrites.current += 1;
     setArxivConfig(newConfig);
-    setIsRefreshingArxiv(true);
-    setArxivFilterState("applying");
-    setArxivError(null);
-    setArxivRefreshError(null);
-    // A keyword draft can be committed while a category or preference save is
-    // still running. Keep their writes ordered and merge from the latest intent.
+    if (queryChanged) {
+      setIsRefreshingArxiv(true);
+      setArxivFilterState("applying");
+      setArxivError(null);
+      setArxivRefreshError(null);
+    }
+    // Serialize disk writes only. A slow network request must never hold up
+    // saving a later category, hint toggle, or polling interval.
     const save = arxivSaveQueue.current.catch(() => false).then(() => tauriInvoke("save_arxiv_config", { config: newConfig }));
     arxivSaveQueue.current = save;
     try {
-      const updated = await save;
-      const result = updated ? "applied" : "refresh-error";
-      if (revision === arxivSaveRevision.current) setArxivFilterState(result);
-      return result;
+      await save;
     } catch (error) {
-      console.error("Save arXiv filters failed", error);
+      console.error("Save arXiv settings failed", error);
       if (revision === arxivSaveRevision.current) setArxivFilterState("save-error");
+      if (filterRevision === arxivFilterRevision.current) setIsRefreshingArxiv(false);
       return "save-error";
     } finally {
       arxivPendingWrites.current -= 1;
       if (!arxivPendingWrites.current && revision === arxivSaveRevision.current) {
-        setIsRefreshingArxiv(false);
         try {
           const saved = await tauriInvoke("get_arxiv_config");
           if (!arxivPendingWrites.current && revision === arxivSaveRevision.current) {
             arxivConfigRef.current = saved;
             setArxivConfig(saved);
           }
-        } catch (error) { console.error("Could not reload arXiv filters", error); }
+        } catch (error) { console.error("Could not reload arXiv settings", error); }
       }
     }
+    if (!queryChanged) return "applied";
+    // Coalesce quick category changes. Keyword drafts still commit only when
+    // filters close or the user leaves the settings section.
+    await new Promise(resolve => window.setTimeout(resolve, 500));
+    if (filterRevision !== arxivFilterRevision.current) return "applied";
+    try {
+      if (appConfig.arxiv_enabled !== false) await tauriInvoke("refresh_arxiv", { filtersOnly: true });
+      if (filterRevision === arxivFilterRevision.current) setArxivFilterState("applied");
+      return "applied";
+    } catch (error) {
+      if (filterRevision === arxivFilterRevision.current) {
+        setArxivFilterState("refresh-error");
+        setArxivRefreshError(String(error));
+      }
+      return "refresh-error";
+    } finally {
+      if (filterRevision === arxivFilterRevision.current) setIsRefreshingArxiv(false);
+    }
   };
-
 
   const activeArxivPapers = arxivView === "unread" && !hasReadingKeywords ? [] : pagedArxivView ? pagedArxiv.papers : arxivView === "unread" ? arxivPapers : arxivSavedPapers;
   const arxivSelection = useResearchSelection(activeArxivPapers, arxivPaperKey, JSON.stringify([activeTab, arxivView, arxivDate, pagedArxivView ? pagedArxiv.page : null, arxivConfig.categories, arxivConfig.keywords]));
@@ -1363,12 +1441,8 @@ function App() {
           {paper.title}
         </h3>
         </div>
+        <ArxivPaperMetadata paper={paper} isLight={appConfig.theme === "light"} className="mb-2 shrink-0" />
         <ArxivAbstractPreview paper={paper} isLight={appConfig.theme === "light"} />
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span data-no-localize className="min-w-0 break-words text-[10px] text-slate-500">
-          {paper.authors.length > 0 ? `${paper.authors[0]}${paper.authors.length > 1 ? " et al." : ""}` : "Unknown Author"}
-        </span>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--dashboard-border)] pt-2">
         <ArxivReadingActions paper={paper} library={arxivLibrary} allowSkip={arxivView === "unread" && !arxivDate} />
@@ -1414,7 +1488,7 @@ function App() {
   };
 
   const handleToggleWidget = async (id: string, title: string) => {
-    if (pendingToggles.has(id)) return;
+    if (pendingToggles.has(id) || widgetsVisibilityBusy) return;
     setPendingToggles((prev) => new Set(prev).add(id));
     setToggleWidgetError(null);
 
@@ -1434,23 +1508,21 @@ function App() {
     }
   };
 
-  const toggleLock = async () => {
-    const nextLocked = !isLocked;
-    setIsLocked(nextLocked);
-
-    // When unlocking, we MUST exit desktop mode to allow movement
-    // When locking, if we are NOT pinned, we re-enter desktop mode
-    if (windowLabel.startsWith("widget-") && !isMacOS) {
-      if (!nextLocked) {
-        // Unlocking: Exit desktop mode
-        await tauriInvoke("set_desktop_mode", { label: windowLabel, enabled: false });
-      } else {
-        // Locking: If not pinned, re-embed
-        if (!isPinned) {
-          await tauriInvoke("set_desktop_mode", { label: windowLabel, enabled: true });
-        }
-      }
+  const toggleWidgetsVisibility = async () => {
+    if (widgetsVisibilityBusy || pendingToggles.size > 0) return;
+    setWidgetsVisibilityBusy(true);
+    setToggleWidgetError(null);
+    try {
+      appConfigWriter.receive(await tauriInvoke("toggle_widgets_visibility"));
+    } catch (error) {
+      setToggleWidgetError(String(error));
+    } finally {
+      setWidgetsVisibilityBusy(false);
     }
+  };
+
+  const toggleLock = async () => {
+    setIsLocked(previous => !previous);
   };
 
   const togglePin = async (labelToToggle?: string) => {
@@ -1474,35 +1546,13 @@ function App() {
         label: targetLabel,
         pinned: next,
       });
-      setAppConfig(nextConfig);
+      appConfigWriter.receive(nextConfig);
       if (targetLabel === windowLabel) {
         setIsPinned(next);
       }
     } catch (e) {
       console.error(e);
-    }
-  };
-
-  const toggleDesktopFixed = async (labelToToggle?: string, title?: string) => {
-    const targetLabel = labelToToggle || windowLabel;
-    const currentlyFixed = targetLabel === windowLabel
-      ? isDesktopFixed
-      : appConfig.embedded?.[targetLabel] ?? false;
-    const fixed = !currentlyFixed;
-    try {
-      const nextConfig = await tauriInvoke("set_widget_desktop_fixed", {
-        label: targetLabel,
-        fixed,
-      });
-      setAppConfig(nextConfig);
-      if (targetLabel === windowLabel) setIsDesktopFixed(fixed);
-      if (fixed && !activeWidgets.includes(targetLabel) && title) {
-        await tauriInvoke("create_widget", { id: targetLabel, title });
-        setActiveWidgets((previous) => [...new Set([...previous, targetLabel])]);
-      }
-    } catch (error) {
-      console.error("Failed to change desktop mode", error);
-      setToggleWidgetError(formatWidgetToggleError(String(error)));
+      throw e;
     }
   };
 
@@ -1534,10 +1584,15 @@ function App() {
           // The native loop owns drag state. Its completion event can arrive
           // before this command resolves, so applying the command's initial
           // snapshot here could leave the "moving" overlay stuck on screen.
-          await tauriInvoke("begin_sidebar_drag");
+          await tauriInvoke("begin_sidebar_drag", { allowUndock: !!target.closest('[data-sidebar-undock="true"]') });
           return;
         }
-        await getCurrentWindow().startDragging();
+        if (isWindows && windowLabel.startsWith("widget-")) {
+          e.preventDefault();
+          await tauriInvoke("begin_widget_drag", { label: windowLabel });
+        } else {
+          await getCurrentWindow().startDragging();
+        }
       } catch (e) {
         console.error("Drag failed", e);
       }
@@ -1624,12 +1679,13 @@ function App() {
           />
           <span className="text-[11px] font-bold">Dashboard</span>
         </button>
-        {isMacOS && <button
-          onClick={() => tauriInvoke("hide_all_widgets").then(() => appWindow.hide()).catch(console.error)}
+        {hasFloatingWidgets && <button
+          disabled={widgetsVisibilityBusy}
+          onClick={() => toggleWidgetsVisibility().then(() => appWindow.hide()).catch(console.error)}
           className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
         >
-          <EyeOff size={14} className="text-slate-500 group-hover:text-slate-700 transition-colors" />
-          <span className="text-[11px] font-bold">Hide All Widgets</span>
+          {appConfig.widgets_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
+          <span className="text-[11px] font-bold">{appConfig.widgets_hidden ? "Show Widgets" : "Hide Widgets"}</span>
         </button>}
         <div role="separator" className="mx-2 my-1 border-t border-slate-200" />
         <button
@@ -1649,7 +1705,6 @@ function App() {
     const openDashboard = async () => {
       await tauriInvoke("show_main");
     };
-    const sidebarTheme = resolveSidebarTheme(appConfig.sidebar_theme);
     const sidebarIsLight = isLightColor(sidebarTheme.background);
     const sidebarWindowBorder = sidebarIsLight
       ? "rgba(203, 213, 225, 0.96)"
@@ -1669,8 +1724,8 @@ function App() {
     const sidebarDragMessage = sidebarDockState.preview_edge
       ? "Release to dock on the " + sidebarEdgeLabels[sidebarDockState.preview_edge] + " edge"
       : "Move toward any screen edge to preview docking";
-    // Keep resize hit targets thin (h-1.5 / w-1.5). The previous h-4 / w-4
-    // strips covered most of the top drag header and stole window moves.
+    // Give resizing an easy target while reserving header buttons and the
+    // remaining header area for dragging. macOS uses matching native targets.
     const sidebarWindowResizeHandles: Array<{
       direction: NativeResizeDirection;
       className: string;
@@ -1680,13 +1735,13 @@ function App() {
       ? [
           {
             direction: "North",
-            className: "top-0 left-3 right-3 h-1.5",
+            className: "top-0 left-10 right-[84px] h-2",
             cursor: "ns-resize",
             label: "Resize sidebar from top edge",
           },
           {
             direction: "South",
-            className: "bottom-0 left-3 right-3 h-1.5",
+            className: "bottom-0 inset-x-0 h-3.5",
             cursor: "ns-resize",
             label: "Resize sidebar from bottom edge",
           },
@@ -1694,26 +1749,35 @@ function App() {
       : [
           {
             direction: "West",
-            className: "left-0 top-3 bottom-3 w-1.5",
+            className: "left-0 top-11 bottom-0 w-3.5",
             cursor: "ew-resize",
             label: "Resize sidebar from left edge",
           },
           {
             direction: "East",
-            className: "right-0 top-3 bottom-3 w-1.5",
+            className: "right-0 top-11 bottom-0 w-3.5",
             cursor: "ew-resize",
             label: "Resize sidebar from right edge",
           },
         ];
     const sidebarWidgets = appConfig.sidebar_widgets || {};
     const hideSidebarWidgetHeaders = appConfig.sidebar_hide_widget_headers === true;
+    const horizontalSidebar = sidebarDockState.edge === "top" || sidebarDockState.edge === "bottom";
+    const horizontalWidths = sidebarHorizontalWidthsDraft ?? appConfig.sidebar_horizontal_tile_widths ?? {};
     const sidebarOrder = normalizeSidebarOrder(appConfig.sidebar_order);
     const visibleSidebarKeys = sidebarOrder.filter(
       (key) => sidebarWidgets[key] !== false
     );
-    const sidebarTileLayout =
-      sidebarTileLayoutDraft ??
-      normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys);
+    const heightLimits = Object.fromEntries(DEFAULT_SIDEBAR_ORDER.map((key) => [key,
+      sidebarTileHeightLimits(key, sidebarViewport.height, sidebarContentHeights[key]?.height, sidebarContentHeights[key]?.minimumHeight),
+    ])) as SidebarTileHeightLimitMap;
+    const sidebarSavedLayout = sidebarTileLayoutDraft ?? normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys);
+    const verticalTileLayout = constrainSidebarTileHeights(
+      sidebarSavedLayout, visibleSidebarKeys, heightLimits,
+    );
+    const dockedLayout = layoutDockedSidebar(horizontalSidebar ? sidebarSavedLayout : verticalTileLayout,
+      visibleSidebarKeys, horizontalSidebar, sidebarViewport.width, sidebarViewport.height, horizontalWidths);
+    const sidebarTileLayout = dockedLayout.layout;
     sidebarOrderRef.current = sidebarOrder;
     const allSidebarSections: SidebarSectionDefinition[] = [
       {
@@ -1753,14 +1817,13 @@ function App() {
     const dragPreviewBottom = sidebarTileDragPreview
       ? sidebarTileDragPreview.rect.y + sidebarTileDragPreview.rect.h + 48
       : 0;
-    const boardRows = Math.max(
-      480,
-      dragPreviewBottom,
-      ...visibleSidebarKeys.map((key) => sidebarTileLayout[key].y + sidebarTileLayout[key].h)
-    );
-    // Keep the final tile visibly clear of the window frame. This space belongs
-    // to the scrollable content, so it remains present at the end of the list.
-    const boardHeight = boardRows + SIDEBAR_SCROLL_BOTTOM_GAP;
+    const boardHeight = horizontalSidebar ? dockedLayout.height : Math.max(dockedLayout.height, dragPreviewBottom);
+    // WebKit requires overflow to rubber-band a nested scroll area. A one-pixel
+    // track plus one resting snap point enables its native gesture handling
+    // even when all cards fit, without leaving a persistent blank scroll range.
+    const nativeBounceFit = isMacOS && activeSidebarTile === null
+      && (horizontalSidebar ? dockedLayout.width <= sidebarViewport.width : boardHeight <= sidebarViewport.height);
+    const nativeBounceTrack = nativeBounceFit ? 1 : 0;
     const getSidebarGridMetrics = () => {
       const board = sidebarBoardRef.current;
       if (!board) return null;
@@ -1771,7 +1834,8 @@ function App() {
     };
     const saveSidebarTileLayout = (
       nextLayout: Record<SidebarSectionKey, SidebarTileRect>,
-      nextVisibleOrder?: SidebarSectionKey[]
+      nextVisibleOrder?: SidebarSectionKey[],
+      nextWidths?: Record<string, number>,
     ) => {
       const nextOrder = nextVisibleOrder
         ? [
@@ -1779,15 +1843,18 @@ function App() {
             ...sidebarOrderRef.current.filter((key) => !nextVisibleOrder.includes(key)),
           ]
         : sidebarOrderRef.current;
-      const compactedLayout = compactSidebarTileLayout(nextLayout, visibleSidebarKeys);
+      const savedLayout = horizontalSidebar ? sidebarSavedLayout : nextLayout;
+      const compactedLayout = horizontalSidebar ? savedLayout : constrainSidebarTileHeights(savedLayout, visibleSidebarKeys,
+        heightLimits);
       sidebarOrderRef.current = nextOrder;
       setSidebarTileLayoutDraft(compactedLayout);
       tauriInvoke("save_sidebar_tile_layout", {
         order: nextOrder,
         layout: compactedLayout,
         widgets: null,
+        horizontalWidths: nextWidths ?? null,
       })
-        .then(setAppConfig)
+        .then(config => appConfigWriter.receive(config))
         .catch(console.error);
     };
     const startSidebarTileMove = (
@@ -1807,7 +1874,6 @@ function App() {
       const boardRect = metrics.board.getBoundingClientRect();
       const grabOffsetX = event.clientX - (boardRect.left + startRect.x * metrics.width);
       const grabOffsetY = event.clientY - (boardRect.top + startRect.y);
-      let latestPreview = startRect;
       let latestGuide: SidebarInsertionGuide | null = null;
       setSidebarTileDragPreview({ key, rect: startRect });
       setSidebarInsertionGuide(null);
@@ -1817,9 +1883,13 @@ function App() {
         const scrollContainer = sidebarScrollRef.current;
         if (scrollContainer) {
           const scrollRect = scrollContainer.getBoundingClientRect();
-          if (moveEvent.clientY < scrollRect.top + 44) {
+          if (horizontalSidebar && moveEvent.clientX < scrollRect.left + 44) {
+            scrollContainer.scrollLeft = Math.max(0, scrollContainer.scrollLeft - 18);
+          } else if (horizontalSidebar && moveEvent.clientX > scrollRect.right - 44) {
+            scrollContainer.scrollLeft += 18;
+          } else if (!horizontalSidebar && moveEvent.clientY < scrollRect.top + 44) {
             scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop - 18);
-          } else if (moveEvent.clientY > scrollRect.bottom - 44) {
+          } else if (!horizontalSidebar && moveEvent.clientY > scrollRect.bottom - 44) {
             scrollContainer.scrollTop += 18;
           }
         }
@@ -1827,17 +1897,15 @@ function App() {
         const nextX = (moveEvent.clientX - liveBoardRect.left - grabOffsetX) / metrics.width;
         const nextRect = {
           ...startRect,
-          x: Math.round(Math.min(1 - startRect.w, Math.max(0, nextX)) * 1000) / 1000,
-          y: Math.round(Math.max(0, moveEvent.clientY - liveBoardRect.top - grabOffsetY)),
+          x: horizontalSidebar ? Math.min(1 - startRect.w, Math.max(0, nextX)) : 0,
+          y: horizontalSidebar ? 0 : Math.round(Math.max(0, moveEvent.clientY - liveBoardRect.top - grabOffsetY)),
         };
-        if (!sidebarTileWithinBounds(nextRect)) return;
-        latestPreview = nextRect;
-        latestGuide = findSidebarInsertionGuide(
-          moveEvent.clientX - liveBoardRect.left,
-          moveEvent.clientY - liveBoardRect.top,
+        latestGuide = findDockedSidebarInsertion(
+          horizontalSidebar ? moveEvent.clientX - liveBoardRect.left : moveEvent.clientY - liveBoardRect.top,
           sidebarTileLayout,
           visibleSidebarKeys,
           key,
+          horizontalSidebar,
           metrics.width
         );
         setSidebarTileDragPreview({ key, rect: nextRect });
@@ -1858,26 +1926,16 @@ function App() {
       };
       const onPointerUp = () => {
         cleanup();
-        if (!latestGuide) {
-          setSidebarTileLayoutDraft(sidebarTileLayout);
-          return;
-        }
-        const inserted = insertSidebarTileAtGuide(
-          sidebarTileLayout,
-          visibleSidebarKeys,
-          key,
-          latestGuide,
-          latestPreview
-        );
-        saveSidebarTileLayout(inserted.layout, inserted.order);
+        if (!latestGuide) return;
+        const order = reorderDockedSidebar(visibleSidebarKeys, key, latestGuide);
+        const nextLayout = layoutDockedSidebar(sidebarTileLayout, order, false, sidebarViewport.width, sidebarViewport.height).layout;
+        saveSidebarTileLayout(nextLayout, order);
       };
       const onPointerCancel = () => {
         cleanup();
-        setSidebarTileLayoutDraft(sidebarTileLayout);
       };
       const onWindowBlur = () => {
         cleanup();
-        setSidebarTileLayoutDraft(sidebarTileLayout);
       };
 
       window.addEventListener("pointermove", onPointerMove);
@@ -1903,37 +1961,27 @@ function App() {
       const startY = event.clientY;
       const startRect = sidebarTileLayout[key];
       let latestLayout = sidebarTileLayout;
+      let latestWidths = horizontalWidths;
+      const startWidth = sidebarCardWidth(horizontalWidths[key]);
 
       const onPointerMove = (moveEvent: PointerEvent) => {
         if (moveEvent.pointerId !== pointerId) return;
         const deltaXPixels = moveEvent.clientX - startX;
         const deltaYPixels = moveEvent.clientY - startY;
+        if (horizontalSidebar) {
+          latestWidths = { ...horizontalWidths, [key]: sidebarCardWidth(startWidth + (direction === "w" ? -deltaXPixels : deltaXPixels)) };
+          setSidebarHorizontalWidthsDraft(latestWidths);
+          return;
+        }
         const nextRect = resizeSidebarTileRect(
           startRect,
           direction,
           deltaXPixels,
           deltaYPixels,
-          metrics.width
-        );
-        if (!sidebarTileWithinBounds(nextRect)) return;
-        const hasHorizontalEdge = direction.includes("e") || direction.includes("w");
-        const hasVerticalEdge = direction.includes("n") || direction.includes("s");
-        const preferredAxis: SidebarCollisionAxis =
-          hasHorizontalEdge && !hasVerticalEdge
-            ? "horizontal"
-            : hasVerticalEdge && !hasHorizontalEdge
-              ? "vertical"
-              : Math.abs(deltaXPixels) > Math.abs(deltaYPixels)
-                ? "horizontal"
-                : "vertical";
-        latestLayout = resolveSidebarTileCollisions(
-          key,
-          nextRect,
-          sidebarTileLayout,
-          visibleSidebarKeys,
           metrics.width,
-          preferredAxis
+          heightLimits[key],
         );
+        latestLayout = layoutDockedSidebar({ ...sidebarTileLayout, [key]: nextRect }, visibleSidebarKeys, false, metrics.width, sidebarViewport.height).layout;
         setSidebarTileLayoutDraft(latestLayout);
       };
 
@@ -1949,15 +1997,16 @@ function App() {
       };
       const onPointerUp = () => {
         cleanup();
-        saveSidebarTileLayout(latestLayout);
+        saveSidebarTileLayout(latestLayout, undefined, horizontalSidebar ? latestWidths : undefined);
       };
       const onPointerCancel = () => {
         cleanup();
-        setSidebarTileLayoutDraft(sidebarTileLayout);
+        if (horizontalSidebar) setSidebarHorizontalWidthsDraft(horizontalWidths);
+        else setSidebarTileLayoutDraft(sidebarTileLayout);
       };
       const onWindowBlur = () => {
         cleanup();
-        saveSidebarTileLayout(latestLayout);
+        saveSidebarTileLayout(latestLayout, undefined, horizontalSidebar ? latestWidths : undefined);
       };
 
       window.addEventListener("pointermove", onPointerMove);
@@ -1985,17 +2034,10 @@ function App() {
         };
       }
 
-      const guideRows = sidebarRowsFromLayout(
-        sidebarTileLayout,
-        visibleSidebarKeys.filter((key) => key !== activeSidebarTile)
-      );
-      const targetRow = guideRows.find((row) =>
-        row.keys.includes(sidebarInsertionGuide.targetKey)
-      );
       const edge =
         sidebarInsertionGuide.placement === "above"
-          ? targetRow?.top ?? targetRect.y
-          : targetRow?.bottom ?? targetRect.y + targetRect.h;
+          ? targetRect.y
+          : targetRect.y + targetRect.h;
       return {
         left: 0,
         top: edge - 2,
@@ -2007,32 +2049,36 @@ function App() {
     return (
       <div
         data-sidebar-theme={sidebarTheme.id}
-        className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarDockRounding[sidebarDockState.edge]} ${
+        data-sidebar-edge={sidebarDockState.edge}
+        data-glass-tone={isWindows || sidebarGlass ? (sidebarIsLight ? "light" : "dark") : undefined}
+        data-native-glass={sidebarGlass && nativeGlass ? "true" : undefined}
+        data-native-liquid={nativeGlass && sidebarTheme.material === "native-liquid-glass" ? "true" : undefined}
+        className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarGlass ? "glass-surface glass-sidebar" : ""} ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
         }`}
         style={{
+          ...(isWindows ? { "--surface-radii": ({ left: "0 8px 8px 0", top: "0 0 8px 8px", right: "8px 0 0 8px", bottom: "8px 8px 0 0" })[sidebarDockState.edge] } : {}),
           backgroundColor: hexToRgba(
             sidebarTheme.background,
-            sidebarTheme.background_opacity
+            sidebarGlass && !nativeGlass ? (isWindows ? 0.86 : 0.88) : sidebarTheme.background_opacity
           ),
           backdropFilter:
-            sidebarTheme.blur > 0
+            !sidebarGlass && sidebarTheme.blur > 0
               ? `blur(${sidebarTheme.blur}px) saturate(145%)`
               : undefined,
           WebkitBackdropFilter:
-            sidebarTheme.blur > 0
+            !sidebarGlass && sidebarTheme.blur > 0
               ? `blur(${sidebarTheme.blur}px) saturate(145%)`
               : undefined,
-          border: `1px solid ${sidebarWindowBorder}`,
-          // This is the same inset highlight treatment used by the Dashboard
-          // frame, rendered directly so it remains visible in this transparent
-          // webview without adding a drop shadow.
-          boxShadow: `inset 0 0 0 1px ${sidebarWindowBorder}`,
+          // Glass already supplies its own rim. Stacking the old border and
+          // inset outline on it creates a conspicuous white frame.
+          border: `1px solid ${sidebarGlass ? "transparent" : sidebarWindowBorder}`,
+          boxShadow: sidebarGlass ? undefined : `inset 0 0 0 1px ${sidebarWindowBorder}`,
           outline: sidebarDockState.dragging ? "2px solid rgba(56, 189, 248, 0.72)" : undefined,
           outlineOffset: sidebarDockState.dragging ? "-2px" : undefined,
-        }}
+        } as React.CSSProperties}
       >
-        {sidebarWindowResizeHandles.map((handle) => (
+        {!isMacOS && sidebarWindowResizeHandles.map((handle) => (
           <div
             key={handle.direction}
             role="separator"
@@ -2050,17 +2096,29 @@ function App() {
             }}
           />
         ))}
+        <span aria-hidden="true" className={`pointer-events-none absolute z-[75] rounded-full ${sidebarIsLight ? "bg-slate-400/65" : "bg-white/50"} ${
+          sidebarDockState.edge === "left" || sidebarDockState.edge === "right"
+            ? "bottom-1 left-1/2 h-[3px] w-8 -translate-x-1/2"
+            : "right-1 top-1/2 h-8 w-[3px] -translate-y-1/2"
+        }`} />
         <header
           aria-label="Drag sidebar"
-          className={`h-11 shrink-0 flex items-center justify-between gap-2 px-3 border-b ${sidebarIsLight ? "border-slate-300/60" : "border-white/10"} ${isMacOS ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
+          className={`relative h-11 shrink-0 flex items-center justify-between gap-2 px-3 border-b ${sidebarIsLight ? "border-slate-300/60" : "border-white/10"} cursor-grab active:cursor-grabbing`}
           style={{ backgroundColor: hexToRgba(sidebarTheme.header, sidebarTheme.header_opacity) }}
           onMouseDown={isMacOS ? undefined : startDrag}
         >
-          <span className="text-xs font-bold tracking-wide">Sidebar</span>
-          <div className="flex items-center gap-2" data-no-drag="true" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <button type="button" data-sidebar-undock="true" aria-label="Drag to change dock edge" title="Drag to change dock edge"
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md cursor-grab active:cursor-grabbing ${sidebarIsLight ? "text-slate-400 hover:bg-slate-200" : "text-white/60 hover:bg-white/15"}`}>
+              <GripVertical size={16} aria-hidden="true" />
+            </button>
+            <span className="truncate text-xs font-bold tracking-wide">Widgitron Sidebar</span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2" data-no-drag="true" onMouseDown={(event) => event.stopPropagation()}>
             <button
               type="button"
               aria-label={sidebarDockState.pinned ? "Unpin sidebar" : "Pin sidebar open"}
+              aria-pressed={sidebarDockState.pinned}
               title={sidebarDockState.pinned ? "Unpin sidebar and enable auto-hide" : "Pin sidebar open"}
               onClick={() => {
                 tauriInvoke("set_sidebar_pinned", { pinned: !sidebarDockState.pinned })
@@ -2069,7 +2127,7 @@ function App() {
               }}
               className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${sidebarIsLight ? "bg-slate-100 text-slate-700 hover:bg-slate-200" : "bg-white/10 text-white hover:bg-white/20"}`}
             >
-              {sidebarDockState.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+              {sidebarDockState.pinned ? <Pin size={14} /> : <PinOff size={14} />}
             </button>
             <button
               type="button"
@@ -2133,16 +2191,23 @@ function App() {
 
         <div
           ref={sidebarScrollRef}
-          className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-2 pt-2"
-          style={{ marginBottom: SIDEBAR_WINDOW_RESIZE_GUTTER }}
+          data-sidebar-scroll={horizontalSidebar ? "horizontal" : "vertical"}
+          data-native-bounce-fit={nativeBounceFit ? "true" : undefined}
+          className={`sidebar-widget-scroll flex-1 min-h-0 min-w-0 custom-scrollbar px-2 pt-2 ${horizontalSidebar ? "overflow-x-scroll overflow-y-hidden pb-2" : "overflow-y-scroll overflow-x-hidden"}`}
+          style={horizontalSidebar
+            ? { marginInline: SIDEBAR_WINDOW_RESIZE_GUTTER }
+            : { marginBottom: SIDEBAR_WINDOW_RESIZE_GUTTER }}
           data-no-drag="true"
         >
           {sidebarSections.length > 0 ? (
             <div
-              ref={sidebarBoardRef}
               className="relative min-w-0"
-              style={{ height: boardHeight }}
+              style={{ height: boardHeight + (horizontalSidebar ? 0 : nativeBounceTrack),
+                width: horizontalSidebar ? dockedLayout.width + nativeBounceTrack : "100%" }}
             >
+              <div ref={sidebarBoardRef} className="relative"
+                style={{ height: boardHeight, width: horizontalSidebar ? dockedLayout.width : "100%",
+                  scrollSnapAlign: nativeBounceFit ? "start" : undefined }}>
               {sidebarSections.map((section) => {
                 const rect =
                   sidebarTileDragPreview?.key === section.key
@@ -2161,15 +2226,19 @@ function App() {
                     style={{
                       left: `${rect.x * 100}%`,
                       top: rect.y,
-                      width: `calc(${rect.w * 100}% - ${SIDEBAR_TILE_GAP}px)`,
+                      width: horizontalSidebar ? `${rect.w * 100}%` : `calc(${rect.w * 100}% - ${SIDEBAR_TILE_GAP}px)`,
                       height: rect.h,
                     }}
                   >
                     <SidebarWidgetSection
+                      sectionKey={section.key}
+                      onContentHeight={reportSidebarContentHeight}
                       title={section.title}
                       accentColor={section.accentColor}
                       theme={sidebarTheme}
                       isLight={sidebarIsLight}
+                      showHeader={!hideSidebarWidgetHeaders}
+                      horizontal={horizontalSidebar}
                       onClose={() => saveSidebarWidgetVisibility(section.key, false)}
                       onMoveStart={(event) => startSidebarTileMove(event, section.key)}
                       onResizeStart={(event, direction) =>
@@ -2189,10 +2258,11 @@ function App() {
                   <span className="absolute left-1/2 top-1/2 w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-400 ring-2 ring-white/90" />
                 </div>
               ) : null}
+              </div>
             </div>
           ) : (
             <div
-              className={`h-full min-h-[320px] rounded-lg border border-dashed flex flex-col items-center justify-center text-center px-6 ${
+              className={`h-full ${horizontalSidebar ? "" : "min-h-[320px]"} rounded-lg border border-dashed flex flex-col items-center justify-center text-center px-6 ${
                 sidebarIsLight
                   ? "border-slate-300 bg-white/70 text-slate-500"
                   : "border-white/10 bg-white/5 text-slate-400"
@@ -2226,64 +2296,31 @@ function App() {
     const isDeadline = windowLabel.includes("deadlines");
     const isQuota = windowLabel.includes("quota");
 
-    return (
-      <div className="absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0">
-        {/* Reserve room for the visible macOS window controls in the card below. */}
-        <div className={`absolute top-1 right-1 flex items-center gap-1 transition-opacity duration-300 z-50 ${isMacOS ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-          <button
-            data-no-drag="true"
-            onClick={toggleLock}
-            title={isLocked ? "Unlock to move" : "Lock position"}
-            className="w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 text-white/70 hover:text-white transition-all shadow-lg backdrop-blur-md"
-          >
-            {isLocked ? <Lock size={12} /> : <Unlock size={12} />}
-          </button>
-          <button
-            data-no-drag="true"
-            onClick={() => togglePin()}
-            className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
-              isPinned ? "text-blue-400" : "text-white/70"
-            } hover:text-white transition-all shadow-lg backdrop-blur-md`}
-            title={isPinned ? (isMacOS ? "Keep in normal window order" : "Unpin (Embed in Desktop)") : "Keep above other windows"}
-          >
-            {isPinned ? <Pin size={12} /> : <PinOff size={12} />}
-          </button>
-          {isMacOS && <button
-            data-no-drag="true"
-            onClick={() => toggleDesktopFixed()}
-            className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
-              isDesktopFixed ? "text-blue-400" : "text-white/70"
-            } hover:text-white transition-all shadow-lg backdrop-blur-md`}
-            title={isDesktopFixed ? "Return to floating window" : "Fix on Desktop"}
-          >
-            <Monitor size={12} />
-          </button>}
-          <button
-            data-no-drag="true"
-            onClick={handleClose}
-            title="Hide widget"
-            className="w-7 h-7 flex items-center justify-center rounded-md bg-red-500/30 border border-red-500/20 text-red-400 hover:bg-red-50 hover:text-white transition-all shadow-lg backdrop-blur-md"
-          >
-            <X size={12} />
-          </button>
-        </div>
+    const controls = <FloatingWindowControls locked={isLocked} pinned={isPinned}
+      light={Boolean(currentTheme && isLightColor(currentTheme.bg_color))}
+      onToggleLock={toggleLock} onTogglePin={() => togglePin()} onHide={handleClose} />;
 
-        {/* The glass card fills the window; macOS controls use reserved insets. */}
+    return (
+      <div className={`floating-window absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0 ${isGlassMaterial(currentTheme?.material) ? "glass-surface" : ""}`}
+        role={isGlassMaterial(currentTheme?.material) ? "group" : undefined} aria-label={currentTheme?.material === "native-liquid-glass" ? "Liquid Glass" : isGlassMaterial(currentTheme?.material) ? "Glass" : undefined}
+        data-native-glass={nativeGlass ? "true" : undefined}
+        data-native-liquid={nativeGlass && currentTheme?.material === "native-liquid-glass" ? "true" : undefined}
+        data-floating-surface={currentTheme && (currentTheme.bg_opacity >= 0.5 || isGlassMaterial(currentTheme.material)) && isLightColor(currentTheme.bg_color) ? "light" : undefined}>
+
         <div
-          className={`flex-1 p-5 ${isMacOS ? "pt-12 pb-10" : ""} flex flex-col gap-4 relative overflow-hidden rounded-xl z-10 ${
-            isLocked ? "" : "shadow-2xl shadow-black/80"
-          }`}
+          className="min-h-0 flex-1 p-3 flex flex-col relative overflow-hidden rounded-xl z-10"
           style={
             windowLabel.startsWith("widget-") && currentTheme
               ? {
-                  backgroundColor: hexToRgba(currentTheme.bg_color, currentTheme.bg_opacity),
+                  backgroundColor: hexToRgba(currentTheme.bg_color,
+                    isGlassMaterial(currentTheme.material) && !nativeGlass ? (isWindows ? 0.86 : 0.84) : currentTheme.bg_opacity),
                   color: currentTheme.text_colors?.find((c) => c.name === "Main Text")
                     ? hexToRgba(
                         currentTheme.text_colors.find((c) => c.name === "Main Text")!.value,
                         currentTheme.text_colors.find((c) => c.name === "Main Text")!.opacity ?? 1.0
                       )
                     : "#ffffff",
-                  border: `1px solid ${hexToRgba(
+                  border: nativeGlass ? "1px solid transparent" : `1px solid ${hexToRgba(
                     currentTheme.text_colors?.find((c) => c.name === "Main Text")?.value || "#ffffff",
                     0.1
                   )}`
@@ -2291,27 +2328,14 @@ function App() {
               : {}
           }
           onMouseDown={!isLocked ? startDrag : undefined}
-          data-tauri-drag-region={!isLocked ? "true" : "false"}
+          data-tauri-drag-region={!isLocked && !isWindows ? "true" : "false"}
         >
-          {isGpu && <GPUWidgetContent />}
-          {isDeadline && <DeadlineWidgetContent language={resolveLanguage(appConfig.language)} />}
-          {windowLabel.includes("arxiv") && <ArxivWidgetContent />}
-          {isQuota && <QuotaWidgetContent />}
+          {isGpu && <GPUWidgetContent headerControls={controls} />}
+          {isDeadline && <DeadlineWidgetContent language={resolveLanguage(appConfig.language)} headerControls={controls} />}
+          {windowLabel.includes("arxiv") && <ArxivWidgetContent headerControls={controls} />}
+          {isQuota && <QuotaWidgetContent headerControls={controls} />}
         </div>
-        {isMacOS && <button
-          type="button"
-          data-no-drag="true"
-          aria-label="Resize widget"
-          title="Resize widget"
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            appWindow.startResizeDragging("SouthEast").catch(console.error);
-          }}
-          className="absolute bottom-1 right-1 z-50 flex h-7 w-7 items-center justify-center rounded-md text-slate-400/70 hover:bg-white/10 hover:text-white cursor-se-resize"
-        >
-          <Maximize2 size={12} />
-        </button>}
+        {(isMacOS || isWindows) && <WidgetResizeHandle />}
       </div>
     );
   }
@@ -2380,9 +2404,15 @@ function App() {
     >
       {/* Sidebar */}
       <aside
-        className={`w-64 border-r border-white/5 flex flex-col bg-[var(--sidebar-bg)] z-20 select-none`}
-        onMouseDown={startDrag}
+        className={`relative w-64 border-r border-white/5 flex flex-col bg-[var(--sidebar-bg)] z-20 select-none`}
+        onMouseDown={(event) => {
+          // Let Tauri handle this strip's native drag/double-click sequence;
+          // starting another drag here consumes its second click on macOS.
+          if (isMacOS && (event.target as HTMLElement).closest("[data-tauri-drag-region]")) return;
+          void startDrag(event);
+        }}
       >
+        {isMacOS && <div className="absolute inset-x-0 top-0 z-50 h-8" data-tauri-drag-region="true" />}
         <div className={`${isMacOS ? "px-6 pt-11 pb-3" : "p-6"} flex items-center gap-2.5 cursor-default`}>
           <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/40 overflow-hidden pointer-events-none">
             <img src="/logo.png" alt="Widgitron" className="w-full h-full object-cover" />
@@ -2469,7 +2499,7 @@ function App() {
             {activeTab === "dashboard" && (
               <div
                 key="dashboard"
-                className="space-y-6"
+                className={`space-y-6 ${isWindows || isMacOS ? "desktop-overview" : ""}`}
               >
                 <ToggleErrorBanner
                   message={toggleWidgetError}
@@ -2477,7 +2507,8 @@ function App() {
                   theme={appConfig.theme}
                 />
                 <h2 className="text-2xl font-bold tracking-tight text-[var(--dashboard-text)]">Overview</h2>
-                <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
+                <div className={`grid gap-4 ${isWindows || isMacOS ? "overview-stats-grid" : ""}`}
+                  style={isWindows || isMacOS ? undefined : { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
                   {MODULE_NAVIGATION.map(({ section, label, Icon, accent }) => {
                     const stat = {
                       quota: { value: monitoredAgentCount, metric: "monitors", hint: quotaStatHint, hintTone: quotaStatHintTone },
@@ -2519,19 +2550,14 @@ function App() {
                       <Activity size={14} />
                       {sidebarDockState.expanded ? "Hide Sidebar" : "Open Sidebar"}
                     </button>
-                    {activeWidgets.length > 0 && <button
+                    {hasFloatingWidgets && <button
                       type="button"
-                      onClick={async () => {
-                        try {
-                          await tauriInvoke("hide_all_widgets");
-                          setActiveWidgets([]);
-                        } catch (error) {
-                          setToggleWidgetError(String(error));
-                        }
-                      }}
-                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-black uppercase tracking-widest transition-colors ${appConfig.theme === "light" ? "bg-white border-slate-200 text-slate-700 hover:bg-slate-50" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"}`}
+                      onClick={toggleWidgetsVisibility}
+                      disabled={widgetsVisibilityBusy || pendingToggles.size > 0}
+                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-black uppercase tracking-widest transition-colors disabled:cursor-wait disabled:opacity-50 ${appConfig.theme === "light" ? "bg-white border-slate-200 text-slate-700 hover:bg-slate-50" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"}`}
                     >
-                      <X size={14} /> Hide All Widgets
+                      {appConfig.widgets_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
+                      {appConfig.widgets_hidden ? "Show Widgets" : "Hide Widgets"}
                     </button>}
                     </div>
                   </div>
@@ -2555,15 +2581,13 @@ function App() {
                           enabled={appConfig[field] !== false}
                           sidebarVisible={appConfig.sidebar_widgets?.[section] !== false}
                           floatingVisible={activeWidgets.includes(id)}
-                          loading={pendingToggles.has(id)}
+                          loading={pendingToggles.has(id) || widgetsVisibilityBusy}
                           onToggleSidebar={() => {
                             saveSidebarWidgetVisibility(section, appConfig.sidebar_widgets?.[section] === false)
                               .catch((error) => setToggleWidgetError(String(error)));
                           }}
                           onToggleFloating={() => handleToggleWidget(id, title)}
                           onConfigure={() => openSettingsSection(section)}
-                          desktopFixed={isMacOS ? appConfig.embedded?.[id] ?? false : undefined}
-                          onToggleDesktop={isMacOS ? () => toggleDesktopFixed(id, title) : undefined}
                         />
                       );
                     })}
@@ -2585,8 +2609,8 @@ function App() {
                     GPU Monitor Status
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} className={sectionActionClass}>
-                      {inlineSettingsSection === LIVE_DATA_SECTION.GPU ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add server</>}
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.GPU} aria-label={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Manage servers"} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.GPU ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Servers</>}
                     </button>
                     {appConfig.gpu_enabled !== false && (
                       <button
@@ -2624,7 +2648,7 @@ function App() {
                 {renderInlineSettings(LIVE_DATA_SECTION.GPU)}
                 <div className="space-y-6">
                   {visibleGpuData.length === 0 ? (
-                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Add server"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} />
+                    <SectionEmptyState message="No GPU data yet. Add an SSH server to start monitoring." action={inlineSettingsSection === LIVE_DATA_SECTION.GPU ? "Hide settings" : "Servers"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.GPU)} />
                   ) : (
                     visibleGpuData.map((server, idx) => {
                       const hasCachedGpus =
@@ -2806,6 +2830,7 @@ function App() {
                 key="deadlines"
               >
                 <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
+                  navigationRequest={conferenceNavigation}
                   language={resolveLanguage(appConfig.language)} isLight={appConfig.theme === "light"} saveError={paperSaveError}
                   onPreference={setConferencePreference} onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
                   headerActions={<>
@@ -2926,6 +2951,9 @@ function App() {
                   </div>
                 )}
                 {pagedArxivView && pagedArxiv.loading && activeArxivPapers.length === 0 ? (
+                  pagedArxiv.preservingResults ? <p role="status" className="flex items-center gap-2 text-xs text-slate-500">
+                    <RefreshCw size={14} className="animate-spin" aria-hidden="true" />Updating papers…
+                  </p> :
                   <div role="status" className="flex items-center justify-center gap-2 py-16 text-xs text-slate-500">
                     <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
                     Loading papers…
@@ -3016,8 +3044,8 @@ function App() {
                     Agent & API Quotas
                   </h2>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} className={sectionActionClass}>
-                      {inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Plus size={14} /> Add quota monitor</>}
+                    <button type="button" onClick={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} aria-expanded={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA} aria-label={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Manage quota monitors"} className={sectionActionClass}>
+                      {inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? <><ChevronDown size={14} className="rotate-180" /> Hide settings</> : <><Settings size={14} /> Quotas</>}
                     </button>
                     {appConfig.quota_enabled !== false && (
                       <button
@@ -3065,7 +3093,7 @@ function App() {
 
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] items-start gap-6">
                   {visibleQuotaData.length === 0 ? (
-                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Add quota monitor"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} /></div>
+                    <div className="col-span-full"><SectionEmptyState message="No quota sources configured yet." action={inlineSettingsSection === LIVE_DATA_SECTION.QUOTA ? "Hide settings" : "Quotas"} onAction={() => openInlineSettings(LIVE_DATA_SECTION.QUOTA)} /></div>
                   ) : (
                     visibleQuotaData.map((q) => {
                       const hasValue = q.current_value !== null && q.current_value !== undefined;
