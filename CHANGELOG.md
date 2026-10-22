@@ -37,7 +37,7 @@
 - **导航与页面**：统一模块顺序、名称、图标、研究页面工具栏与筛选布局，精简中英文说明和总览统计。页面内设置聚焦常用操作，外观等选项保留在完整设置页；修复切页闪动、设置选中框滑入和英文控件重叠，撤销及成功提示自动消退。
 - **Windows**：修复侧边栏主题、模块开关不即时生效、窗口不可见及拖动提示不消失的问题；调整卡片尺寸不再覆盖缩放设置，切换焦点不再出现多余标题栏。托盘左键打开主界面，右键打开菜单。
 - **macOS 窗口**：恢复原生窗口按钮、圆角与阴影，补齐顶部拖动和双击最大化区域，修复未激活窗口需要点击两次的问题。浮窗边缘使用原生八向缩放与光标。菜单栏使用适应系统明暗的单色图标和原生菜单；点击 Dock 图标可恢复主窗口，不受浮窗或侧边栏是否可见影响。
-- **macOS 系统小组件**：新增额度、GPU、会议截止小组件，GPU 中号支持三台服务器，会议仅显示已关注项目。点击跳转到对应模块，支持冷启动跳转及临时签名构建的数据更新。
+- **macOS 系统小组件**：新增额度、GPU、会议截止小组件，GPU 中号支持三台服务器，会议仅显示已关注项目。适配系统液态玻璃外观及文字对比度。点击跳转到对应模块；会议按当前关注状态进入“已关注”或“全部”，支持冷启动跳转及临时签名构建的数据更新。
 - **设置与窗口状态**：避免连续修改设置、侧边栏钉选和布局相互覆盖；原子保存失败保留原配置。修复主题初始化漏更新、设置监听泄漏，以及系统关闭窗口后无法恢复或开关状态残留。
 
 #### 构建与测试
@@ -79,7 +79,7 @@
 - **Navigation and pages**: Align module order, names, icons, research toolbars, and filters. Simplify bilingual copy and overview metrics, keep inline settings focused on common actions, and centralize appearance options in Settings. Fix page flashes, sliding settings selections, and overlapping English controls; dismiss Undo and success notices automatically.
 - **Windows**: Fix delayed sidebar theme/module updates, invisible windows, and stuck drag notices. Preserve zoom when resizing sidebar cards and prevent extra native captions after focus changes. Left-clicking the tray icon opens the dashboard; right-clicking opens its menu.
 - **macOS windows**: Restore native window buttons, corners, and shadows; complete the top drag and double-click zoom areas and accept the first click in inactive windows. Use native resizing and cursors on all widget edges and corners. Use an appearance-aware monochrome menu bar icon and native menu. Clicking the Dock icon restores the dashboard even when widgets or the sidebar are visible.
-- **macOS system widgets**: Add quota, GPU, and conference widgets. The medium GPU widget supports three servers; conferences show followed entries only. Open the matching module on click, including cold launches, and support data updates in ad-hoc builds.
+- **macOS system widgets**: Add quota, GPU, and conference widgets. The medium GPU widget supports three servers; conferences show followed entries only. Adapt to system Liquid Glass appearances and text contrast. Open the matching module on click; conference widgets select Followed or All using current preferences, including cold launches. Support data updates in ad-hoc builds.
 - **Settings and window state**: Preserve concurrent settings, sidebar pins, and layout edits; retain the previous config if atomic saving fails. Fix missed initial theme updates, leaked settings listeners, and native close operations that left windows unrecoverable or switches out of sync.
 
 #### Builds and Testing

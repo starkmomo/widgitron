@@ -16,6 +16,11 @@ export interface ToggleWidgetResponse {
   visible: boolean;
 }
 
+export interface MainNavigationRequest {
+  destination: "quota" | "gpu" | "deadlines";
+  conference_view: "all" | "followed" | null;
+}
+
 export interface SshConfigHostEntry {
   alias: string;
   user: string | null;
@@ -155,7 +160,7 @@ export interface TauriCommandMap {
   remove_arxiv_discarded_paper: void;
   update_manual_quota: void;
   show_main: void;
-  take_pending_main_navigation: "quota" | "gpu" | "deadlines" | null;
+  take_pending_main_navigation: MainNavigationRequest | null;
   show_sidebar: void;
   hide_sidebar: void;
   toggle_sidebar_visibility: void;

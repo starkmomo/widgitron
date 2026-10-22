@@ -80,7 +80,7 @@ import { SidebarWidgetHeaderContext } from "./components/WidgetHeader";
 import { WidgetResizeHandle } from "./components/WidgetResizeHandle";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
-import { DeadlineConferenceBrowser } from "./components/DeadlineConferenceBrowser";
+import { DeadlineConferenceBrowser, type ConferenceNavigationRequest } from "./components/DeadlineConferenceBrowser";
 import { ResearchPageHeader, ResearchTabs } from "./components/ResearchPageHeader";
 import { ConferenceUndoNotice } from "./components/ConferenceUndoNotice";
 import { useDeadlineConferences } from "./hooks/useDeadlineConferences";
@@ -429,6 +429,7 @@ const renderProviderIcon = (provider: string, isManual = false, lightBackground 
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
+  const [conferenceNavigation, setConferenceNavigation] = useState<ConferenceNavigationRequest | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -443,10 +444,14 @@ function App() {
       queue = queue.then(async () => {
         if (!active) return;
         try {
-          const destination = await tauriInvoke("take_pending_main_navigation");
-          if (active && destination) {
+          const request = await tauriInvoke("take_pending_main_navigation");
+          if (active && request) {
             setInlineSettingsSection(null);
-            setActiveTab(destination);
+            if (request.destination === "deadlines" && request.conference_view) {
+              const view = request.conference_view;
+              setConferenceNavigation(previous => ({ view, id: (previous?.id ?? 0) + 1 }));
+            }
+            setActiveTab(request.destination);
           }
         } catch (error) {
           console.error("Widget navigation failed", error);
@@ -2856,6 +2861,7 @@ function App() {
                 key="deadlines"
               >
                 <DeadlineConferenceBrowser deadlines={deadlines} config={paperConfig} now={deadlineNow}
+                  navigationRequest={conferenceNavigation}
                   language={resolveLanguage(appConfig.language)} isLight={appConfig.theme === "light"} saveError={paperSaveError}
                   onPreference={setConferencePreference} onAdjustFilters={() => openInlineSettings(LIVE_DATA_SECTION.DEADLINES)}
                   headerActions={<>

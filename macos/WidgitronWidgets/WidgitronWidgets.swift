@@ -12,6 +12,17 @@ private let gpuAppURL = URL(string: "widgitron://open/gpu")
 private let deadlineAppURL = URL(string: "widgitron://open/deadlines")
 private let snapshotBaseURL = URL(string: "http://127.0.0.1:42837")!
 
+// WidgetKit supplies Liquid Glass when the user chooses a clear appearance.
+// Keep the background removable and use primary/accent groups so the system
+// can preserve contrast over wallpaper in both accented and vibrant modes.
+private struct WidgetColors {
+    let mode: WidgetRenderingMode
+    var accent: Color { mode == .fullColor ? .accentColor : .primary }
+    var secondary: Color { mode == .fullColor ? .secondary : .primary.opacity(0.85) }
+    var progress: Color { mode == .fullColor ? .mint : .primary }
+    var warning: Color { mode == .fullColor ? .orange : .primary }
+}
+
 private func cachedSnapshotURL(_ file: String) -> URL? {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
         .first?.appendingPathComponent("widget-snapshots", isDirectory: true)
@@ -132,6 +143,8 @@ private struct QuotaProvider: TimelineProvider {
 private struct QuotaView: View {
     let entry: QuotaEntry
     @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetRenderingMode) private var renderingMode
+    private var colors: WidgetColors { WidgetColors(mode: renderingMode) }
 
     private var isSmall: Bool { family == .systemSmall }
     private var chinese: Bool { entry.snapshot?.language != "en" }
@@ -143,7 +156,7 @@ private struct QuotaView: View {
         VStack(alignment: .leading, spacing: isSmall ? 8 : 10) {
             HStack {
                 Image(systemName: "gauge.with.dots.needle.33percent")
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(colors.accent).widgetAccentable()
                 Text(chinese ? "额度监控" : "Quota Monitor")
                     .font(isSmall ? .subheadline.weight(.semibold) : .headline)
                     .lineLimit(1)
@@ -154,7 +167,7 @@ private struct QuotaView: View {
                 Spacer(minLength: 0)
                 Text(chinese ? "打开 Widgitron 添加额度来源" : "Open Widgitron to add a quota source")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.secondary)
                 Spacer(minLength: 0)
             } else {
                 ForEach(visibleItems.indices, id: \.self) { index in
@@ -176,23 +189,23 @@ private struct QuotaView: View {
                     .lineLimit(1)
                 if !isSmall, entry.snapshot?.showPlanType == true,
                    let plan = item.planType, !plan.isEmpty {
-                    Text(plan.uppercased()).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Text(plan.uppercased()).font(.caption2).foregroundStyle(colors.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 if let amount = item.amount {
                     Text(amount)
                         .font((isSmall ? Font.caption : Font.subheadline).weight(.bold))
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(colors.accent).widgetAccentable()
                         .lineLimit(1)
                 }
             }
             if let progress = item.progress {
-                ProgressView(value: progress).tint(.mint)
+                ProgressView(value: progress).tint(colors.progress).widgetAccentable()
             } else if let error = item.errorMessage, !error.isEmpty {
-                Text(error).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(error).font(.caption2).foregroundStyle(colors.secondary).lineLimit(1)
             } else {
                 Text(chinese ? "等待更新" : "Waiting for update")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(colors.secondary)
             }
             if let label = item.usageLabel(chinese: chinese) {
                 HStack(spacing: 4) {
@@ -202,7 +215,7 @@ private struct QuotaView: View {
                     }
                 }
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.secondary)
                 .lineLimit(1)
             }
         }
@@ -220,6 +233,7 @@ private struct QuotaWidget: Widget {
         .description(galleryChinese ? "在通知中心查看额度使用情况" : "View quota usage in Notification Center")
         .supportedFamilies([.systemSmall, .systemMedium])
         .contentMarginsDisabled()
+        .containerBackgroundRemovable(true)
     }
 }
 
@@ -279,6 +293,8 @@ private struct GpuProvider: TimelineProvider {
 private struct GpuView: View {
     let entry: GpuEntry
     @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetRenderingMode) private var renderingMode
+    private var colors: WidgetColors { WidgetColors(mode: renderingMode) }
 
     private var chinese: Bool { entry.snapshot?.language != "en" }
     private var servers: [GpuServer] { entry.snapshot?.servers ?? [] }
@@ -306,7 +322,7 @@ private struct GpuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: family == .systemSmall ? 8 : 6) {
             HStack(spacing: 5) {
-                Image(systemName: "cpu").foregroundStyle(.tint)
+                Image(systemName: "cpu").foregroundStyle(colors.accent).widgetAccentable()
                 Text(chinese ? "GPU 监控" : "GPU Monitor")
                     .font(family == .systemSmall ? .subheadline.weight(.semibold) : .headline)
                     .lineLimit(1)
@@ -315,16 +331,16 @@ private struct GpuView: View {
             if servers.isEmpty {
                 Spacer(minLength: 0)
                 Text(chinese ? "打开 Widgitron 添加服务器" : "Open Widgitron to add a server")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(colors.secondary)
                 Spacer(minLength: 0)
             } else if family == .systemSmall {
                 Spacer(minLength: 0)
                 Text("\(online.reduce(0) { $0 + $1.gpuCount }) GPU")
-                    .font(.title2.weight(.bold))
+                    .font(.title2.weight(.bold)).foregroundStyle(colors.accent).widgetAccentable()
                 Text(chinese ? "\(online.count)/\(servers.count) 台服务器在线" : "\(online.count)/\(servers.count) servers online")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption2).foregroundStyle(colors.secondary).lineLimit(1)
                 if servers.count == 1, let label = resourceLabel(servers[0]) {
-                    Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Text(label).font(.caption2).foregroundStyle(colors.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
             } else {
@@ -336,17 +352,17 @@ private struct GpuView: View {
                             Text(server.isOnline
                                  ? (server.gpuCount > 0 ? "\(server.gpuCount) GPU" : (chinese ? "无 GPU" : "No GPU"))
                                  : (chinese ? "离线" : "Offline"))
-                                .font(.caption2).foregroundStyle(server.isOnline ? .primary : .secondary)
+                                .font(.caption2).foregroundStyle(server.isOnline ? Color.primary : colors.secondary)
                         }
                         if let usage = gpuUsageLabel(server), let resources = resourceLabel(server) {
                             HStack(spacing: 4) {
-                                Text(usage).foregroundStyle(.primary)
-                                Text("· \(resources)").foregroundStyle(.secondary)
+                                Text(usage).foregroundStyle(colors.accent).widgetAccentable()
+                                Text("· \(resources)").foregroundStyle(colors.secondary)
                                     .minimumScaleFactor(0.8)
                             }
                             .font(.caption2).lineLimit(1)
                         } else if let label = gpuUsageLabel(server) ?? resourceLabel(server) {
-                            Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            Text(label).font(.caption2).foregroundStyle(colors.secondary).lineLimit(1)
                         }
                     }
                 }
@@ -370,6 +386,7 @@ private struct GpuWidget: Widget {
         .description(galleryChinese ? "查看服务器与 GPU 状态" : "View server and GPU status")
         .supportedFamilies([.systemSmall, .systemMedium])
         .contentMarginsDisabled()
+        .containerBackgroundRemovable(true)
     }
 }
 
@@ -481,6 +498,8 @@ private struct DeadlineProvider: TimelineProvider {
 private struct DeadlineView: View {
     let entry: DeadlineEntry
     @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetRenderingMode) private var renderingMode
+    private var colors: WidgetColors { WidgetColors(mode: renderingMode) }
 
     private var chinese: Bool { entry.snapshot?.language != "en" }
     private var allItems: [DeadlineItem] {
@@ -495,15 +514,15 @@ private struct DeadlineView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 5) {
-                Image(systemName: "calendar.badge.clock").foregroundStyle(.tint)
-                Text(chinese ? "论文截止日期" : "Deadlines")
+                Image(systemName: "calendar.badge.clock").foregroundStyle(colors.accent).widgetAccentable()
+                Text(chinese ? "会议截止" : "Conference DDL")
                     .font(family == .systemSmall ? .subheadline.weight(.semibold) : .headline)
                     .lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 0)
                 if allItems.count > items.count {
                     Text("+\(allItems.count - items.count)")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.secondary)
                         .accessibilityLabel(chinese
                             ? "还有 \(allItems.count - items.count) 场会议"
                             : "\(allItems.count - items.count) more conferences")
@@ -514,7 +533,7 @@ private struct DeadlineView: View {
                 Text(entry.snapshot?.hasSelections == true
                      ? (chinese ? "已关注会议暂无即将截止日期" : "No upcoming followed deadlines")
                      : (chinese ? "打开 Widgitron 关注会议" : "Open Widgitron to follow conferences"))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(colors.secondary)
                 Spacer(minLength: 0)
             } else {
                 ForEach(items.indices, id: \.self) { index in
@@ -536,16 +555,16 @@ private struct DeadlineView: View {
                 Spacer(minLength: 0)
                 if let date = item.date {
                     Text(remaining(date))
-                        .font(.caption2.weight(.bold)).foregroundStyle(.tint).lineLimit(1)
+                        .font(.caption2.weight(.bold)).foregroundStyle(colors.accent).widgetAccentable().lineLimit(1)
                 }
             }
             if family == .systemSmall {
                 stageCaption(item)
                 if let date = item.date {
                     Text(DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .short))
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                        .font(.caption2).foregroundStyle(colors.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 } else {
-                    Text("TBD").font(.caption2).foregroundStyle(.secondary)
+                    Text("TBD").font(.caption2).foregroundStyle(colors.secondary)
                 }
             } else {
                 // Keep three medium rows within the widget's fixed height.
@@ -554,9 +573,9 @@ private struct DeadlineView: View {
                     Spacer(minLength: 0)
                     if let date = item.date {
                         Text(DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .short))
-                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                            .font(.caption2).foregroundStyle(colors.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     } else {
-                        Text("TBD").font(.caption2).foregroundStyle(.secondary)
+                        Text("TBD").font(.caption2).foregroundStyle(colors.secondary)
                     }
                 }
             }
@@ -566,7 +585,7 @@ private struct DeadlineView: View {
     private func stageCaption(_ item: DeadlineItem) -> some View {
         Text(stageLabel(item))
             .font(.system(size: 10, weight: item.deadlineStage == "arr_commitment" ? .semibold : .regular))
-            .foregroundStyle(item.deadlineStage == "arr_commitment" ? Color.orange : Color.secondary)
+            .foregroundStyle(item.deadlineStage == "arr_commitment" ? colors.warning : colors.secondary)
             .lineLimit(1).minimumScaleFactor(0.7)
             .accessibilityLabel(item.deadlineNote ?? stageLabel(item))
     }
@@ -605,10 +624,11 @@ private struct DeadlineWidget: Widget {
         StaticConfiguration(kind: deadlineWidgetKind, provider: DeadlineProvider()) { entry in
             DeadlineView(entry: entry)
         }
-        .configurationDisplayName(galleryChinese ? "Widgitron · 论文截止日期" : "Widgitron · Paper Deadlines")
+        .configurationDisplayName(galleryChinese ? "Widgitron · 会议截止" : "Widgitron · Conference DDL")
         .description(galleryChinese ? "显示已关注会议的最近截止节点" : "Show the next deadline for followed conferences")
         .supportedFamilies([.systemSmall, .systemMedium])
         .contentMarginsDisabled()
+        .containerBackgroundRemovable(true)
     }
 }
 
