@@ -29,7 +29,6 @@ const ZERO_QUAD: Gdi::RGBQUAD = Gdi::RGBQUAD {
 struct Buffer {
     dc: Gdi::HDC,
     bitmap: Gdi::HBITMAP,
-    previous_bitmap: Gdi::HGDIOBJ,
     pixels: NonNull<u32>,
     width: NonZeroI32,
     height: NonZeroI32,
@@ -40,14 +39,9 @@ unsafe impl Send for Buffer {}
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        unsafe {
-            // A selected bitmap cannot be deleted. Restore the stock bitmap
-            // before releasing ours on every resize and surface teardown.
-            Gdi::SelectObject(self.dc, self.previous_bitmap);
-            Gdi::DeleteObject(self.bitmap);
-        }
-
-        Allocator::get().deallocate(self.dc);
+        // Keep destruction on the DC's owning thread. Deleting the DC first
+        // removes its selection before the associated bitmap is deleted.
+        Allocator::get().deallocate(self.dc, Some(self.bitmap));
     }
 }
 
@@ -125,7 +119,7 @@ impl Buffer {
                     Gdi::DeleteObject(bitmap);
                 }
             }
-            Allocator::get().deallocate(dc);
+            Allocator::get().deallocate(dc, None);
             return Err(SoftBufferError::PlatformError(
                 Some("Could not allocate a window bitmap".into()),
                 Some(Box::new(error)),
@@ -138,7 +132,7 @@ impl Buffer {
             unsafe {
                 Gdi::DeleteObject(bitmap);
             }
-            Allocator::get().deallocate(dc);
+            Allocator::get().deallocate(dc, None);
             return Err(SoftBufferError::PlatformError(
                 Some("Could not select the window bitmap".into()),
                 Some(Box::new(error)),
@@ -148,7 +142,6 @@ impl Buffer {
         Ok(Self {
             dc,
             bitmap,
-            previous_bitmap,
             width,
             height,
             pixels,
@@ -434,8 +427,20 @@ impl Allocator {
     }
 
     /// Deallocate a device context.
-    fn deallocate(&self, dc: Gdi::HDC) {
-        self.send_command(Command::Deallocate(dc));
+    fn deallocate(&self, dc: Gdi::HDC, bitmap: Option<Gdi::HBITMAP>) {
+        // Finish this thread's drawing batch before transferring ownership to
+        // the allocator. GDI batching is per-thread, even for a shared DC.
+        unsafe {
+            Gdi::GdiFlush();
+        }
+        self.send_command(Command::Deallocate { dc, bitmap });
+    }
+
+    #[cfg(test)]
+    fn flush(&self) {
+        let (callback, waiter) = mpsc::sync_channel(1);
+        self.send_command(Command::Flush(callback));
+        waiter.recv().unwrap();
     }
 
     /// Release a device context.
@@ -465,7 +470,13 @@ enum Command {
     },
 
     /// Deallocate a device context.
-    Deallocate(Gdi::HDC),
+    Deallocate {
+        dc: Gdi::HDC,
+        bitmap: Option<Gdi::HBITMAP>,
+    },
+
+    #[cfg(test)]
+    Flush(mpsc::SyncSender<()>),
 
     /// Release a window-associated device context.
     Release {
@@ -503,11 +514,23 @@ impl Command {
                 callback.send(result).ok();
             }
 
-            Self::Deallocate(dc) => {
-                // Deallocate this DC.
+            Self::Deallocate { dc, bitmap } => {
+                // A selected bitmap must outlive its DC. Perform both deletes
+                // together rather than deleting the bitmap on the UI thread.
                 unsafe {
                     Gdi::DeleteDC(dc);
+                    if let Some(bitmap) = bitmap {
+                        Gdi::DeleteObject(bitmap);
+                    }
                 }
+            }
+
+            #[cfg(test)]
+            Self::Flush(callback) => {
+                unsafe {
+                    Gdi::GdiFlush();
+                }
+                let _ = callback.send(());
             }
 
             Self::Release { dc, owner } => {
@@ -553,6 +576,9 @@ mod tests {
             if let Some(previous) = previous {
                 let bitmap = previous.bitmap;
                 drop(previous);
+                // Buffer destruction is queued to the allocator thread. Wait
+                // for that work and its GDI batch before inspecting the handle.
+                Allocator::get().flush();
                 assert_eq!(
                     unsafe { Gdi::GetObjectType(bitmap) },
                     0,
@@ -563,6 +589,7 @@ mod tests {
         let last = buffer.unwrap();
         let bitmap = last.bitmap;
         drop(last);
+        Allocator::get().flush();
         assert_eq!(unsafe { Gdi::GetObjectType(bitmap) }, 0);
     }
 }

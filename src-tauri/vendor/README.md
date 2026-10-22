@@ -11,15 +11,16 @@ The Windows log from 2026-10-22 recorded a panic in
 during sidebar resizing. Both the allocator and its Tauri caller need to
 handle this failure without unwinding out of the native event loop.
 
-- `softbuffer/src/backends/win32.rs`: restore the previous selected bitmap
-  before deleting a buffer; return allocation/selection errors with cleanup;
+- `softbuffer/src/backends/win32.rs`: flush pending GDI work and destroy the
+  DC before its bitmap on the allocator thread; return allocation/selection errors with cleanup;
   retain the old buffer when a replacement cannot be allocated. Capture the
   device-context error on the allocator thread.
 - `tauri-runtime-wry/src/window/windows.rs`: log and skip a failed background
   redraw instead of unwrapping the error. A later redraw can retry.
 
 Windows regression tests cover injected device-context allocation failure
-and 2,000 buffer replacements, checking that each old bitmap is released:
+and 2,000 buffer replacements, waiting for queued cleanup and checking that
+each old bitmap is released:
 
 ```sh
 cargo test --manifest-path src-tauri/vendor/softbuffer-0.4.8/tests/windows/Cargo.toml --lib --locked backends::win32::tests
