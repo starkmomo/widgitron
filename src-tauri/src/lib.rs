@@ -66,6 +66,7 @@ mod sidebar_hotkey;
 mod sqlite_state;
 mod sidebar_startup;
 mod sidebar_placement;
+mod sidebar_geometry;
 mod ui_scale;
 mod utils;
 mod vscode_secrets;

@@ -140,6 +140,23 @@ html[data-widget-hovered="true"] .floating-window .widget-resize-handle {
   overflow-y: scroll;
 }
 
+/* Keep browser-native inertia and rubber-banding local to the sidebar. */
+.sidebar-widget-scroll {
+  overscroll-behavior: contain;
+}
+
+/* Only fitting macOS content gets a tiny native track, with one resting point.
+   Match the viewport padding so the snap target is scroll offset zero. */
+.sidebar-widget-scroll[data-native-bounce-fit="true"][data-sidebar-scroll="vertical"] {
+  scroll-snap-type: y mandatory;
+  scroll-padding-top: 0.5rem;
+}
+
+.sidebar-widget-scroll[data-native-bounce-fit="true"][data-sidebar-scroll="horizontal"] {
+  scroll-snap-type: x mandatory;
+  scroll-padding-left: 0.5rem;
+}
+
 /* White translucent cards need a darker outline on an opaque light surface.
    Transparent and dark themes retain their existing glass styling. */
 .floating-window[data-floating-surface="light"] :is(.widget-item-card, .widget-item-surface, .widget-paper-card) {
@@ -589,6 +606,30 @@ html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"],
 
 .arxiv-widget .arxiv-reading-action:hover:not(:disabled) {
   background-color: rgba(255, 255, 255, 0.09);
+}
+
+.arxiv-abstract-action[data-returned-focus="true"] {
+  outline: none;
+}
+
+.arxiv-edge-nav {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.arxiv-widget:hover .arxiv-edge-nav,
+html[data-widget-hovered="true"] .floating-window .arxiv-edge-nav {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.arxiv-widget:hover .arxiv-edge-nav:disabled,
+html[data-widget-hovered="true"] .floating-window .arxiv-edge-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 html[data-platform="windows"] .glass-surface:is([data-floating-surface="light"], [data-glass-tone="light"]) :is(.arxiv-paper-action, .arxiv-abstract-action):hover {

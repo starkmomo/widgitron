@@ -157,7 +157,6 @@ const LEGACY_SIDEBAR_GRID_COLUMNS = 4;
 const LEGACY_SIDEBAR_GRID_GAP = 8;
 const LEGACY_SIDEBAR_GRID_ROW_HEIGHT = 72;
 const SIDEBAR_WINDOW_RESIZE_GUTTER = 16;
-const SIDEBAR_SCROLL_BOTTOM_GAP = 12;
 
 const DEFAULT_SIDEBAR_TILE_LAYOUT: Record<SidebarSectionKey, SidebarTileRect> = {
   quota: { x: 0, y: 0, w: 1, h: 152 },
@@ -708,18 +707,12 @@ function App() {
   const [serviceToggleErrorDismissed, setServiceToggleErrorDismissed] = useState(false);
   const [sidebarTileLayoutDraft, setSidebarTileLayoutDraft] =
     useState<Record<SidebarSectionKey, SidebarTileRect> | null>(null);
-  const [sidebarContentHeights, setSidebarContentHeights] = useState<Partial<Record<SidebarSectionKey, { height: number; expanded: boolean; collapsedHeight: number; minimumHeight?: number; collapsedMinimumHeight?: number }>>>({});
-  const sidebarExpandedResizeOverrides = useRef(new Set<SidebarSectionKey>());
+  const [sidebarContentHeights, setSidebarContentHeights] = useState<Partial<Record<SidebarSectionKey, { height: number; minimumHeight?: number }>>>({});
   const [sidebarHorizontalWidthsDraft, setSidebarHorizontalWidthsDraft] = useState<Record<string, number> | null>(null);
   const [sidebarViewport, setSidebarViewport] = useState(() => ({ width: window.innerWidth - 16, height: window.innerHeight - 80 }));
-  const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, expanded: boolean, minimumHeight?: number) => {
-    if (!expanded) sidebarExpandedResizeOverrides.current.delete(key);
-    setSidebarContentHeights((previous) => previous[key]?.height === height && previous[key]?.expanded === expanded && previous[key]?.minimumHeight === minimumHeight
-      ? previous : { ...previous, [key]: {
-        height, expanded, minimumHeight,
-        collapsedHeight: expanded ? (previous[key]?.collapsedHeight ?? height) : height,
-        collapsedMinimumHeight: expanded ? (previous[key]?.collapsedMinimumHeight ?? minimumHeight) : minimumHeight,
-      } });
+  const reportSidebarContentHeight = useCallback((key: SidebarSectionKey, height: number, _expanded: boolean, minimumHeight?: number) => {
+    setSidebarContentHeights((previous) => previous[key]?.height === height && previous[key]?.minimumHeight === minimumHeight
+      ? previous : { ...previous, [key]: { height, minimumHeight } });
   }, []);
   useEffect(() => {
     if (windowLabel !== "sidebar" || appConfig.sidebar_enabled === false) return;
@@ -1778,33 +1771,13 @@ function App() {
     const heightLimits = Object.fromEntries(DEFAULT_SIDEBAR_ORDER.map((key) => [key,
       sidebarTileHeightLimits(key, sidebarViewport.height, sidebarContentHeights[key]?.height, sidebarContentHeights[key]?.minimumHeight),
     ])) as SidebarTileHeightLimitMap;
-    const deadlineHeight = sidebarContentHeights.deadlines;
-    const timelineGrowth = deadlineHeight?.expanded && !sidebarExpandedResizeOverrides.current.has("deadlines")
-      ? Math.max(0, deadlineHeight.height - deadlineHeight.collapsedHeight) : 0;
-    // Keep the saved baseline in its collapsed geometry. The expanded first
-    // card's new minimum is applied together with timeline growth below, once.
-    const baseHeightLimits = deadlineHeight?.expanded && !sidebarExpandedResizeOverrides.current.has("deadlines")
-      ? { ...heightLimits, deadlines: sidebarTileHeightLimits("deadlines", sidebarViewport.height,
-          deadlineHeight.collapsedHeight, deadlineHeight.collapsedMinimumHeight) }
-      : heightLimits;
     const sidebarSavedLayout = sidebarTileLayoutDraft ?? normalizeSidebarTileLayout(appConfig.sidebar_tile_layout, visibleSidebarKeys);
-    const sidebarBaseLayout = constrainSidebarTileHeights(
-      sidebarSavedLayout,
-      visibleSidebarKeys, baseHeightLimits,
-    );
     const verticalTileLayout = constrainSidebarTileHeights(
-      sidebarBaseLayout, visibleSidebarKeys, heightLimits,
-      { deadlines: timelineGrowth },
+      sidebarSavedLayout, visibleSidebarKeys, heightLimits,
     );
     const dockedLayout = layoutDockedSidebar(horizontalSidebar ? sidebarSavedLayout : verticalTileLayout,
       visibleSidebarKeys, horizontalSidebar, sidebarViewport.width, sidebarViewport.height, horizontalWidths);
     const sidebarTileLayout = dockedLayout.layout;
-    const effectiveTimelineGrowth = horizontalSidebar ? 0 : sidebarTileLayout.deadlines.h - sidebarBaseLayout.deadlines.h;
-    const withoutTimelineGrowth = (layout: Record<SidebarSectionKey, SidebarTileRect>) =>
-      effectiveTimelineGrowth > 0 && !sidebarExpandedResizeOverrides.current.has("deadlines") ? {
-        ...layout,
-        deadlines: { ...layout.deadlines, h: Math.max(baseHeightLimits.deadlines.min, layout.deadlines.h - effectiveTimelineGrowth) },
-      } : layout;
     sidebarOrderRef.current = sidebarOrder;
     const allSidebarSections: SidebarSectionDefinition[] = [
       {
@@ -1844,14 +1817,13 @@ function App() {
     const dragPreviewBottom = sidebarTileDragPreview
       ? sidebarTileDragPreview.rect.y + sidebarTileDragPreview.rect.h + 48
       : 0;
-    const boardRows = Math.max(
-      sidebarViewport.height,
-      dragPreviewBottom,
-      ...visibleSidebarKeys.map((key) => sidebarTileLayout[key].y + sidebarTileLayout[key].h)
-    );
-    // Keep the final tile visibly clear of the window frame. This space belongs
-    // to the scrollable content, so it remains present at the end of the list.
-    const boardHeight = horizontalSidebar ? dockedLayout.height : boardRows + SIDEBAR_SCROLL_BOTTOM_GAP;
+    const boardHeight = horizontalSidebar ? dockedLayout.height : Math.max(dockedLayout.height, dragPreviewBottom);
+    // WebKit requires overflow to rubber-band a nested scroll area. A one-pixel
+    // track plus one resting snap point enables its native gesture handling
+    // even when all cards fit, without leaving a persistent blank scroll range.
+    const nativeBounceFit = isMacOS && activeSidebarTile === null
+      && (horizontalSidebar ? dockedLayout.width <= sidebarViewport.width : boardHeight <= sidebarViewport.height);
+    const nativeBounceTrack = nativeBounceFit ? 1 : 0;
     const getSidebarGridMetrics = () => {
       const board = sidebarBoardRef.current;
       if (!board) return null;
@@ -1871,11 +1843,9 @@ function App() {
             ...sidebarOrderRef.current.filter((key) => !nextVisibleOrder.includes(key)),
           ]
         : sidebarOrderRef.current;
-      // Moving cards while a timeline is open must not save its temporary
-      // expansion as the user's collapsed reading height.
-      const savedLayout = horizontalSidebar ? sidebarSavedLayout : withoutTimelineGrowth(nextLayout);
+      const savedLayout = horizontalSidebar ? sidebarSavedLayout : nextLayout;
       const compactedLayout = horizontalSidebar ? savedLayout : constrainSidebarTileHeights(savedLayout, visibleSidebarKeys,
-        sidebarExpandedResizeOverrides.current.has("deadlines") ? heightLimits : baseHeightLimits);
+        heightLimits);
       sidebarOrderRef.current = nextOrder;
       setSidebarTileLayoutDraft(compactedLayout);
       tauriInvoke("save_sidebar_tile_layout", {
@@ -1985,12 +1955,6 @@ function App() {
       const resizeTarget = event.currentTarget;
       const pointerId = event.pointerId;
       resizeTarget.setPointerCapture(pointerId);
-      // An explicit resize while a timeline is open overrides automatic fit
-      // until it is collapsed. Start from the currently displayed height.
-      if (!horizontalSidebar && sidebarContentHeights[key]?.expanded) {
-        sidebarExpandedResizeOverrides.current.add(key);
-        setSidebarTileLayoutDraft(sidebarTileLayout);
-      }
       setActiveSidebarTile(key);
 
       const startX = event.clientX;
@@ -2018,7 +1982,7 @@ function App() {
           heightLimits[key],
         );
         latestLayout = layoutDockedSidebar({ ...sidebarTileLayout, [key]: nextRect }, visibleSidebarKeys, false, metrics.width, sidebarViewport.height).layout;
-        setSidebarTileLayoutDraft(withoutTimelineGrowth(latestLayout));
+        setSidebarTileLayoutDraft(latestLayout);
       };
 
       const cleanup = () => {
@@ -2038,7 +2002,7 @@ function App() {
       const onPointerCancel = () => {
         cleanup();
         if (horizontalSidebar) setSidebarHorizontalWidthsDraft(horizontalWidths);
-        else setSidebarTileLayoutDraft(withoutTimelineGrowth(sidebarTileLayout));
+        else setSidebarTileLayoutDraft(sidebarTileLayout);
       };
       const onWindowBlur = () => {
         cleanup();
@@ -2228,7 +2192,8 @@ function App() {
         <div
           ref={sidebarScrollRef}
           data-sidebar-scroll={horizontalSidebar ? "horizontal" : "vertical"}
-          className={`flex-1 min-h-0 min-w-0 custom-scrollbar px-2 pt-2 ${horizontalSidebar ? "overflow-x-auto overflow-y-hidden pb-2" : "overflow-y-auto overflow-x-hidden"}`}
+          data-native-bounce-fit={nativeBounceFit ? "true" : undefined}
+          className={`sidebar-widget-scroll flex-1 min-h-0 min-w-0 custom-scrollbar px-2 pt-2 ${horizontalSidebar ? "overflow-x-scroll overflow-y-hidden pb-2" : "overflow-y-scroll overflow-x-hidden"}`}
           style={horizontalSidebar
             ? { marginInline: SIDEBAR_WINDOW_RESIZE_GUTTER }
             : { marginBottom: SIDEBAR_WINDOW_RESIZE_GUTTER }}
@@ -2236,10 +2201,13 @@ function App() {
         >
           {sidebarSections.length > 0 ? (
             <div
-              ref={sidebarBoardRef}
               className="relative min-w-0"
-              style={{ height: boardHeight, width: horizontalSidebar ? dockedLayout.width : "100%" }}
+              style={{ height: boardHeight + (horizontalSidebar ? 0 : nativeBounceTrack),
+                width: horizontalSidebar ? dockedLayout.width + nativeBounceTrack : "100%" }}
             >
+              <div ref={sidebarBoardRef} className="relative"
+                style={{ height: boardHeight, width: horizontalSidebar ? dockedLayout.width : "100%",
+                  scrollSnapAlign: nativeBounceFit ? "start" : undefined }}>
               {sidebarSections.map((section) => {
                 const rect =
                   sidebarTileDragPreview?.key === section.key
@@ -2258,7 +2226,7 @@ function App() {
                     style={{
                       left: `${rect.x * 100}%`,
                       top: rect.y,
-                      width: `calc(${rect.w * 100}% - ${SIDEBAR_TILE_GAP}px)`,
+                      width: horizontalSidebar ? `${rect.w * 100}%` : `calc(${rect.w * 100}% - ${SIDEBAR_TILE_GAP}px)`,
                       height: rect.h,
                     }}
                   >
@@ -2290,6 +2258,7 @@ function App() {
                   <span className="absolute left-1/2 top-1/2 w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-400 ring-2 ring-white/90" />
                 </div>
               ) : null}
+              </div>
             </div>
           ) : (
             <div

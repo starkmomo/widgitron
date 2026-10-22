@@ -22,6 +22,7 @@ export interface AppConfig {
   sidebar_width?: number;
   sidebar_length?: number;
   sidebar_offset?: number;
+  sidebar_axis_geometry?: Record<string, { thickness: number; length?: number | null; offset: number }>;
   sidebar_widgets?: Record<string, boolean>;
   sidebar_layout?: Record<string, number>;
   sidebar_order?: string[];

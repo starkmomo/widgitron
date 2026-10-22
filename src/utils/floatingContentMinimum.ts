@@ -1,4 +1,6 @@
-/** Minimum for one complete card, independent of scroll position/window height. */
+import { collapsedWidgetContentHeight } from "./widgetContentHeight.ts";
+
+/** Minimum for one complete collapsed card, independent of scrolling/expanded timelines. */
 export function observeFloatingContentMinimum(shell: HTMLElement, onHeight: (height: number) => void) {
   let active = true;
   let natural: HTMLElement | null = null;
@@ -24,7 +26,7 @@ export function observeFloatingContentMinimum(shell: HTMLElement, onHeight: (hei
     // Subtract the natural content's top so scrolling cannot change the limit.
     const height = Math.ceil(viewport.getBoundingClientRect().top - shellRect.top
       + px(viewportStyle.borderTopWidth) + px(viewportStyle.paddingTop)
-      + cardRect.top - natural.getBoundingClientRect().top + cardRect.height + bottomInset) + 1;
+      + cardRect.top - natural.getBoundingClientRect().top + collapsedWidgetContentHeight(card) + bottomInset) + 1;
     if (!Number.isFinite(height) || height <= 0 || height === previous) return;
     previous = height;
     onHeight(height);

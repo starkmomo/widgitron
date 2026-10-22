@@ -23,8 +23,12 @@ test("measures one complete card plus framing, not the viewport, other cards or 
     let windowWidth = 400;
     let naturalHeight = 600;
     let firstHeight = 80;
+    let timelineHeight = 0;
+    const timeline = { getBoundingClientRect: () => ({ height: timelineHeight + 20 }),
+      querySelector: () => ({ getBoundingClientRect: () => ({ height: 20 }) }) };
     let natural: { parentElement: unknown; querySelector: () => unknown; getBoundingClientRect: () => unknown } | null = null;
-    let card = { getBoundingClientRect: () => ({ top: viewportTop - scroll, height: firstHeight }) };
+    let card = { getBoundingClientRect: () => ({ top: viewportTop - scroll, height: firstHeight }),
+      querySelectorAll: () => timelineHeight ? [timeline] : [] };
     const viewport = { parentElement: null as unknown, getBoundingClientRect: () => ({ top: viewportTop, height: windowHeight - 50 }) };
     const shell = { querySelector: () => natural, getBoundingClientRect: () => ({ top: 100, width: windowWidth, height: windowHeight }) } as unknown as HTMLElement;
     const body = { parentElement: shell };
@@ -50,7 +54,12 @@ test("measures one complete card plus framing, not the viewport, other cards or 
     assert.deepEqual(values, [152]); // User resizing, later cards and scrolling cannot inflate the minimum.
     firstHeight = 120;
     resize.callback();
-    assert.equal(values.at(-1), 192); // Codex gains another bar / first conference opens a timeline.
+    assert.equal(values.at(-1), 192); // A real additional quota bar needs space.
+    timelineHeight = 300;
+    firstHeight = 420;
+    mutation.callback();
+    assert.equal(values.at(-1), 192); // An open conference timeline scrolls without raising the native minimum.
+    timelineHeight = 0;
     firstHeight = 80;
     resize.callback();
     assert.equal(values.at(-1), 152);
@@ -67,7 +76,7 @@ test("measures one complete card plus framing, not the viewport, other cards or 
     assert.equal(values.at(-1), 292);
 
     const oldCard = card;
-    card = { getBoundingClientRect: () => ({ top: viewportTop - scroll + 8, height: 55 }) };
+    card = { getBoundingClientRect: () => ({ top: viewportTop - scroll + 8, height: 55 }), querySelectorAll: () => [] };
     mutation.callback();
     assert.ok(!resize.targets.includes(oldCard));
     assert.ok(resize.targets.includes(card));

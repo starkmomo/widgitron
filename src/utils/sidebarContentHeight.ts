@@ -1,4 +1,6 @@
-/** Track intrinsic content even when the widget initially waits for its theme. */
+import { collapsedWidgetContentHeight } from "./widgetContentHeight.ts";
+
+/** Track collapsed intrinsic content even when the widget initially waits for its theme. */
 export function observeSidebarContentHeight(section: HTMLElement, onHeight: (height: number, expanded: boolean, minimumHeight?: number) => void) {
   let active = true;
   let content: HTMLElement | null = null;
@@ -26,13 +28,13 @@ export function observeSidebarContentHeight(section: HTMLElement, onHeight: (hei
     const contentRect = content.getBoundingClientRect();
     const framing = viewport.getBoundingClientRect().top - sectionRect.top
       + px(viewportStyle.borderTopWidth) + px(viewportStyle.paddingTop) + bottomInset;
-    const height = Math.ceil(framing + contentRect.height);
+    const height = Math.ceil(framing + collapsedWidgetContentHeight(content));
     const firstRect = firstCard?.getBoundingClientRect();
     // Both the card and natural content move when the list scrolls. Their
     // relative position keeps the first-card minimum independent of scrolling,
     // later cards, and the user's current viewport height.
-    const minimumHeight = firstRect && firstRect.height > 0
-      ? Math.ceil(framing + firstRect.top - contentRect.top + firstRect.height
+    const minimumHeight = firstCard && firstRect && firstRect.height > 0
+      ? Math.ceil(framing + firstRect.top - contentRect.top + collapsedWidgetContentHeight(firstCard)
           + px(getComputedStyle(content).paddingBottom)) + 1
       : undefined;
     const expanded = Boolean(section.querySelector("details[open]"));

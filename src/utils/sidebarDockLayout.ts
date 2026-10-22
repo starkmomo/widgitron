@@ -3,10 +3,11 @@ import {
   type SidebarInsertionGuide,
   type SidebarSectionKey,
   type SidebarTileRect,
-} from "./sidebarTileLayout";
+} from "./sidebarTileLayout.ts";
 
 export const SIDEBAR_CARD_MIN_WIDTH = 240;
 export const SIDEBAR_CARD_DEFAULT_WIDTH = 340;
+const SIDEBAR_SCROLL_BOTTOM_GAP = 12;
 
 export function sidebarCardWidth(width?: number) {
   return Number.isFinite(width)
@@ -25,20 +26,24 @@ export function layoutDockedSidebar(
 ) {
   const layout = { ...source };
   const width = horizontal
-    ? Math.max(viewportWidth, keys.reduce((sum, key) => sum + sidebarCardWidth(widths[key]) + SIDEBAR_TILE_GAP, 0))
+    ? Math.max(viewportWidth, keys.reduce((sum, key) => sum + sidebarCardWidth(widths[key]), 0)
+      + Math.max(0, keys.length - 1) * SIDEBAR_TILE_GAP)
     : viewportWidth;
   let offset = 0;
   for (const key of keys) {
     if (horizontal) {
-      const span = sidebarCardWidth(widths[key]) + SIDEBAR_TILE_GAP;
-      layout[key] = { x: offset / width, y: 0, w: span / width, h: viewportHeight };
-      offset += span;
+      const cardWidth = sidebarCardWidth(widths[key]);
+      layout[key] = { x: offset / width, y: 0, w: cardWidth / width, h: viewportHeight };
+      offset += cardWidth + SIDEBAR_TILE_GAP;
     } else {
       layout[key] = { ...source[key], x: 0, y: offset, w: 1 };
       offset += source[key].h + SIDEBAR_TILE_GAP;
     }
   }
-  return { layout, width, height: horizontal ? viewportHeight : Math.max(viewportHeight, offset) };
+  // End spacing belongs to the actual cards, not to the viewport's minimum
+  // height. Otherwise even an almost empty sidebar has a real scroll offset.
+  const contentHeight = keys.length ? offset - SIDEBAR_TILE_GAP + SIDEBAR_SCROLL_BOTTOM_GAP : 0;
+  return { layout, width, height: horizontal ? viewportHeight : Math.max(viewportHeight, contentHeight) };
 }
 
 /** A docked board reorders along its long axis; it never creates extra rows/columns. */

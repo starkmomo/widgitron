@@ -1,7 +1,8 @@
 import { useState, useEffect, useId, useRef } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WidgetHeader } from "../components/WidgetHeader";
-import { Radar, Check, ChevronDown, CloudOff } from "lucide-react";
+import { Radar, Check, ChevronDown, ChevronLeft, ChevronRight, CloudOff } from "lucide-react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
 import type { ArxivConfig, ArxivPaper } from "../types/config";
 import { useWidgetTheme } from "../hooks/useWidgetTheme";
@@ -17,7 +18,8 @@ import { ALL_ARXIV_KEYWORDS, UNCATEGORIZED_ARXIV_KEYWORD, hasArxivKeywords, filt
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { arxivPaperLinks } from "../utils/arxivPaperLinks";
-import { useArxivLibrary } from "../hooks/useArxivLibrary";
+import { arxivPaperKey, useArxivLibrary } from "../hooks/useArxivLibrary";
+import { arxivPaperArrowDirection, moveArxivPaperCursor, resolveArxivPaperCursor, type ArxivPaperCursor } from "../utils/arxivPaperNavigation";
 import { ArxivReadingActions } from "../components/ArxivReadingActions";
 import { ArxivPaperActions } from "../components/ArxivPaperActions";
 import { ArxivAbstractPreview } from "../components/ArxivAbstractPreview";
@@ -39,7 +41,7 @@ const paperCardVariants: Variants = {
     y: custom === "up" ? -500 : 0,
     opacity: 0,
     rotate: custom === "left" ? -20 : custom === "right" ? 20 : 0,
-    transition: { duration: 0.4 },
+    transition: { duration: custom ? 0.4 : 0.16 },
   }),
 };
 
@@ -54,9 +56,10 @@ export function ArxivWidgetContent({
   const arxivConfigRef = useRef<ArxivConfig>({});
   const [arxivBackendError, setArxivBackendError] = useState<string | null>(null);
   const [arxivRefreshError, setArxivRefreshError] = useState<string | null>(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [paperCursor, setPaperCursor] = useState<ArxivPaperCursor>({ key: null, index: 0 });
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [keywordMenuOpen, setKeywordMenuOpen] = useState(false);
+  const widgetRef = useRef<HTMLDivElement>(null);
   const keywordControlRef = useRef<HTMLDivElement>(null);
   const keywordTriggerRef = useRef<HTMLButtonElement>(null);
   const keywordDismissRef = useRef<HTMLButtonElement>(null);
@@ -72,7 +75,44 @@ export function ArxivWidgetContent({
     ? [ALL_ARXIV_KEYWORDS]
     : hasOtherArxivMatches ? [...arxivKeywords, UNCATEGORIZED_ARXIV_KEYWORD] : arxivKeywords;
   const visiblePapers = !hasArxivKeywords(arxivConfig.keywords) ? [] : filterArxivPapersByKeywords(papers, selectedKeywords, arxivConfig.keywords);
+  const paperKeys = visiblePapers.map(arxivPaperKey);
+  const resolvedCursor = resolveArxivPaperCursor(paperKeys, paperCursor);
+  const currentIndex = resolvedCursor.index;
   const currentPaper = visiblePapers[currentIndex];
+  const browsePaper = (direction: -1 | 1) => {
+    if (!serviceEnabled || keywordMenuOpenRef.current || library.busy) return false;
+    const next = moveArxivPaperCursor(paperKeys, paperCursor, direction);
+    if (next.key === resolvedCursor.key) return false;
+    setExitDirection(undefined);
+    // The outgoing card may own keyboard focus. Keep it on the stable widget
+    // so repeated arrow presses also work inside the sidebar.
+    widgetRef.current?.focus({ preventScroll: true });
+    setPaperCursor(previous => moveArxivPaperCursor(paperKeys, previous, direction));
+    return true;
+  };
+  const browsePaperRef = useRef(browsePaper);
+  browsePaperRef.current = browsePaper;
+
+  useEffect(() => {
+    const floating = getCurrentWindow().label.startsWith("widget-arxiv-");
+    const onKeyDown = (event: KeyboardEvent) => {
+      const direction = arxivPaperArrowDirection(event);
+      if (direction === null || !document.hasFocus()) return;
+      if (!floating && !widgetRef.current?.contains(document.activeElement)) return;
+      if (document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
+      if (event.target instanceof Element && event.target.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="slider"], [role="spinbutton"], [role="combobox"], [role="listbox"], [role="menu"], [role="tablist"]'
+      )) return;
+      if (browsePaperRef.current(direction)) event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    setPaperCursor(previous => previous.key === resolvedCursor.key && previous.index === resolvedCursor.index
+      ? previous : resolvedCursor);
+  }, [resolvedCursor.key, resolvedCursor.index]);
 
   useEffect(() => {
     if (!keywordMenuOpen) return;
@@ -110,14 +150,7 @@ export function ArxivWidgetContent({
 
   useEffect(() => {
     setSelectedKeywords((prev) => prev.filter((keyword) => arxivKeywordOptions.includes(keyword)));
-    setCurrentIndex(0);
   }, [arxivConfig.keywords, hasOtherArxivMatches]);
-
-  useEffect(() => {
-    if (visiblePapers.length > 0 && currentIndex >= visiblePapers.length) {
-      setCurrentIndex(0);
-    }
-  }, [currentIndex, visiblePapers.length]);
   useEffect(() => {
     let active = true;
     const unlisteners: (() => void)[] = [];
@@ -152,7 +185,6 @@ export function ArxivWidgetContent({
           {
             onArxivUpdate: (payload) => {
               setPapers(payload);
-              setCurrentIndex(0);
             },
           }
         );
@@ -169,7 +201,6 @@ export function ArxivWidgetContent({
           setArxivConfig(event.payload);
           if (queryChanged) {
             setArxivRefreshError(null);
-            setCurrentIndex(0);
           }
         });
         if (!active) {
@@ -205,7 +236,7 @@ export function ArxivWidgetContent({
               clearRefreshError: () => setArxivRefreshError(null),
               clearBackendError: () => setArxivBackendError(null),
               onExtra: () => {
-                setCurrentIndex(0);
+                setPaperCursor({ key: null, index: 0 });
                 setKeywordMenuOpen(false);
               },
             },
@@ -282,12 +313,18 @@ export function ArxivWidgetContent({
     onClick={() => void tauriInvoke("show_main")}><CloudOff size={13} aria-hidden="true" /></button> : undefined;
 
   return (
-    <div data-widget-kind="arxiv" className="arxiv-widget h-full min-h-0 flex flex-col select-none"
+    <div ref={widgetRef} tabIndex={-1} data-widget-kind="arxiv" className="arxiv-widget h-full min-h-0 flex flex-col select-none outline-none"
+      onPointerDownCapture={event => {
+        if (event.target instanceof Element && !event.target.closest('button, a, input, textarea, select, [contenteditable]')) {
+          widgetRef.current?.focus({ preventScroll: true });
+        }
+      }}
       style={{ color: mainText, "--widget-secondary-color": subText } as CSSProperties}>
       {!hideHeader && <WidgetHeader icon={<Radar size={16} style={{ color: accent }} />} title="Arxiv Radar" color={subText} status={refreshStatus} controls={headerControls} />}
 
       {serviceEnabled && arxivKeywordOptions.length > 0 && (
-        <div ref={keywordControlRef} className="relative z-[60] mb-3 shrink-0" data-no-drag="true"
+        <div className="relative z-[60] mb-3 flex shrink-0 items-center gap-2">
+        <div ref={keywordControlRef} className="relative min-w-0 flex-1" data-no-drag="true"
           onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()}>
           <button
             ref={keywordTriggerRef}
@@ -335,7 +372,7 @@ export function ArxivWidgetContent({
                 type="button"
                 onClick={() => {
                   setSelectedKeywords([]);
-                  setCurrentIndex(0);
+                  setPaperCursor({ key: null, index: 0 });
                   setKeywordMenuOpen(false);
                 }}
                 className={`arxiv-keyword-control w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
@@ -366,7 +403,7 @@ export function ArxivWidgetContent({
                           ? prev.filter((selected) => selected !== keyword)
                           : [...prev, keyword]
                       );
-                      setCurrentIndex(0);
+                      setPaperCursor({ key: null, index: 0 });
                     }}
                     className={`arxiv-keyword-control w-full flex items-center gap-2 px-2.5 py-2 text-left text-[8px] font-black uppercase tracking-widest transition-colors ${
                       isLightAppearance ? "hover:bg-slate-900/5" : "hover:bg-white/10"
@@ -386,6 +423,26 @@ export function ArxivWidgetContent({
               })}
             </div>
           )}
+        </div>
+        {currentPaper && <nav aria-label="Paper navigation" data-no-drag="true"
+          className="flex shrink-0 items-center gap-0.5 text-[11px]"
+          style={{ color: subText }} onPointerDownCapture={event => event.stopPropagation()}>
+          <button type="button" aria-label="Previous paper" title="Previous paper"
+            disabled={currentIndex === 0 || library.busy || keywordMenuOpen}
+            onClick={() => browsePaper(-1)}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-blue-500/10 disabled:opacity-30 disabled:cursor-default">
+            <ChevronLeft size={15} aria-hidden="true" />
+          </button>
+          <span className="min-w-[5ch] whitespace-nowrap text-center font-medium tabular-nums" aria-live="polite">
+            <span className="sr-only">Paper</span> {currentIndex + 1} / {visiblePapers.length}
+          </span>
+          <button type="button" aria-label="Next paper" title="Next paper"
+            disabled={currentIndex === visiblePapers.length - 1 || library.busy || keywordMenuOpen}
+            onClick={() => browsePaper(1)}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-blue-500/10 disabled:opacity-30 disabled:cursor-default">
+            <ChevronRight size={15} aria-hidden="true" />
+          </button>
+        </nav>}
         </div>
       )}
       {library.error && <p role="alert" className="mb-2 text-[10px] text-red-500" title={library.error}>Could not update paper. Please try again.</p>}
@@ -460,6 +517,23 @@ export function ArxivWidgetContent({
             </div>
           )}
         </AnimatePresence>
+        )}
+        {serviceEnabled && currentPaper && visiblePapers.length > 1 && !keywordMenuOpen && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-between">
+            {([-1, 1] as const).map(direction => (
+              <button key={direction} type="button" data-no-drag="true"
+                aria-label={direction < 0 ? "Previous paper" : "Next paper"}
+                title={direction < 0 ? "Previous paper" : "Next paper"}
+                disabled={library.busy || (direction < 0 ? currentIndex === 0 : currentIndex === visiblePapers.length - 1)}
+                onPointerDownCapture={event => event.stopPropagation()}
+                onClick={() => browsePaper(direction)}
+                className={`arxiv-edge-nav relative inline-flex size-6 shrink-0 items-center justify-center rounded-full border shadow-sm ${direction < 0 ? "-left-3" : "-right-3"}`}
+                style={{ color: mainText, backgroundColor: keywordMenuBackground, borderColor: keywordMenuBorder,
+                  backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}>
+                {direction < 0 ? <ChevronLeft size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+              </button>
+            ))}
+          </div>
         )}
         {keywordMenuOpen && <button
           ref={keywordDismissRef}

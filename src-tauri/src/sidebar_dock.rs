@@ -17,6 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::config_store;
 use crate::models::AppConfig;
+use crate::models::SidebarAxisGeometry;
+use crate::sidebar_geometry::SidebarGeometryMemory;
 
 const SIDEBAR_LABEL: &str = "sidebar";
 // A generous initial cross-axis size. The edge-axis length remains dynamic so
@@ -226,6 +228,7 @@ struct DockRuntime {
     thickness_logical: f64,
     edge_length_logical: Option<f64>,
     edge_offset: f64,
+    geometry: SidebarGeometryMemory,
     ui_scale: f64,
     reveal_dwell: Duration,
     reveal_cooldown: Duration,
@@ -257,6 +260,21 @@ struct DockRuntime {
 }
 
 impl DockRuntime {
+    fn remember_current_geometry(&mut self) {
+        self.geometry.remember(self.edge.as_str(), SidebarAxisGeometry {
+            thickness: self.thickness_logical, length: self.edge_length_logical, offset: self.edge_offset,
+        });
+    }
+
+    fn change_edge(&mut self, edge: DockEdge) {
+        self.remember_current_geometry();
+        let next = self.geometry.for_edge(edge.as_str());
+        self.edge = edge;
+        self.thickness_logical = next.thickness;
+        self.edge_length_logical = next.length;
+        self.edge_offset = next.offset;
+    }
+
     fn payload(&self) -> SidebarDockState {
         SidebarDockState {
             edge: self.edge.as_str().to_string(),
@@ -344,6 +362,8 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         clamp_sensitivity(config.sidebar_hide_sensitivity, DEFAULT_HIDE_SENSITIVITY);
     let (reveal_dwell, reveal_cooldown) = reveal_timings(reveal_sensitivity);
     let hide_leave = hide_leave_delay(hide_sensitivity);
+    let geometry = SidebarGeometryMemory::from_config(config);
+    let active_geometry = geometry.for_edge(DockEdge::parse(config.sidebar_edge.as_deref()).as_str());
     let runtime = Arc::new(Mutex::new(DockRuntime {
         enabled: config.sidebar_enabled.unwrap_or(true),
         edge: DockEdge::parse(config.sidebar_edge.as_deref()),
@@ -351,9 +371,10 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         requested_expanded: config.sidebar_enabled.unwrap_or(true) && pinned,
         visual_expanded: false,
         native_visible: false,
-        thickness_logical: config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL),
-        edge_length_logical: config.sidebar_length,
-        edge_offset: crate::sidebar_placement::sanitize_offset(config.sidebar_offset),
+        thickness_logical: active_geometry.thickness,
+        edge_length_logical: active_geometry.length,
+        edge_offset: active_geometry.offset,
+        geometry,
         ui_scale,
         reveal_dwell,
         reveal_cooldown,
@@ -444,9 +465,12 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         state.raise_requested = true;
         state.grace_until = Instant::now() + SHOW_GRACE;
     }
-    let next_thickness = config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL);
-    let next_edge_length = config.sidebar_length;
-    let next_offset = crate::sidebar_placement::sanitize_offset(config.sidebar_offset);
+    let geometry = SidebarGeometryMemory::from_config(config);
+    let active_geometry = geometry.for_edge(next_edge.as_str());
+    state.geometry = geometry;
+    let next_thickness = active_geometry.thickness;
+    let next_edge_length = active_geometry.length;
+    let next_offset = active_geometry.offset;
     let now = Instant::now();
 
     if state.edge != next_edge {
@@ -739,8 +763,9 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                         let mut preview_offset = None;
                         let preview_rect = match preview_edge {
                             Some(edge) => {
-                                let centered = sidebar_rect_at(next_area, edge, state.thickness_logical,
-                                    state.edge_length_logical, state.ui_scale, 0.5);
+                                let geometry = state.geometry.for_edge(edge.as_str());
+                                let centered = sidebar_rect_at(next_area, edge, geometry.thickness,
+                                    geometry.length, state.ui_scale, 0.5);
                                 let grab = state.drag_offset.unwrap_or(POINT { x: centered.width / 2, y: 22 });
                                 let grab = crate::sidebar_placement::preview_grab(centered.width as f64, centered.height as f64,
                                     (grab.x as f64, grab.y as f64), state.drag_grip_inset, next_area.scale_factor);
@@ -750,8 +775,8 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                                     if edge.is_vertical() { centered.height } else { centered.width } as f64,
                                     if edge.is_vertical() { point.y as f64 - grab.1 } else { point.x as f64 - grab.0 });
                                 preview_offset = Some(offset);
-                                sidebar_rect_at(next_area, edge, state.thickness_logical,
-                                    state.edge_length_logical, state.ui_scale, offset)
+                                sidebar_rect_at(next_area, edge, geometry.thickness,
+                                    geometry.length, state.ui_scale, offset)
                             },
                             None => floating_drag_preview_rect(
                                 next_area,
@@ -779,7 +804,7 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                 if let (Some(edge), Some(next_area)) =
                     (state.drag_preview_edge, state.drag_preview_area)
                 {
-                    state.edge = edge;
+                    state.change_edge(edge);
                     state.work_area = next_area;
                     if let Some(offset) = state.drag_preview_offset { state.edge_offset = offset; }
                 }
@@ -1014,14 +1039,13 @@ fn persist_runtime_config(app: &AppHandle) {
     let Some(runtime) = DOCK_RUNTIME.get() else {
         return;
     };
-    let (edge, pinned, thickness, edge_length, offset, monitor_x, monitor_y) = {
-        let state = lock_runtime(runtime);
+    let (edge, pinned, geometry, monitor_x, monitor_y) = {
+        let mut state = lock_runtime(runtime);
+        state.remember_current_geometry();
         (
             state.edge.as_str().to_string(),
             state.pinned,
-            state.thickness_logical,
-            state.edge_length_logical,
-            state.edge_offset,
+            state.geometry,
             state.work_area.left,
             state.work_area.top,
         )
@@ -1030,11 +1054,7 @@ fn persist_runtime_config(app: &AppHandle) {
     let config = match config_store::update_config::<AppConfig>(app, "app_config.json", |config| {
         config.sidebar_edge = Some(edge);
         config.sidebar_pinned = Some(pinned);
-        config.sidebar_width = Some(thickness.round());
-        config.sidebar_offset = Some(offset);
-        if let Some(edge_length) = edge_length {
-            config.sidebar_length = Some(edge_length.round());
-        }
+        geometry.write_config(config);
         config.sidebar_monitor_x = Some(monitor_x);
         config.sidebar_monitor_y = Some(monitor_y);
     }) {

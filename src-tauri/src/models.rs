@@ -129,6 +129,9 @@ pub struct AppConfig {
     pub sidebar_length: Option<f64>,
     /// Position within the unused edge span: 0 = start, 1 = end; unset = center.
     pub sidebar_offset: Option<f64>,
+    /// Independent window geometry for left/right and top/bottom docking.
+    #[serde(default)]
+    pub sidebar_axis_geometry: Option<HashMap<String, SidebarAxisGeometry>>,
     pub sidebar_widgets: Option<HashMap<String, bool>>,
     pub sidebar_layout: Option<HashMap<String, f64>>,
     pub sidebar_order: Option<Vec<String>>,
@@ -185,6 +188,18 @@ pub struct SidebarThemeDefinition {
     pub material: Option<WidgetMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_background: Option<CardBackground>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[serde(default)]
+pub struct SidebarAxisGeometry {
+    pub thickness: f64,
+    pub length: Option<f64>,
+    pub offset: f64,
+}
+
+impl Default for SidebarAxisGeometry {
+    fn default() -> Self { Self { thickness: 320.0, length: None, offset: 0.5 } }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -305,6 +320,7 @@ impl Default for AppConfig {
             sidebar_width: Some(320.0),
             sidebar_length: None,
             sidebar_offset: None,
+            sidebar_axis_geometry: None,
             sidebar_widgets: Some(sidebar_widgets),
             sidebar_layout: Some(sidebar_layout),
             sidebar_order: Some(vec![

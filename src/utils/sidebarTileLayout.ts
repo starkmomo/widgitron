@@ -65,11 +65,10 @@ export function constrainSidebarTileHeights(
   layout: Record<SidebarSectionKey, SidebarTileRect>,
   keys: SidebarSectionKey[],
   limits: SidebarTileHeightLimitMap,
-  contentGrowth: Partial<Record<SidebarSectionKey, number>> = {},
 ) {
   const bounded = { ...layout };
   for (const key of keys) {
-    const requested = layout[key].h + Math.max(0, contentGrowth[key] ?? 0);
+    const requested = layout[key].h;
     bounded[key] = { ...layout[key], h: Math.round(Math.min(limits[key].max, Math.max(limits[key].min, requested))) };
   }
   return compactSidebarTileLayout(bounded, keys);

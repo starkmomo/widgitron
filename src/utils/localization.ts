@@ -17,6 +17,7 @@ const ZH: Record<string, string> = {
   "Liquid Glass": "液态玻璃",
   "Native macOS glass with a subtle dark tint.": "macOS 原生玻璃，带轻微深色衬底。",
   "Keywords": "关键词", "Type a keyword, then Enter": "输入关键词，回车添加",
+  "Paper navigation": "论文浏览", "Previous paper": "上一篇", "Next paper": "下一篇", "Paper": "论文",
   "Add keyword": "添加关键词", "Remove keyword": "删除关键词",
   "Keyword filtering help": "关键词筛选说明",
   "Search SSH hosts": "搜索 SSH 主机", "SSH hosts": "SSH 主机列表", "No matching SSH hosts": "没有匹配的 SSH 主机",

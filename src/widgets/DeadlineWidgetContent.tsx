@@ -243,7 +243,7 @@ export function DeadlineWidgetContent({ hideHeader = false, language, headerCont
                   <DeadlineStageDetails deadline={dl} compact color={subText} isLight={dashboardTheme === "light"} />
                 </div>
               </div>
-              <details className="group/timeline relative z-10 mt-2 text-[11px]" data-no-drag="true">
+              <details className="group/timeline relative z-10 mt-2 text-[11px]" data-no-drag="true" data-widget-scroll-expansion="">
                 <summary className="flex list-none cursor-pointer items-center justify-between gap-2 [&::-webkit-details-marker]:hidden" style={{ color: subText }}>
                   <span className="inline-flex min-w-0 items-center gap-1">
                     <ChevronDown size={11} className="shrink-0 transition-transform group-open/timeline:rotate-180" aria-hidden="true" />

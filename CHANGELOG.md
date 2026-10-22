@@ -10,7 +10,7 @@
 - **关键词输入**：改为可添加、删除的标签，支持回车及中英文逗号、分号、换行分隔。收起页面筛选或离开设置栏目后自动保存并更新，提供加载、成功及失败反馈。
 - **刷新控制**：关键词增删复用按词缓存，仅查询缺失项并保留其他论文；显示选项和更新间隔不再触发即时请求。合并重复刷新，丢弃过期筛选结果，失败后退避重试。浮窗与侧边栏保留缓存，只以小图标提示失败。
 - **收藏与忽略**：卡片可直接收藏、忽略，各列表支持批量操作。已忽略内容通过小字入口打开管理弹窗，可恢复或收藏；忽略记录仅保留当前批次，收藏长期保存，兼容原有记录。
-- **阅读与下载**：完整标题下显示作者，摘要预览随可用高度调整，阅读面板补齐全部作者和提交日期。打开 arXiv 页面与下载 PDF 分为两个按钮，下载不覆盖同名文件；浮窗和侧边栏的收藏、忽略按钮使用轻底色，关键词下拉同步卡片背景设置。
+- **阅读与下载**：完整标题下显示作者，摘要预览随可用高度调整，阅读面板补齐全部作者和提交日期。浮窗和侧边栏支持前后翻篇、方向键和悬停箭头，无需收藏或忽略；刷新保留当前论文，关闭摘要不再留下蓝色焦点框。打开 arXiv 页面与下载 PDF 分为两个按钮，下载不覆盖同名文件；浮窗和侧边栏的收藏、忽略按钮使用轻底色，关键词下拉同步卡片背景设置。
 
 #### 会议截止
 
@@ -22,8 +22,8 @@
 
 - **外观设置**：四个浮窗的主题集中管理，提供跟随主界面、浅色、深色、透明和玻璃，以及多个自定义主题。支持新建、复制、删除确认和卡片背景自定义，使用紧凑等高预览；侧边栏主题独立选择，编辑面板可展开、收起。
 - **玻璃与阅读**：优化玻璃配色、文字对比度和圆角高光，减少重复底色与失焦变色。macOS 的玻璃主题升级为“液态玻璃”，背景与卡片默认使用 8% 黑色衬底，失焦保留效果；Windows 保持原有玻璃主题。修复主题切换时内容消失。关键词菜单和完整摘要匹配当前主题，虚化后方内容并保留圆角；菜单支持外部点击、Esc 收起，展开时阻断卡片手势。收紧摘要行距，保留滚动阅读。
-- **尺寸与排版**：侧边栏模块标题与操作合入彩色顶栏。额度、GPU、会议的浮窗和侧边栏最小高度按首张卡片实测，侧边栏最大高度随完整内容变化，仅从底边调整高度；会议时间线展开时自动增高。arXiv 保留更大阅读区域，调整浮窗大小时显示尺寸。
-- **侧边栏停靠**：左右停靠调高度，上下停靠调宽度；标题沿边移动，左侧手柄切换停靠边缘，记忆尺寸与位置并限制在屏幕内。扩大缩放热区，拖动预览保持跟手，调整后不再立即收起；修复 macOS 调整卡片时主窗口抢前景及屏幕上沿无法呼出的问题，Windows 同步停靠与位置记忆逻辑，呼出热区使用屏幕边缘，展开后仍避开任务栏。
+- **尺寸与排版**：侧边栏模块标题与操作合入彩色顶栏。额度、GPU、会议的浮窗和侧边栏最小高度按首张卡片实测，侧边栏最大高度随完整内容变化，仅从底边调整高度；会议时间线展开后保持外部高度，在内部滚动查看。修复侧边栏内容未溢出时多余的滚动距离。arXiv 保留更大阅读区域，调整浮窗大小时显示尺寸。
+- **侧边栏停靠**：左右停靠调高度，上下停靠调宽度；横竖方向分别记忆尺寸与位置，首次切换默认铺满对应边缘，并限制在屏幕内。标题沿边移动，左侧手柄切换停靠边缘。扩大缩放热区，拖动预览保持跟手，调整后不再立即收起；使用浏览器原生惯性滚动与边界回弹，避免连续滚动时反复抖动。修复 macOS 原生边缘缩放未保存、调整卡片时主窗口抢前景及屏幕上沿无法呼出的问题，Windows 同步停靠与位置记忆逻辑，呼出热区使用屏幕边缘，展开后仍避开任务栏。
 - **显示与操作**：两平台默认解锁并置于桌面层，统一悬停显示锁定、置顶、隐藏按钮。隐藏/显示浮窗保留模块选择，全关后重置隐藏状态。macOS 浮窗与侧边栏支持普通桌面切换，修复闪现及点击、拖动问题。侧边栏可彻底停用，钉选与设置同步；修复会议时间线展开时宽度跳动。
 
 #### 额度与 GPU 监控
@@ -52,7 +52,7 @@
 - **Keyword input**: Use removable tags with Enter and English/Chinese comma, semicolon, or newline separators. Save and refresh when filters close or the Settings section is left, with loading, success, and error feedback.
 - **Refresh control**: Reuse per-keyword caches when editing filters, fetching only missing terms and preserving other papers. Display options and polling intervals no longer trigger immediate requests. Share duplicate refreshes, discard obsolete filter results, and back off after failures. Keep cached papers in widgets and the sidebar with a small failure indicator.
 - **Saving and ignoring**: Add card actions and bulk management across lists. Open ignored papers in a separate dialog to restore or save them. Keep ignore records within the current batch, retain saved papers, and preserve existing selections.
-- **Reading and downloads**: Show full titles with authors underneath, adapt abstract previews to available space, and include all authors and the submission date in the reading panel. Separate arXiv page and PDF download actions and avoid overwriting files. Use lighter save/ignore buttons in widgets and the sidebar, with keyword dropdowns following card background settings.
+- **Reading and downloads**: Show full titles with authors underneath, adapt abstract previews to available space, and include all authors and the submission date in the reading panel. Browse papers in widgets and the sidebar with previous/next buttons, arrow keys, or hover arrows without saving or ignoring; preserve the current paper on refresh and remove the leftover focus outline after closing an abstract. Separate arXiv page and PDF download actions and avoid overwriting files. Use lighter save/ignore buttons in widgets and the sidebar, with keyword dropdowns following card background settings.
 
 #### Conference Deadlines
 
@@ -64,8 +64,8 @@
 
 - **Appearance settings**: Manage all four widgets together with Follow main, Light, Dark, Transparent, Glass, and multiple custom themes. Support creation, copying, deletion confirmation, card backgrounds, and compact equal-height previews. Keep sidebar themes independent, with a collapsible editor.
 - **Glass and reading**: Refine glass colors, contrast, and edge highlights; reduce stacked fills and focus-related changes. Replace macOS Glass with native Liquid Glass, using 8% black backgrounds and card fills and preserving the inactive effect. Keep Windows Glass unchanged and fix disappearing content when switching themes. Match keyword menus and full abstracts to the selected theme, blur underlying content, and preserve corners. Dismiss menus with outside clicks or Escape and block card gestures while open. Use tighter, scrollable abstract text.
-- **Sizing and layout**: Move sidebar titles and actions into colored module headers. Measure the first quota, GPU, or conference card to set widget and sidebar minimum heights. Cap sidebar heights at their full content, resize them from the bottom, and grow conference cards when timelines open. Reserve more reading space for arXiv and show floating dimensions while resizing.
-- **Sidebar docking**: Resize height when docked left/right and width when docked top/bottom. Drag the title along its edge or the left grip to change edges; remember size and position within screen bounds. Enlarge resize targets, keep drag previews under the pointer, and prevent immediate hiding after adjustments. Fix macOS dashboard activation during card resizing and top-edge reveal; apply docking and position persistence to Windows as well. Windows reveal targets the screen perimeter while the open sidebar avoids the taskbar.
+- **Sizing and layout**: Move sidebar titles and actions into colored module headers. Measure the first quota, GPU, or conference card to set widget and sidebar minimum heights. Cap sidebar heights at their full content and resize them from the bottom. Keep the outer height unchanged when conference timelines open and scroll their contents internally. Remove excess sidebar scroll space when the cards fit. Reserve more reading space for arXiv and show floating dimensions while resizing.
+- **Sidebar docking**: Resize height when docked left/right and width when docked top/bottom. Remember vertical and horizontal geometry separately, initially filling each edge and keeping windows within screen bounds. Drag the title along its edge or the left grip to change edges. Enlarge resize targets, keep drag previews under the pointer, and prevent immediate hiding after adjustments. Use browser-native inertia and edge rebound to avoid repeated animation triggers during a scroll gesture. Fix unsaved macOS native border resizing, dashboard activation during card resizing, and top-edge reveal; apply docking and position persistence to Windows as well. Windows reveal targets the screen perimeter while the open sidebar avoids the taskbar.
 - **Visibility and controls**: Default both platforms to unlocked desktop widgets with consistent hover controls. Hide/show preserves selected modules; switching every widget off resets temporary hiding. Support ordinary macOS Spaces for widgets and the sidebar, and fix flashes, clicks, and dragging. Allow the sidebar to be disabled, synchronize its pin setting, and prevent conference timeline width shifts.
 
 #### Quota and GPU Monitoring

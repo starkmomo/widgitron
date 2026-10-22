@@ -157,14 +157,25 @@ fn app_config_edit_fields(config: &AppConfig, base: Option<&AppConfig>) -> serde
     // These fields belong to the native window commands, never a settings snapshot.
     fields.remove("active_widgets");
     fields.remove("widgets_hidden");
+    fields.remove("sidebar_axis_geometry");
     fields
 }
 
 fn apply_app_config_edit(config: &mut AppConfig, fields: &serde_json::Map<String, serde_json::Value>) {
+    // Migrate before changing edges, while legacy dimensions still belong to
+    // the original orientation. Stale Settings snapshots never replace memory.
+    let mut geometry = crate::sidebar_geometry::SidebarGeometryMemory::from_config(config);
     let mut snapshot = serde_json::to_value(&*config).expect("AppConfig is serializable");
     snapshot.as_object_mut().expect("AppConfig is an object").extend(fields.clone());
     // Every field comes from a typed AppConfig; replacement preserves its schema.
     *config = serde_json::from_value(snapshot).expect("AppConfig fields retain their types");
+    let edge = config.sidebar_edge.as_deref().unwrap_or("right");
+    let mut active = geometry.for_edge(edge);
+    if fields.contains_key("sidebar_width") { active.thickness = config.sidebar_width.unwrap_or(320.0); }
+    if fields.contains_key("sidebar_length") { active.length = config.sidebar_length; }
+    if fields.contains_key("sidebar_offset") { active.offset = crate::sidebar_placement::sanitize_offset(config.sidebar_offset); }
+    geometry.remember(edge, active);
+    geometry.write_config(config);
     crate::widget_visibility::reset_hidden_when_empty(config);
 }
 
@@ -1182,6 +1193,19 @@ mod widget_display_mode_tests {
         apply_app_config_edit(&mut current, &app_config_edit_fields(&requested, Some(&base)));
         assert_eq!(current.language, None);
         assert_eq!(current.sidebar_width, Some(480.0));
+    }
+
+    #[test]
+    fn settings_edge_changes_migrate_legacy_geometry_before_switching_axes() {
+        let mut current = AppConfig { sidebar_edge: Some("right".into()), sidebar_length: Some(650.0), ..AppConfig::default() };
+        let base = current.clone();
+        let requested = AppConfig { sidebar_edge: Some("bottom".into()), ..base.clone() };
+        apply_app_config_edit(&mut current, &app_config_edit_fields(&requested, Some(&base)));
+        assert_eq!(current.sidebar_length, None);
+        let base = current.clone();
+        let requested = AppConfig { sidebar_edge: Some("left".into()), ..base.clone() };
+        apply_app_config_edit(&mut current, &app_config_edit_fields(&requested, Some(&base)));
+        assert_eq!(current.sidebar_length, Some(650.0));
     }
 
     #[test]

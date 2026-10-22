@@ -4,7 +4,7 @@ type AppConfigPatch = Partial<AppConfig>;
 
 // Native window commands own these fields, even when a UI snapshot contains
 // older values from before a pin, show or hide operation.
-const WINDOW_OWNED_FIELDS = new Set<keyof AppConfig>(["active_widgets", "widgets_hidden"]);
+const WINDOW_OWNED_FIELDS = new Set<keyof AppConfig>(["active_widgets", "widgets_hidden", "sidebar_axis_geometry"]);
 
 export function appConfigPatch(base: AppConfig, edited: AppConfig): AppConfigPatch {
   const patch: AppConfigPatch = {};

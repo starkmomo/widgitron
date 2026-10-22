@@ -21,7 +21,7 @@ test("observes a list inserted after async theme loading, measures replacement, 
   try {
     let viewportHeight = 500;
     const viewport = { parentElement: null as unknown, getBoundingClientRect: () => ({ top: 150, height: viewportHeight }) };
-    let content: { parentElement: typeof viewport; querySelector: () => null; getBoundingClientRect: () => { height: number } } | null = null;
+    let content: { parentElement: typeof viewport; querySelector: () => null; querySelectorAll: () => never[]; getBoundingClientRect: () => { height: number } } | null = null;
     let expanded = false;
     const section = {
       querySelector: (selector: string) => selector === "details[open]" ? expanded ? {} : null : content,
@@ -41,7 +41,7 @@ test("observes a list inserted after async theme loading, measures replacement, 
     assert.deepEqual(mutation.targets, [section]);
 
     let intrinsicHeight = 80;
-    content = { parentElement: viewport, querySelector: () => null, getBoundingClientRect: () => ({ height: intrinsicHeight }) };
+    content = { parentElement: viewport, querySelector: () => null, querySelectorAll: () => [], getBoundingClientRect: () => ({ height: intrinsicHeight }) };
     mutation.callback();
     assert.deepEqual(heights, [148]);
     assert.ok(resize.targets.includes(content));
@@ -64,7 +64,7 @@ test("observes a list inserted after async theme loading, measures replacement, 
     assert.equal(heights.at(-1), 248);
 
     const oldContent = content;
-    content = { parentElement: viewport, querySelector: () => null, getBoundingClientRect: () => ({ height: 60 }) };
+    content = { parentElement: viewport, querySelector: () => null, querySelectorAll: () => [], getBoundingClientRect: () => ({ height: 60 }) };
     mutation.callback();
     assert.equal(resize.targets.includes(oldContent), false);
     assert.ok(resize.targets.includes(content));
@@ -97,13 +97,23 @@ test("minimum follows the complete first card and framing, while maximum include
     let totalHeight = 80;
     let firstHeight = 80;
     let expanded = false;
+    let firstTimelineHeight = 0;
+    let laterTimelineHeight = 0;
+    const timeline = (height: () => number) => ({
+      getBoundingClientRect: () => ({ height: height() + 20 }),
+      querySelector: () => ({ getBoundingClientRect: () => ({ height: 20 }) }),
+    });
+    const firstTimeline = timeline(() => firstTimelineHeight);
+    const laterTimeline = timeline(() => laterTimelineHeight);
     let firstTopMargin = 0;
     let contentBottomPadding = 0;
-    let card = { getBoundingClientRect: () => ({ top: viewportTop - scroll + firstTopMargin, height: firstHeight }) };
+    let card = { getBoundingClientRect: () => ({ top: viewportTop - scroll + firstTopMargin, height: firstHeight }),
+      querySelectorAll: () => firstTimelineHeight ? [firstTimeline] : [] };
     const viewport = { parentElement: null as unknown, getBoundingClientRect: () => ({ top: viewportTop, height: viewportHeight }) };
     const content = {
       parentElement: viewport,
       querySelector: () => card,
+      querySelectorAll: () => [...(firstTimelineHeight ? [firstTimeline] : []), ...(laterTimelineHeight ? [laterTimeline] : [])],
       getBoundingClientRect: () => ({ top: viewportTop - scroll, height: totalHeight }),
     };
     const section = {
@@ -140,22 +150,26 @@ test("minimum follows the complete first card and framing, while maximum include
     assert.deepEqual(values.at(-1), { height: 668, expanded: false, minimumHeight: 189 });
     expanded = true; // Expanding a later conference does not enlarge the first card.
     totalHeight = 900;
+    laterTimelineHeight = 300;
     mutation.callback();
-    assert.deepEqual(values.at(-1), { height: 968, expanded: true, minimumHeight: 189 });
+    assert.deepEqual(values.at(-1), { height: 668, expanded: true, minimumHeight: 189 });
 
-    firstHeight = 320; // Expanding the first conference does need a taller minimum.
+    firstHeight = 320; // The first conference's timeline must not raise either size limit.
+    firstTimelineHeight = 200;
     totalHeight = 1100;
     resize.callback();
-    assert.equal(values.at(-1)?.minimumHeight, 389);
+    assert.deepEqual(values.at(-1), { height: 668, expanded: true, minimumHeight: 189 });
     viewportTop += 8; // Showing the colored title strip adds its actual height.
     contentBottomPadding = 4;
     mutation.callback();
-    assert.equal(values.at(-1)?.minimumHeight, 401);
+    assert.equal(values.at(-1)?.minimumHeight, 201);
 
     const oldCard = card;
     firstHeight = 80;
+    firstTimelineHeight = 0;
+    totalHeight = 900;
     firstTopMargin = 6;
-    card = { getBoundingClientRect: () => ({ top: viewportTop - scroll + firstTopMargin, height: firstHeight }) };
+    card = { getBoundingClientRect: () => ({ top: viewportTop - scroll + firstTopMargin, height: firstHeight }), querySelectorAll: () => [] };
     mutation.callback();
     assert.ok(!resize.targets.includes(oldCard));
     assert.ok(resize.targets.includes(card));

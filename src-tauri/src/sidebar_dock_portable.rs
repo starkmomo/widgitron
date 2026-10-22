@@ -12,6 +12,8 @@ use tauri::{
 
 use crate::config_store;
 use crate::models::AppConfig;
+use crate::models::SidebarAxisGeometry;
+use crate::sidebar_geometry::SidebarGeometryMemory;
 
 const SIDEBAR_LABEL: &str = "sidebar";
 const DEFAULT_THICKNESS_LOGICAL: f64 = 320.0;
@@ -37,6 +39,7 @@ struct DockRuntime {
     thickness: f64,
     length: Option<f64>,
     offset: f64,
+    geometry: SidebarGeometryMemory,
     monitor_anchor: Option<(i32, i32)>,
     #[cfg(target_os = "macos")]
     interacting: bool,
@@ -75,6 +78,22 @@ struct MacMoveGesture {
 }
 
 impl DockRuntime {
+    fn remember_current_geometry(&mut self) {
+        self.geometry.remember(&self.state.edge, SidebarAxisGeometry {
+            thickness: self.thickness, length: self.length, offset: self.offset,
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    fn change_edge(&mut self, edge: &str) {
+        self.remember_current_geometry();
+        let next = self.geometry.for_edge(edge);
+        self.state.edge = edge.into();
+        self.thickness = next.thickness;
+        self.length = next.length;
+        self.offset = next.offset;
+    }
+
     #[cfg(target_os = "macos")]
     fn remember_native_size(&mut self, width: u32, height: u32, scale: f64) {
         if !scale.is_finite() || scale <= 0.0 || width == 0 || height == 0 { return; }
@@ -84,6 +103,8 @@ impl DockRuntime {
     }
 
     fn from_config(config: &AppConfig) -> Self {
+        let geometry = SidebarGeometryMemory::from_config(config);
+        let active = geometry.for_edge(parse_edge(config.sidebar_edge.as_deref()));
         Self {
             enabled: config.sidebar_enabled.unwrap_or(true),
             state: SidebarDockState {
@@ -93,9 +114,10 @@ impl DockRuntime {
                 dragging: false,
                 preview_edge: None,
             },
-            thickness: config.sidebar_width.unwrap_or(DEFAULT_THICKNESS_LOGICAL),
-            length: config.sidebar_length,
-            offset: crate::sidebar_placement::sanitize_offset(config.sidebar_offset),
+            thickness: active.thickness,
+            length: active.length,
+            offset: active.offset,
+            geometry,
             monitor_anchor: config.sidebar_monitor_x.zip(config.sidebar_monitor_y),
             #[cfg(target_os = "macos")]
             interacting: false,
@@ -536,7 +558,8 @@ pub fn update_native_move(window: &WebviewWindow) -> Result<(), String> {
     let edge = if parallel { Some(parse_edge(Some(&runtime.state.edge))) }
         else { (distance <= 120.0 * scale).then_some(nearest) };
     let target = if let Some(edge) = edge {
-        let centered = mac_docked_bounds(area, scale, edge, runtime.thickness, runtime.length, 0.5);
+        let geometry = runtime.geometry.for_edge(edge);
+        let centered = mac_docked_bounds(area, scale, edge, geometry.thickness, geometry.length, 0.5);
         let vertical = matches!(edge, "left" | "right");
         let grab = crate::sidebar_placement::preview_grab(centered.width(), centered.height(), gesture.grab,
             gesture.allow_undock.then_some(gesture.grip_inset), scale);
@@ -546,7 +569,7 @@ pub fn update_native_move(window: &WebviewWindow) -> Result<(), String> {
             if vertical { centered.height() } else { centered.width() },
             if vertical { pointer.y - grab.1 } else { pointer.x - grab.0 });
         gesture.preview = Some((edge, offset, (monitor.work_area().position.x, monitor.work_area().position.y)));
-        mac_docked_bounds(area, scale, edge, runtime.thickness, runtime.length, offset)
+        mac_docked_bounds(area, scale, edge, geometry.thickness, geometry.length, offset)
     } else {
         gesture.preview = None;
         let size = window.outer_size().map_err(|error| error.to_string())?;
@@ -595,7 +618,7 @@ pub fn finish_native_interaction(window: &WebviewWindow, moving: bool, changed: 
         runtime.hover.grace_until = Some(Instant::now() + MAC_SHOW_GRACE);
         if changed && moving {
             if let Some((edge, offset, anchor)) = runtime.move_gesture.and_then(|gesture| gesture.preview) {
-                runtime.state.edge = edge.into();
+                runtime.change_edge(edge);
                 runtime.offset = offset;
                 runtime.monitor_anchor = Some(anchor);
             }
@@ -616,16 +639,14 @@ pub fn finish_native_interaction(window: &WebviewWindow, moving: bool, changed: 
         }
         runtime.move_gesture = None;
         runtime.state.preview_edge = None;
-        let (edge, thickness, length, offset, anchor) = (runtime.state.edge.clone(), runtime.thickness,
-            runtime.length, runtime.offset, runtime.monitor_anchor);
+        runtime.remember_current_geometry();
+        let (edge, geometry, anchor) = (runtime.state.edge.clone(), runtime.geometry, runtime.monitor_anchor);
         drop(runtime);
         position_sidebar(app, window)?;
         if changed {
             let config = config_store::update_config::<AppConfig>(app, "app_config.json", |config| {
                 config.sidebar_edge = Some(edge);
-                config.sidebar_width = Some(thickness);
-                config.sidebar_length = length;
-                config.sidebar_offset = Some(offset);
+                geometry.write_config(config);
                 if let Some((x, y)) = anchor {
                     config.sidebar_monitor_x = Some(x);
                     config.sidebar_monitor_y = Some(y);
@@ -1131,6 +1152,26 @@ mod mac_hover_tests {
             assert_eq!(runtime.state.edge, edge);
             assert_eq!(runtime.offset, 0.72);
         }
+    }
+
+    #[test]
+    fn redocking_uses_the_target_axis_size_in_preview_and_after_release() {
+        let area = MacSidebarBounds { left: 0.0, top: 24.0, right: 1920.0, bottom: 1080.0 };
+        let config = AppConfig { sidebar_edge: Some("right".into()), sidebar_length: Some(650.0), ..AppConfig::default() };
+        let mut runtime = DockRuntime::from_config(&config);
+        let target = runtime.geometry.for_edge("bottom");
+        let preview = mac_docked_bounds(area, 1.0, "bottom", target.thickness, target.length, 0.5);
+        assert_eq!(preview.width(), area.width());
+        runtime.change_edge("bottom");
+        let released = mac_docked_bounds(area, 1.0, "bottom", runtime.thickness, runtime.length, 0.5);
+        assert_eq!(preview, released);
+        runtime.remember_native_size(1200, 380, 1.0);
+        runtime.change_edge("right");
+        assert_eq!(runtime.length, Some(650.0));
+        assert_eq!(runtime.thickness, 320.0);
+        runtime.change_edge("top");
+        assert_eq!(runtime.length, Some(1200.0));
+        assert_eq!(runtime.thickness, 380.0);
     }
 
     #[test]

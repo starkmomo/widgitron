@@ -145,7 +145,8 @@ test("a new edit during reconciliation remains optimistic and is saved in the ne
 
 test("UI snapshots cannot change native-owned visibility and unchanged fields do not write", async () => {
   const f = fixture();
-  await f.writer.save(initial, { ...initial, active_widgets: { "widget-quota-default": true }, widgets_hidden: true });
+  await f.writer.save(initial, { ...initial, active_widgets: { "widget-quota-default": true }, widgets_hidden: true,
+    sidebar_axis_geometry: { horizontal: { thickness: 400, length: 1400, offset: 0.5 } } });
   await f.writer.save(initial, { ...initial });
   assert.equal(f.starts.length, 0);
   assert.deepEqual(f.writer.current(), initial);

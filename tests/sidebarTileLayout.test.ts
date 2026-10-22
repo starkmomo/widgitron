@@ -87,7 +87,7 @@ test("old tiny or oversized cards are clamped and following cards close up witho
   assert.deepEqual(constrainSidebarTileHeights(next, keys, limits), next);
 });
 
-test("timeline growth is temporary and adds only the newly expanded content", () => {
+test("larger content limits do not grow a chosen viewport or move the next module", () => {
   const keys: SidebarSectionKey[] = ["deadlines", "arxiv"];
   const layout: Record<SidebarSectionKey, SidebarTileRect> = {
     quota: { x: 0, y: 0, w: 1, h: 2000 },
@@ -98,9 +98,9 @@ test("timeline growth is temporary and adds only the newly expanded content", ()
   const limits = Object.fromEntries(["quota", "gpu", "deadlines", "arxiv"].map(key => [key,
     sidebarTileHeightLimits(key as SidebarSectionKey, 800, key === "deadlines" ? 500 : 150),
   ])) as SidebarTileHeightLimitMap;
-  const opened = constrainSidebarTileHeights(layout, keys, limits, { deadlines: 350 });
-  assert.equal(opened.deadlines.h, 500);
-  assert.equal(opened.arxiv.y, 506);
+  const opened = constrainSidebarTileHeights(layout, keys, limits);
+  assert.equal(opened.deadlines.h, 176);
+  assert.equal(opened.arxiv.y, 182);
   assert.equal(opened.arxiv.h, 400);
   assert.equal(layout.deadlines.h, 176);
   const collapsed = constrainSidebarTileHeights(layout, keys, { ...limits, deadlines: sidebarTileHeightLimits("deadlines", 800, 150) });
@@ -113,12 +113,12 @@ test("timeline growth is temporary and adds only the newly expanded content", ()
   const few = constrainSidebarTileHeights(many, ["quota"], { ...limits, quota: sidebarTileHeightLimits("quota", 800, 150) });
   assert.equal(few.quota.h, 150);
 
-  const manyConferences = constrainSidebarTileHeights(layout, keys, { ...limits, deadlines: sidebarTileHeightLimits("deadlines", 800, 1200) }, { deadlines: 200 });
-  assert.equal(manyConferences.deadlines.h, 376); // do not open the entire collapsed conference list
-  assert.equal(manyConferences.arxiv.y, 382);
+  const manyConferences = constrainSidebarTileHeights(layout, keys, { ...limits, deadlines: sidebarTileHeightLimits("deadlines", 800, 1200) });
+  assert.equal(manyConferences.deadlines.h, 176);
+  assert.equal(manyConferences.arxiv.y, 182);
 });
 
-test("an expanded first conference increases min once and preserves the saved collapsed height", () => {
+test("conference timelines keep the saved height and manual resizing uses collapsed-card limits", () => {
   const keys: SidebarSectionKey[] = ["deadlines", "arxiv"];
   const saved: Record<SidebarSectionKey, SidebarTileRect> = {
     quota: { x: 0, y: 0, w: 1, h: 148 },
@@ -132,29 +132,19 @@ test("an expanded first conference increases min once and preserves the saved co
     deadlines: sidebarTileHeightLimits("deadlines", 800, 600, 201),
     arxiv: sidebarTileHeightLimits("arxiv", 800),
   };
-  const expandedLimits = {
-    ...collapsedLimits,
-    deadlines: sidebarTileHeightLimits("deadlines", 800, 800, 401),
-  };
-  // The baseline uses collapsed geometry even after the observer reports a
-  // larger first-card minimum; only the displayed layout applies expansion.
+  // The observer excludes timeline expansion from both measurements.
   const baseline = constrainSidebarTileHeights(saved, keys, collapsedLimits);
-  const opened = constrainSidebarTileHeights(baseline, keys, expandedLimits, { deadlines: 200 });
+  const opened = constrainSidebarTileHeights(baseline, keys, collapsedLimits);
   assert.equal(baseline.deadlines.h, 220);
-  assert.equal(opened.deadlines.h, 420); // Not expanded min 401 + growth 200.
-  assert.equal(opened.arxiv.y, 426);
-  assert.equal(expandedLimits.deadlines.max, 800); // Later cards remain scrollable.
-  const automaticGrowth = opened.deadlines.h - baseline.deadlines.h;
-  const persisted = constrainSidebarTileHeights({ ...opened,
-    deadlines: { ...opened.deadlines, h: opened.deadlines.h - automaticGrowth },
-  }, keys, collapsedLimits);
+  assert.equal(opened.deadlines.h, 220);
+  assert.equal(opened.arxiv.y, 226);
+  const persisted = constrainSidebarTileHeights(opened, keys, collapsedLimits);
   assert.equal(persisted.deadlines.h, 220);
   assert.equal(persisted.arxiv.y, 226);
   assert.equal(constrainSidebarTileHeights(persisted, keys, collapsedLimits).deadlines.h, 220);
 
-  // Explicit resizing overrides automatic fit, while retaining the full first card.
-  const manual = resizeSidebarTileRect(opened.deadlines, "s", 0, -1000, 400, expandedLimits.deadlines);
-  assert.equal(manual.h, 401);
-  const manuallySized = constrainSidebarTileHeights({ ...opened, deadlines: manual }, keys, expandedLimits);
-  assert.equal(manuallySized.deadlines.h, 401);
+  const manual = resizeSidebarTileRect(opened.deadlines, "s", 0, -1000, 400, collapsedLimits.deadlines);
+  assert.equal(manual.h, 201);
+  const manuallySized = constrainSidebarTileHeights({ ...opened, deadlines: manual }, keys, collapsedLimits);
+  assert.equal(manuallySized.deadlines.h, 201);
 });

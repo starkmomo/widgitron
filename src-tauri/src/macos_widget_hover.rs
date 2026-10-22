@@ -5,15 +5,16 @@ use std::cell::Cell;
 use tauri::Manager;
 
 use objc2::{
-    available, define_class, msg_send, rc::Retained, runtime::Bool, AnyThread, DeclaredClass,
+    available, define_class, msg_send, rc::Retained, runtime::Bool, sel, AnyThread, DeclaredClass,
     MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSCursor, NSCursorFrameResizeDirections,
     NSCursorFrameResizePosition, NSEvent, NSGlassEffectView, NSTrackingArea, NSTrackingAreaOptions,
     NSUserInterfaceItemIdentification, NSView, NSVisualEffectView, NSWindow,
+    NSWindowDidEndLiveResizeNotification, NSWindowWillStartLiveResizeNotification,
 };
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString};
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRect, NSString};
 
 #[path = "widget_resize.rs"]
 mod geometry;
@@ -35,6 +36,7 @@ struct HoverIvars {
     header_cursor: Cell<bool>,
     drag: Cell<Option<ResizeDrag>>,
     move_start: Cell<Option<NSRect>>,
+    live_resize_start: Cell<Option<NSRect>>,
 }
 
 define_class!(
@@ -46,6 +48,25 @@ define_class!(
     unsafe impl NSObjectProtocol for WidgetHoverView {}
 
     impl WidgetHoverView {
+        // AppKit can own the window's outer resize border before hitTest reaches
+        // our in-content handles. Save that completed gesture through the same
+        // path, without mistaking programmatic reveal/theme sizing for a drag.
+        #[unsafe(method(sidebarWillStartLiveResize:))]
+        fn sidebar_will_start_live_resize(&self, _notification: &NSNotification) {
+            if self.ivars().drag.get().is_some() { return; }
+            if let Some(window) = self.window() {
+                self.ivars().live_resize_start.set(Some(window.frame()));
+                crate::sidebar_dock::begin_native_interaction(self.ivars().window.app_handle(), false, false);
+            }
+        }
+
+        #[unsafe(method(sidebarDidEndLiveResize:))]
+        fn sidebar_did_end_live_resize(&self, _notification: &NSNotification) {
+            let Some(start) = self.ivars().live_resize_start.replace(None) else { return; };
+            let changed = self.window().is_some_and(|window| window.frame().size != start.size);
+            crate::sidebar_dock::finish_native_interaction(&self.ivars().window, false, changed);
+        }
+
         // Do not intercept cards, header actions, dropdowns or their gestures.
         // Only the frame perimeter owns native resize input.
         #[unsafe(method(hitTest:))]
@@ -155,6 +176,7 @@ impl WidgetHoverView {
             header_cursor: Cell::new(false),
             drag: Cell::new(None),
             move_start: Cell::new(None),
+            live_resize_start: Cell::new(None),
         });
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
@@ -417,6 +439,17 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {
                 tracker.addTrackingArea(&area);
                 // The native hierarchy owns the tracker and its tracking area.
                 host.addSubview(&tracker);
+                if win.label() == "sidebar" {
+                    let notifications = NSNotificationCenter::defaultCenter();
+                    // Selectors above accept exactly the notification argument;
+                    // object filtering keeps floating and main windows separate.
+                    unsafe {
+                        notifications.addObserver_selector_name_object(&tracker,
+                            sel!(sidebarWillStartLiveResize:), Some(NSWindowWillStartLiveResizeNotification), Some(native));
+                        notifications.addObserver_selector_name_object(&tracker,
+                            sel!(sidebarDidEndLiveResize:), Some(NSWindowDidEndLiveResizeNotification), Some(native));
+                    }
+                }
                 native.invalidateCursorRectsForView(&tracker);
                 Ok(())
             })();

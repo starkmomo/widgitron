@@ -21,6 +21,7 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
   const previewTextRef = useRef<HTMLParagraphElement>(null);
   const [previewLines, setPreviewLines] = useState(6);
   const [reading, setReading] = useState(false);
+  const [returnedFocus, setReturnedFocus] = useState(false);
   const titleId = useId();
   const overlay = theme ? widgetOverlaySurface(theme, isLight) : null;
 
@@ -69,9 +70,11 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
         ref={triggerRef}
         type="button"
         data-no-drag="true"
+        data-returned-focus={returnedFocus ? "true" : undefined}
         className={`arxiv-abstract-action mt-2 inline-flex shrink-0 self-start items-center gap-1 rounded text-blue-500 hover:text-blue-600 hover:underline focus-visible:outline-2 focus-visible:outline-blue-500 ${compact ? "text-[9px]" : "text-[10px]"}`}
         onPointerDownCapture={(event) => event.stopPropagation()}
-        onClick={() => setReading(true)}
+        onClick={() => { setReturnedFocus(false); setReading(true); }}
+        onBlur={() => setReturnedFocus(false)}
         aria-haspopup="dialog"
       >
         <span>Full abstract</span>
@@ -91,9 +94,11 @@ export function ArxivAbstractPreview({ paper, compact = false, isLight, textColo
             if (event.key === "Escape") event.stopPropagation();
           }}
           onClose={() => {
+            setReturnedFocus(true);
             setReading(false);
             triggerRef.current?.focus({ preventScroll: true });
           }}
+          onCancel={() => setReturnedFocus(true)}
           onClick={(event) => {
             if (event.target === event.currentTarget) event.currentTarget.close();
           }}
