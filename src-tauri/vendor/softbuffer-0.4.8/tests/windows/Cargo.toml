@@ -1,0 +1,21 @@
+# Compile and run the real backend tests on Windows without unrelated example dependencies.
+[package]
+name = "widgitron-softbuffer-windows-regression"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../../src/lib.rs"
+
+# The reused source also declares optional Linux backends. They stay disabled
+# in this Windows-only harness, but remain known to rustc's cfg checker.
+[features]
+kms = []
+wayland = []
+x11 = []
+
+[dependencies]
+raw-window-handle = { version = "0.6", features = ["std"] }
+tracing = { version = "0.1.41", default-features = false }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

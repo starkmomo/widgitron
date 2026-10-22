@@ -145,6 +145,12 @@ html[data-widget-hovered="true"] .floating-window .widget-resize-handle {
   overscroll-behavior: contain;
 }
 
+/* Classic scrollbars consume space on Windows. Reserve the same space on the
+   other side so cards stay centered; overlay scrollbars need no extra gutter. */
+.sidebar-widget-scroll[data-sidebar-scroll="vertical"] {
+  scrollbar-gutter: stable both-edges;
+}
+
 /* Only fitting macOS content gets a tiny native track, with one resting point.
    Match the viewport padding so the snap target is scroll offset zero. */
 .sidebar-widget-scroll[data-native-bounce-fit="true"][data-sidebar-scroll="vertical"] {
