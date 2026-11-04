@@ -129,9 +129,13 @@ fn decrypt_v10_aes128_cbc(raw: &[u8], key: &[u8; 16]) -> Result<Vec<u8>, String>
     }
 
     let iv = [b' '; 16];
-    Aes128CbcDec::new(key.into(), &iv.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(&raw[3..])
-        .map_err(|e| format!("AES-128-CBC decrypt failed: {}", e))
+    let mut buffer = raw[3..].to_vec();
+    let plain_len = Aes128CbcDec::new(key.into(), &iv.into())
+        .decrypt_padded_mut::<Pkcs7>(&mut buffer)
+        .map(|plain| plain.len())
+        .map_err(|e| format!("AES-128-CBC decrypt failed: {}", e))?;
+    buffer.truncate(plain_len);
+    Ok(buffer)
 }
 
 #[cfg(not(target_os = "windows"))]
