@@ -716,8 +716,12 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
     {
         let mut state = lock_runtime(&runtime);
         if !state.enabled { return; }
-        crate::windows_frame::set_sidebar_axis(state.edge.is_vertical(),
-            (MIN_EDGE_LENGTH_LOGICAL * state.work_area.scale_factor * state.ui_scale).round() as i32);
+        let content_scale = state.work_area.scale_factor * state.ui_scale;
+        crate::windows_frame::set_sidebar_axis(
+            state.edge.as_str(),
+            (MIN_EDGE_LENGTH_LOGICAL * content_scale).round() as i32,
+            (MIN_THICKNESS_LOGICAL * content_scale).round() as i32,
+        );
         let shown_rect = sidebar_rect_at(
             state.work_area,
             state.edge,

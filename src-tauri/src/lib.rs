@@ -79,10 +79,6 @@ mod windows_glass;
 mod windows_frame;
 #[cfg(windows)]
 mod windows_desktop;
-#[cfg(windows)]
-mod windows_tray;
-#[cfg(windows)]
-mod windows_tray_menu;
 
 pub fn run() {
     let context = tauri::generate_context!();
@@ -326,169 +322,133 @@ pub fn run() {
                 tray.set_show_menu_on_left_click(false)?;
             }
 
-            #[cfg(windows)]
+            // Windows/Linux use a custom webview tray menu for consistent styling.
+            // macOS keeps the native menu-bar popup above.
+            #[cfg(not(target_os = "macos"))]
             {
-                let menu = windows_tray::create_menu(&handle)?;
-                let mut tray_builder = TrayIconBuilder::with_id(windows_tray::TRAY_ID)
-                    .tooltip(if cfg!(debug_assertions) { "Widgitron (测试版)" } else { "Widgitron" })
-                    .menu(&menu)
-                    .show_menu_on_left_click(false)
-                    .on_menu_event(windows_tray::handle_menu_event)
-                    .on_tray_icon_event(|tray, event| {
-                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
-                        match event {
-                            TrayIconEvent::Click {
-                                button: MouseButton::Right,
-                                button_state: MouseButtonState::Down,
-                                ..
-                            } => {
-                                // Update items on the persistent menu; never replace
-                                // the HMENU while Windows may be tracking its popup.
-                                windows_tray::refresh(tray.app_handle());
-                            }
-                            TrayIconEvent::Click {
-                                button: MouseButton::Left,
-                                button_state: MouseButtonState::Down,
-                                ..
-                            } | TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
-                                let app = tray.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    let _ = commands::show_main(app).await;
-                                });
-                            }
-                            _ => {}
-                        }
-                    });
-                if let Some(icon) = app.default_window_icon() {
-                    tray_builder = tray_builder.icon(icon.clone());
-                }
-                let _tray = tray_builder.build(&handle)?;
-                let refresh_app = handle.clone();
-                tauri::Listener::listen(&handle, "app_config_update", move |_| {
-                    let app = refresh_app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        windows_tray::refresh(&app);
-                    });
-                });
-            }
+                #[cfg(windows)]
+                let mut tray_builder = TrayIconBuilder::with_id("windows-main-tray")
+                    .tooltip(if cfg!(debug_assertions) {
+                        "Widgitron (测试版)"
+                    } else {
+                        "Widgitron"
+                    })
+                    .show_menu_on_left_click(false);
+                #[cfg(not(windows))]
+                let mut tray_builder = TrayIconBuilder::new().show_menu_on_left_click(false);
 
-            #[cfg(not(any(target_os = "macos", windows)))]
-            {
-                let mut tray_builder = TrayIconBuilder::new()
-                    .show_menu_on_left_click(false)
-                    .on_tray_icon_event(|tray, event| {
-                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
-                        match event {
-                            TrayIconEvent::Click {
-                                button: MouseButton::Right,
-                                button_state: MouseButtonState::Down,
-                                position,
-                                ..
-                            } => {
-                                if let Some(window) =
-                                    tray.app_handle().get_webview_window("tray-menu")
-                                {
-                                    // Find the scale factor of the monitor containing the cursor position
-                                    let mut scale_factor = 1.0;
-                                    let mut monitor_pos = tauri::PhysicalPosition::<i32>::new(0, 0);
-                                    let mut monitor_size =
-                                        tauri::PhysicalSize::<u32>::new(1920, 1080);
-                                    let mut found_monitor = false;
+                tray_builder = tray_builder.on_tray_icon_event(|tray, event| {
+                    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                    match event {
+                        TrayIconEvent::Click {
+                            button: MouseButton::Right,
+                            button_state: MouseButtonState::Down,
+                            position,
+                            ..
+                        } => {
+                            if let Some(window) =
+                                tray.app_handle().get_webview_window("tray-menu")
+                            {
+                                let mut scale_factor = 1.0;
+                                let mut monitor_pos = tauri::PhysicalPosition::<i32>::new(0, 0);
+                                let mut monitor_size =
+                                    tauri::PhysicalSize::<u32>::new(1920, 1080);
+                                let mut found_monitor = false;
 
-                                    if let Ok(monitors) = tray.app_handle().available_monitors() {
-                                        for m in &monitors {
-                                            let pos = m.position();
-                                            let size = m.size();
-                                            let x = position.x as i32;
-                                            let y = position.y as i32;
-                                            if x >= pos.x
-                                                && x < pos.x + size.width as i32
-                                                && y >= pos.y
-                                                && y < pos.y + size.height as i32
-                                            {
-                                                scale_factor = m.scale_factor();
-                                                monitor_pos = *pos;
-                                                monitor_size = *size;
-                                                found_monitor = true;
-                                                break;
-                                            }
-                                        }
-
-                                        // Fallback to primary monitor if cursor is outside all monitors
-                                        if !found_monitor {
-                                            if let Ok(Some(m)) = tray.app_handle().primary_monitor()
-                                            {
-                                                scale_factor = m.scale_factor();
-                                                monitor_pos = *m.position();
-                                                monitor_size = *m.size();
-                                            }
+                                if let Ok(monitors) = tray.app_handle().available_monitors() {
+                                    for m in &monitors {
+                                        let pos = m.position();
+                                        let size = m.size();
+                                        let x = position.x as i32;
+                                        let y = position.y as i32;
+                                        if x >= pos.x
+                                            && x < pos.x + size.width as i32
+                                            && y >= pos.y
+                                            && y < pos.y + size.height as i32
+                                        {
+                                            scale_factor = m.scale_factor();
+                                            monitor_pos = *pos;
+                                            monitor_size = *size;
+                                            found_monitor = true;
+                                            break;
                                         }
                                     }
 
-                                    let physical_width = (150.0 * scale_factor) as i32;
-                                    let physical_height = (104.0 * scale_factor) as i32;
-
-                                    // Adjust X so the window doesn't overflow the right edge of the monitor
-                                    let mut x = position.x as i32;
-                                    if x + physical_width
-                                        > monitor_pos.x + monitor_size.width as i32
-                                    {
-                                        x = monitor_pos.x + monitor_size.width as i32
-                                            - physical_width;
+                                    if !found_monitor {
+                                        if let Ok(Some(m)) = tray.app_handle().primary_monitor() {
+                                            scale_factor = m.scale_factor();
+                                            monitor_pos = *m.position();
+                                            monitor_size = *m.size();
+                                        }
                                     }
-                                    if x < monitor_pos.x {
-                                        x = monitor_pos.x;
-                                    }
-
-                                    // Adjust Y so the window doesn't overflow the bottom or top of the monitor
-                                    let mut y = position.y as i32 - physical_height;
-                                    if y + physical_height
-                                        > monitor_pos.y + monitor_size.height as i32
-                                    {
-                                        y = monitor_pos.y + monitor_size.height as i32
-                                            - physical_height;
-                                    }
-                                    if y < monitor_pos.y {
-                                        y = monitor_pos.y;
-                                    }
-
-                                    // Apply size first so Windows/Tauri knows the dimensions before placing it
-                                    let _ = window.set_size(tauri::Size::Physical(
-                                        tauri::PhysicalSize::new(
-                                            physical_width as u32,
-                                            physical_height as u32,
-                                        ),
-                                    ));
-
-                                    // Set position
-                                    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
                                 }
+
+                                // Match App.tsx tray-menu rows: sidebar, dashboard,
+                                // optional widgets, separator, quit.
+                                let config = config_store::read_config::<models::AppConfig>(
+                                    tray.app_handle(),
+                                    "app_config.json",
+                                );
+                                let rows = if widget_visibility::selected_widgets(&config).is_empty()
+                                {
+                                    3.0
+                                } else {
+                                    4.0
+                                };
+                                let logical_height = rows * 28.0 + 8.0 + 8.0;
+                                let physical_width = (160.0 * scale_factor) as i32;
+                                let physical_height = (logical_height * scale_factor).round() as i32;
+
+                                let mut x = position.x as i32;
+                                if x + physical_width
+                                    > monitor_pos.x + monitor_size.width as i32
+                                {
+                                    x = monitor_pos.x + monitor_size.width as i32
+                                        - physical_width;
+                                }
+                                if x < monitor_pos.x {
+                                    x = monitor_pos.x;
+                                }
+
+                                let mut y = position.y as i32 - physical_height;
+                                if y + physical_height
+                                    > monitor_pos.y + monitor_size.height as i32
+                                {
+                                    y = monitor_pos.y + monitor_size.height as i32
+                                        - physical_height;
+                                }
+                                if y < monitor_pos.y {
+                                    y = monitor_pos.y;
+                                }
+
+                                let _ = window.set_size(tauri::Size::Physical(
+                                    tauri::PhysicalSize::new(
+                                        physical_width as u32,
+                                        physical_height as u32,
+                                    ),
+                                ));
+                                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                                let _ = window.show();
+                                let _ = window.set_focus();
                             }
-                            TrayIconEvent::Click {
-                                button: MouseButton::Left,
-                                button_state: MouseButtonState::Down,
-                                ..
-                            } => {
-                                let app_handle = tray.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    let _ = commands::show_main(app_handle).await;
-                                });
-                            }
-                            TrayIconEvent::DoubleClick {
-                                button: MouseButton::Left,
-                                ..
-                            } => {
-                                let app_handle = tray.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    let _ = commands::show_main(app_handle).await;
-                                });
-                            }
-                            _ => {}
                         }
-                    });
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Down,
+                            ..
+                        }
+                        | TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        } => {
+                            let app_handle = tray.app_handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = commands::show_main(app_handle).await;
+                            });
+                        }
+                        _ => {}
+                    }
+                });
 
                 if let Some(icon) = app.default_window_icon() {
                     tray_builder = tray_builder.icon(icon.clone());

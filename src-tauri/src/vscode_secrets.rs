@@ -118,6 +118,75 @@ fn decrypt_v10_secret(raw: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("AES decrypt failed: {}", e))
 }
 
+/// Electron / Chromium OSCrypt on macOS & Linux uses AES-128-CBC with a 16-space IV.
+#[cfg(not(target_os = "windows"))]
+fn decrypt_v10_aes128_cbc(raw: &[u8], key: &[u8; 16]) -> Result<Vec<u8>, String> {
+    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+
+    if raw.len() < 3 || (&raw[..3] != b"v10" && &raw[..3] != b"v11") {
+        return Err("Unsupported safeStorage encryption format".to_string());
+    }
+
+    let iv = [b' '; 16];
+    Aes128CbcDec::new(key.into(), &iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(&raw[3..])
+        .map_err(|e| format!("AES-128-CBC decrypt failed: {}", e))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn derive_os_crypt_key_16(password: &str) -> [u8; 16] {
+    use pbkdf2::pbkdf2_hmac;
+    use sha1::Sha1;
+
+    let mut key = [0u8; 16];
+    pbkdf2_hmac::<Sha1>(password.as_bytes(), b"saltysalt", 1003, &mut key);
+    key
+}
+
+const CURSOR_SAFE_STORAGE_PREFIX: &str = "cursor-safe-storage:v1:";
+
+/// Unwrap a Cursor auth token cell.
+///
+/// Recent Cursor builds seal `cursorAuth/accessToken` with Electron safeStorage as
+/// `cursor-safe-storage:v1:` + base64(v10 ciphertext). Older builds still store a
+/// plaintext JWT — those are returned unchanged.
+pub fn unwrap_cursor_auth_token(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Cursor access token is empty".to_string());
+    }
+    if !trimmed.starts_with(CURSOR_SAFE_STORAGE_PREFIX) {
+        return Ok(trimmed.to_string());
+    }
+
+    let encoded = &trimmed[CURSOR_SAFE_STORAGE_PREFIX.len()..];
+    let encrypted = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| format!("Failed to decode cursor-safe-storage payload: {}", e))?;
+
+    let plaintext = decrypt_cursor_safe_storage_blob(&encrypted)?;
+    String::from_utf8(plaintext).map_err(|_| "Decrypted Cursor token is not UTF-8".to_string())
+}
+
+fn decrypt_cursor_safe_storage_blob(encrypted: &[u8]) -> Result<Vec<u8>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let user_dir = get_vscode_user_dir("Cursor")
+            .ok_or_else(|| "Could not resolve Cursor user data directory".to_string())?;
+        let local_state_path = user_dir.join("Local State");
+        let master_key = load_os_crypt_master_key(&local_state_path, "Cursor")?;
+        return decrypt_v10_secret(encrypted, &master_key);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let password = get_os_crypt_password("Cursor")?;
+        let key = derive_os_crypt_key_16(&password);
+        decrypt_v10_aes128_cbc(encrypted, &key)
+    }
+}
+
 fn decode_secret_blob(raw: &str, master_key: &[u8]) -> Result<Vec<u8>, String> {
     let bytes = if raw.starts_with('{') {
         let wrapper: BufferSecret =

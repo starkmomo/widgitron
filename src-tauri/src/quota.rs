@@ -1643,10 +1643,18 @@ fn read_cursor_local_credentials() -> Result<(String, Option<String>, Option<Str
         .ok_or_else(|| ide_db_not_found_message("Cursor", &app_names))?;
     let mut values =
         crate::sqlite_state::read_text_keys(&db_path, &[ACCESS_TOKEN_KEY, EMAIL_KEY, PLAN_KEY])?;
-    let token = values
+    let sealed = values
         .remove(ACCESS_TOKEN_KEY)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "Not signed in (cursorAuth/accessToken not found)".to_string())?;
+    // Cursor 3.27+ seals auth tokens with Electron safeStorage
+    // (`cursor-safe-storage:v1:`). Decrypt before calling the API.
+    let token = vscode_secrets::unwrap_cursor_auth_token(&sealed).map_err(|err| {
+        format!(
+            "Failed to decrypt Cursor access token ({}). If this persists, sign in again via Cursor.",
+            err
+        )
+    })?;
 
     Ok((token, values.remove(EMAIL_KEY), values.remove(PLAN_KEY)))
 }

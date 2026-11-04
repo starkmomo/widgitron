@@ -1657,10 +1657,14 @@ function App() {
 
   // --- CUSTOM TRAY MENU VIEW ---
   if (windowLabel === "tray-menu") {
+    const hideTrayMenu = () => appWindow.hide().catch(console.error);
     return (
-      <div className="h-screen w-screen flex flex-col bg-white border border-slate-200 rounded-lg overflow-hidden shadow-xl p-1 select-none">
+      <div className="h-screen w-screen flex flex-col bg-white/95 border border-slate-200 rounded-lg overflow-hidden shadow-xl p-1 select-none backdrop-blur-md">
         <button
-          onClick={() => tauriInvoke("toggle_sidebar_visibility").catch(console.error)}
+          onClick={() => {
+            hideTrayMenu();
+            tauriInvoke("toggle_sidebar_visibility").catch(console.error);
+          }}
           className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
         >
           <Activity
@@ -1670,7 +1674,7 @@ function App() {
           <span className="text-[11px] font-bold">{sidebarDockState.expanded ? "Hide Sidebar" : "Open Sidebar"}</span>
         </button>
         <button
-          onClick={() => tauriInvoke("show_main")}
+          onClick={() => tauriInvoke("show_main").catch(console.error)}
           className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
         >
           <LayoutDashboard
@@ -1681,7 +1685,7 @@ function App() {
         </button>
         {hasFloatingWidgets && <button
           disabled={widgetsVisibilityBusy}
-          onClick={() => toggleWidgetsVisibility().then(() => appWindow.hide()).catch(console.error)}
+          onClick={() => toggleWidgetsVisibility().then(hideTrayMenu).catch(console.error)}
           className="w-full flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors group"
         >
           {appConfig.widgets_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -1724,42 +1728,71 @@ function App() {
     const sidebarDragMessage = sidebarDockState.preview_edge
       ? "Release to dock on the " + sidebarEdgeLabels[sidebarDockState.preview_edge] + " edge"
       : "Move toward any screen edge to preview docking";
-    // Give resizing an easy target while reserving header buttons and the
-    // remaining header area for dragging. macOS uses matching native targets.
+    // Length edges always resize; the free inner edge also changes thickness
+    // (sidebar width when docked left/right). The screen-docked edge stays fixed.
     const sidebarWindowResizeHandles: Array<{
       direction: NativeResizeDirection;
       className: string;
       cursor: "ns-resize" | "ew-resize";
       label: string;
-    }> = sidebarDockState.edge === "left" || sidebarDockState.edge === "right"
-      ? [
-          {
-            direction: "North",
-            className: "top-0 left-10 right-[84px] h-2",
-            cursor: "ns-resize",
-            label: "Resize sidebar from top edge",
-          },
-          {
-            direction: "South",
-            className: "bottom-0 inset-x-0 h-3.5",
-            cursor: "ns-resize",
-            label: "Resize sidebar from bottom edge",
-          },
-        ]
-      : [
-          {
-            direction: "West",
-            className: "left-0 top-11 bottom-0 w-3.5",
-            cursor: "ew-resize",
-            label: "Resize sidebar from left edge",
-          },
-          {
-            direction: "East",
+    }> = [
+      ...((sidebarDockState.edge === "left" || sidebarDockState.edge === "right")
+        ? [
+            {
+              direction: "North" as const,
+              className: "top-0 left-10 right-[84px] h-2",
+              cursor: "ns-resize" as const,
+              label: "Resize sidebar from top edge",
+            },
+            {
+              direction: "South" as const,
+              className: "bottom-0 inset-x-0 h-3.5",
+              cursor: "ns-resize" as const,
+              label: "Resize sidebar from bottom edge",
+            },
+          ]
+        : [
+            {
+              direction: "West" as const,
+              className: "left-0 top-11 bottom-0 w-3.5",
+              cursor: "ew-resize" as const,
+              label: "Resize sidebar from left edge",
+            },
+            {
+              direction: "East" as const,
+              className: "right-0 top-11 bottom-0 w-3.5",
+              cursor: "ew-resize" as const,
+              label: "Resize sidebar from right edge",
+            },
+          ]),
+      ...(sidebarDockState.edge === "left"
+        ? [{
+            direction: "East" as const,
             className: "right-0 top-11 bottom-0 w-3.5",
-            cursor: "ew-resize",
-            label: "Resize sidebar from right edge",
-          },
-        ];
+            cursor: "ew-resize" as const,
+            label: "Resize sidebar width from right edge",
+          }]
+        : sidebarDockState.edge === "right"
+          ? [{
+              direction: "West" as const,
+              className: "left-0 top-11 bottom-0 w-3.5",
+              cursor: "ew-resize" as const,
+              label: "Resize sidebar width from left edge",
+            }]
+          : sidebarDockState.edge === "top"
+            ? [{
+                direction: "South" as const,
+                className: "bottom-0 inset-x-0 h-3.5",
+                cursor: "ns-resize" as const,
+                label: "Resize sidebar thickness from bottom edge",
+              }]
+            : [{
+                direction: "North" as const,
+                className: "top-0 left-10 right-[84px] h-2",
+                cursor: "ns-resize" as const,
+                label: "Resize sidebar thickness from top edge",
+              }]),
+    ];
     const sidebarWidgets = appConfig.sidebar_widgets || {};
     const hideSidebarWidgetHeaders = appConfig.sidebar_hide_widget_headers === true;
     const horizontalSidebar = sidebarDockState.edge === "top" || sidebarDockState.edge === "bottom";
@@ -2100,6 +2133,12 @@ function App() {
           sidebarDockState.edge === "left" || sidebarDockState.edge === "right"
             ? "bottom-1 left-1/2 h-[3px] w-8 -translate-x-1/2"
             : "right-1 top-1/2 h-8 w-[3px] -translate-y-1/2"
+        }`} />
+        <span aria-hidden="true" className={`pointer-events-none absolute z-[75] rounded-full ${sidebarIsLight ? "bg-slate-400/65" : "bg-white/50"} ${
+          sidebarDockState.edge === "left" ? "right-1 top-1/2 h-8 w-[3px] -translate-y-1/2"
+            : sidebarDockState.edge === "right" ? "left-1 top-1/2 h-8 w-[3px] -translate-y-1/2"
+            : sidebarDockState.edge === "top" ? "bottom-1 left-1/2 h-[3px] w-8 -translate-x-1/2"
+            : "top-1 left-1/2 h-[3px] w-8 -translate-x-1/2"
         }`} />
         <header
           aria-label="Drag sidebar"

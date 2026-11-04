@@ -17,29 +17,115 @@ use windows::Win32::{
 };
 
 const SUBCLASS_ID: usize = 0x57444754;
+const EDGE_LEFT: u8 = 0;
+const EDGE_TOP: u8 = 1;
+const EDGE_RIGHT: u8 = 2;
+const EDGE_BOTTOM: u8 = 3;
+
 static SIDEBAR_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
-static SIDEBAR_VERTICAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static SIDEBAR_EDGE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(EDGE_RIGHT);
 static SIDEBAR_MIN_LENGTH: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(360);
+static SIDEBAR_MIN_THICKNESS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(320);
 static SIDEBAR_RESIZING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SIDEBAR_RESIZE_FINISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn set_sidebar_axis(vertical: bool, minimum: i32) {
-    SIDEBAR_VERTICAL.store(vertical, std::sync::atomic::Ordering::Relaxed);
-    SIDEBAR_MIN_LENGTH.store(minimum, std::sync::atomic::Ordering::Relaxed);
+pub fn set_sidebar_axis(edge: &str, minimum_length: i32, minimum_thickness: i32) {
+    let edge = match edge.trim().to_ascii_lowercase().as_str() {
+        "left" => EDGE_LEFT,
+        "top" => EDGE_TOP,
+        "bottom" => EDGE_BOTTOM,
+        _ => EDGE_RIGHT,
+    };
+    SIDEBAR_EDGE.store(edge, std::sync::atomic::Ordering::Relaxed);
+    SIDEBAR_MIN_LENGTH.store(minimum_length.max(1), std::sync::atomic::Ordering::Relaxed);
+    SIDEBAR_MIN_THICKNESS.store(minimum_thickness.max(1), std::sync::atomic::Ordering::Relaxed);
 }
 
 pub fn take_sidebar_resize_finished() -> bool {
     SIDEBAR_RESIZE_FINISHED.swap(false, std::sync::atomic::Ordering::Relaxed)
 }
 
-fn sidebar_resize_hit(hit: u32, vertical: bool) -> u32 {
-    match (vertical, hit) {
-        (true, HTLEFT | HTRIGHT) | (false, HTTOP | HTBOTTOM) => HTCLIENT,
-        (true, HTTOPLEFT | HTTOPRIGHT) => HTTOP,
-        (true, HTBOTTOMLEFT | HTBOTTOMRIGHT) => HTBOTTOM,
-        (false, HTTOPLEFT | HTBOTTOMLEFT) => HTLEFT,
-        (false, HTTOPRIGHT | HTBOTTOMRIGHT) => HTRIGHT,
+fn sidebar_vertical(edge: u8) -> bool {
+    matches!(edge, EDGE_LEFT | EDGE_RIGHT)
+}
+
+/// Keep the screen-docked edge fixed while still allowing the free inner edge
+/// to change thickness and the parallel edges to change length.
+fn sidebar_resize_hit(hit: u32, edge: u8) -> u32 {
+    match edge {
+        EDGE_LEFT => match hit {
+            HTLEFT | HTTOPLEFT | HTBOTTOMLEFT => HTCLIENT,
+            HTTOPRIGHT => HTTOP,
+            HTBOTTOMRIGHT => HTBOTTOM,
+            _ => hit,
+        },
+        EDGE_RIGHT => match hit {
+            HTRIGHT | HTTOPRIGHT | HTBOTTOMRIGHT => HTCLIENT,
+            HTTOPLEFT => HTTOP,
+            HTBOTTOMLEFT => HTBOTTOM,
+            _ => hit,
+        },
+        EDGE_TOP => match hit {
+            HTTOP | HTTOPLEFT | HTTOPRIGHT => HTCLIENT,
+            HTBOTTOMLEFT => HTLEFT,
+            HTBOTTOMRIGHT => HTRIGHT,
+            _ => hit,
+        },
+        EDGE_BOTTOM => match hit {
+            HTBOTTOM | HTBOTTOMLEFT | HTBOTTOMRIGHT => HTCLIENT,
+            HTTOPLEFT => HTLEFT,
+            HTTOPRIGHT => HTRIGHT,
+            _ => hit,
+        },
         _ => hit,
+    }
+}
+
+fn pin_docked_edge(rect: &mut RECT, current: RECT, edge: u8) {
+    match edge {
+        EDGE_LEFT => rect.left = current.left,
+        EDGE_RIGHT => rect.right = current.right,
+        EDGE_TOP => rect.top = current.top,
+        EDGE_BOTTOM => rect.bottom = current.bottom,
+        _ => {}
+    }
+}
+
+/// Keep long-axis movement on-screen. Duplicated from sidebar_placement so the
+/// windows_frame integration test can include this file without that module.
+fn bounded_span(origin: f64, length: f64, start: f64, span: f64, minimum: f64) -> (f64, f64) {
+    let span = span.max(1.0);
+    let length = length.clamp(minimum.clamp(1.0, span), span);
+    (origin.clamp(start, start + span - length), length)
+}
+
+fn clamp_thickness(rect: &mut RECT, current: RECT, edge: u8, min_thickness: i32, work: RECT) {
+    match edge {
+        EDGE_LEFT => {
+            let max_right = work.right;
+            let min_right = (current.left + min_thickness).min(max_right);
+            rect.right = rect.right.clamp(min_right, max_right);
+            rect.left = current.left;
+        }
+        EDGE_RIGHT => {
+            let min_left = work.left;
+            let max_left = (current.right - min_thickness).max(min_left);
+            rect.left = rect.left.clamp(min_left, max_left);
+            rect.right = current.right;
+        }
+        EDGE_TOP => {
+            let max_bottom = work.bottom;
+            let min_bottom = (current.top + min_thickness).min(max_bottom);
+            rect.bottom = rect.bottom.clamp(min_bottom, max_bottom);
+            rect.top = current.top;
+        }
+        EDGE_BOTTOM => {
+            let min_top = work.top;
+            let max_top = (current.bottom - min_thickness).max(min_top);
+            rect.top = rect.top.clamp(min_top, max_top);
+            rect.bottom = current.bottom;
+        }
+        _ => {}
     }
 }
 
@@ -70,18 +156,36 @@ unsafe extern "system" fn widget_frame_proc(
             if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info).as_bool()
                 && GetWindowRect(hwnd, &mut current).is_ok() {
                 if let Some(rect) = (lparam.0 as *mut RECT).as_mut() {
-                    let vertical = SIDEBAR_VERTICAL.load(std::sync::atomic::Ordering::Relaxed);
-                    if vertical { rect.left = current.left; rect.right = current.right; }
-                    else { rect.top = current.top; rect.bottom = current.bottom; }
-                    let min_length = SIDEBAR_MIN_LENGTH.load(std::sync::atomic::Ordering::Relaxed) as f64;
-                    let (left, width) = crate::sidebar_placement::bounded_span(rect.left as f64,
-                        (rect.right - rect.left) as f64, info.rcWork.left as f64,
-                        (info.rcWork.right - info.rcWork.left) as f64, if vertical { 1.0 } else { min_length });
-                    let (top, height) = crate::sidebar_placement::bounded_span(rect.top as f64,
-                        (rect.bottom - rect.top) as f64, info.rcWork.top as f64,
-                        (info.rcWork.bottom - info.rcWork.top) as f64, if vertical { min_length } else { 1.0 });
-                    *rect = RECT { left: left.round() as i32, top: top.round() as i32,
-                        right: (left + width).round() as i32, bottom: (top + height).round() as i32 };
+                    let edge = SIDEBAR_EDGE.load(std::sync::atomic::Ordering::Relaxed);
+                    let vertical = sidebar_vertical(edge);
+                    let min_length = SIDEBAR_MIN_LENGTH.load(std::sync::atomic::Ordering::Relaxed);
+                    let min_thickness = SIDEBAR_MIN_THICKNESS.load(std::sync::atomic::Ordering::Relaxed);
+                    pin_docked_edge(rect, current, edge);
+                    clamp_thickness(rect, current, edge, min_thickness, info.rcWork);
+                    let (left, width) = bounded_span(
+                        rect.left as f64,
+                        (rect.right - rect.left) as f64,
+                        info.rcWork.left as f64,
+                        (info.rcWork.right - info.rcWork.left) as f64,
+                        if vertical { 1.0 } else { min_length as f64 },
+                    );
+                    let (top, height) = bounded_span(
+                        rect.top as f64,
+                        (rect.bottom - rect.top) as f64,
+                        info.rcWork.top as f64,
+                        (info.rcWork.bottom - info.rcWork.top) as f64,
+                        if vertical { min_length as f64 } else { 1.0 },
+                    );
+                    *rect = RECT {
+                        left: left.round() as i32,
+                        top: top.round() as i32,
+                        right: (left + width).round() as i32,
+                        bottom: (top + height).round() as i32,
+                    };
+                    // Re-pin after length clamping so the docked screen edge
+                    // never drifts when the free edge changes thickness.
+                    pin_docked_edge(rect, current, edge);
+                    clamp_thickness(rect, current, edge, min_thickness, info.rcWork);
                     return LRESULT(1);
                 }
             }
@@ -95,8 +199,10 @@ unsafe extern "system" fn widget_frame_proc(
         }
         WM_NCHITTEST if hwnd.0 as isize == SIDEBAR_HWND.load(std::sync::atomic::Ordering::Relaxed) => {
             let hit = DefSubclassProc(hwnd, message, wparam, lparam);
-            let mapped = sidebar_resize_hit(hit.0 as u32,
-                SIDEBAR_VERTICAL.load(std::sync::atomic::Ordering::Relaxed));
+            let mapped = sidebar_resize_hit(
+                hit.0 as u32,
+                SIDEBAR_EDGE.load(std::sync::atomic::Ordering::Relaxed),
+            );
             if mapped == hit.0 as u32 { hit } else { LRESULT(mapped as isize) }
         }
         WM_STYLECHANGING => {
@@ -192,14 +298,35 @@ mod tests {
     };
 
     #[test]
-    fn sidebar_resize_handles_follow_the_docked_axis() {
-        assert_eq!(sidebar_resize_hit(HTLEFT, true), HTCLIENT);
-        assert_eq!(sidebar_resize_hit(HTTOPRIGHT, true), HTTOP);
-        assert_eq!(sidebar_resize_hit(HTBOTTOMLEFT, true), HTBOTTOM);
-        assert_eq!(sidebar_resize_hit(HTTOP, false), HTCLIENT);
-        assert_eq!(sidebar_resize_hit(HTTOPRIGHT, false), HTRIGHT);
-        assert_eq!(sidebar_resize_hit(HTBOTTOMLEFT, false), HTLEFT);
-        assert_eq!(sidebar_resize_hit(HTCLIENT, true), HTCLIENT);
+    fn sidebar_resize_handles_keep_docked_edge_fixed() {
+        assert_eq!(sidebar_resize_hit(HTLEFT, EDGE_LEFT), HTCLIENT);
+        assert_eq!(sidebar_resize_hit(HTRIGHT, EDGE_LEFT), HTRIGHT);
+        assert_eq!(sidebar_resize_hit(HTTOPRIGHT, EDGE_LEFT), HTTOP);
+        assert_eq!(sidebar_resize_hit(HTRIGHT, EDGE_RIGHT), HTCLIENT);
+        assert_eq!(sidebar_resize_hit(HTLEFT, EDGE_RIGHT), HTLEFT);
+        assert_eq!(sidebar_resize_hit(HTBOTTOMLEFT, EDGE_RIGHT), HTBOTTOM);
+        assert_eq!(sidebar_resize_hit(HTTOP, EDGE_TOP), HTCLIENT);
+        assert_eq!(sidebar_resize_hit(HTBOTTOM, EDGE_TOP), HTBOTTOM);
+        assert_eq!(sidebar_resize_hit(HTTOPRIGHT, EDGE_TOP), HTCLIENT);
+        assert_eq!(sidebar_resize_hit(HTBOTTOMRIGHT, EDGE_TOP), HTRIGHT);
+        assert_eq!(sidebar_resize_hit(HTBOTTOM, EDGE_BOTTOM), HTCLIENT);
+        assert_eq!(sidebar_resize_hit(HTTOP, EDGE_BOTTOM), HTTOP);
+        assert_eq!(sidebar_resize_hit(HTCLIENT, EDGE_RIGHT), HTCLIENT);
+    }
+
+    #[test]
+    fn thickness_clamp_pins_docked_edge_and_enforces_minimum() {
+        let work = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let current = RECT { left: 1600, top: 100, right: 1920, bottom: 900 };
+        let mut rect = RECT { left: 1000, top: 100, right: 1920, bottom: 900 };
+        clamp_thickness(&mut rect, current, EDGE_RIGHT, 320, work);
+        assert_eq!(rect.right, 1920);
+        assert_eq!(rect.left, 1000);
+
+        let mut too_thin = RECT { left: 1800, top: 100, right: 1920, bottom: 900 };
+        clamp_thickness(&mut too_thin, current, EDGE_RIGHT, 320, work);
+        assert_eq!(too_thin.right, 1920);
+        assert_eq!(too_thin.left, 1600);
     }
 
     #[test]

@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/starkmomo/widgitron/releases">
-    <img src="https://img.shields.io/badge/Version-v0.2.6-8B5CF6?style=flat-square&labelColor=2E1065&logo=github&logoColor=white" alt="Version" />
+    <img src="https://img.shields.io/badge/Version-v0.3.0-8B5CF6?style=flat-square&labelColor=2E1065&logo=github&logoColor=white" alt="Version" />
   </a>
   <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/Rust-1.75%2B-F97316?style=flat-square&logo=rust&logoColor=white&labelColor=431407" alt="Rust" />
