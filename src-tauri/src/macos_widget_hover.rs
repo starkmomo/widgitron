@@ -22,6 +22,62 @@ use geometry::{Frame, ResizeEdge};
 
 const TRACKER_ID: &str = "widgitron-widget-hover";
 
+/// Sidebar hit targets in top-left coordinates, shared by cursor rectangles
+/// and mouse handling. The docked edge and header controls never own a target.
+fn sidebar_resize_regions(
+    dock: &str,
+    size: (f64, f64),
+    band: f64,
+    header: (f64, f64),
+) -> Vec<(ResizeEdge, Frame)> {
+    let (width, height) = size;
+    let (header_height, controls_width) = header;
+    if ![width, height, band, header_height, controls_width].iter().all(|value| value.is_finite())
+        || width <= 0.0 || height <= 0.0 || band <= 0.0 {
+        return Vec::new();
+    }
+    let mut regions = Vec::with_capacity(3);
+    let mut add = |edge, x, y, w, h| {
+        if w > 0.0 && h > 0.0 {
+            regions.push((edge, Frame { x, y, width: w, height: h }));
+        }
+    };
+    let top_band = (header_height / 44.0 * 6.0).clamp(4.0, 8.0).min(height);
+    let grip_end = (header_height / 44.0 * 40.0).min(width);
+    let side_band = band.min(width);
+    let bottom_band = band.min(height);
+    let top_target_width = width - controls_width - grip_end;
+    if matches!(dock, "left" | "right") {
+        add(ResizeEdge::North, grip_end, 0.0, top_target_width, top_band);
+        add(ResizeEdge::South, 0.0, height - bottom_band, width, bottom_band);
+    } else if matches!(dock, "top" | "bottom") {
+        add(ResizeEdge::West, 0.0, header_height, side_band, height - header_height);
+        add(ResizeEdge::East, width - side_band, header_height, side_band, height - header_height);
+    }
+    match dock {
+        "left" => add(ResizeEdge::East, width - side_band, header_height, side_band, height - header_height - bottom_band),
+        "right" => add(ResizeEdge::West, 0.0, header_height, side_band, height - header_height - bottom_band),
+        "top" => add(ResizeEdge::South, side_band, height - bottom_band, width - side_band * 2.0, bottom_band),
+        "bottom" => add(ResizeEdge::North, grip_end, 0.0, top_target_width, top_band),
+        _ => {},
+    }
+    regions
+}
+
+fn sidebar_edge_at(
+    dock: &str,
+    point: (f64, f64),
+    size: (f64, f64),
+    band: f64,
+    header: (f64, f64),
+) -> Option<ResizeEdge> {
+    let (x, y) = point;
+    sidebar_resize_regions(dock, size, band, header).into_iter().find_map(|(edge, region)| {
+        (x >= region.x && x <= region.x + region.width
+            && y >= region.y && y <= region.y + region.height).then_some(edge)
+    })
+}
+
 #[derive(Clone, Copy)]
 struct ResizeDrag {
     edge: ResizeEdge,
@@ -107,17 +163,20 @@ define_class!(
         fn reset_cursor_rects(&self) {
             if self.ivars().window.label() != "sidebar" { return; }
             let bounds = self.bounds();
-            let band = crate::sidebar_dock::native_resize_band();
-            let (header_height, controls_width) = crate::sidebar_dock::native_header_metrics();
-            let top_band = (header_height / 44.0 * 6.0).clamp(4.0, 8.0);
-            let rect = |x, y, width, height| NSRect::new(NSPoint::new(x, y), objc2_foundation::NSSize::new(width, height));
-            if crate::sidebar_dock::native_vertical() {
-                let grip_end = header_height / 44.0 * 40.0;
-                self.addCursorRect_cursor(rect(grip_end, bounds.size.height - top_band, (bounds.size.width - controls_width - grip_end).max(1.0), top_band), &resize_cursor(ResizeEdge::North));
-                self.addCursorRect_cursor(rect(0.0, 0.0, bounds.size.width, band), &resize_cursor(ResizeEdge::South));
-            } else {
-                self.addCursorRect_cursor(rect(0.0, 0.0, band, (bounds.size.height - header_height).max(1.0)), &resize_cursor(ResizeEdge::West));
-                self.addCursorRect_cursor(rect(bounds.size.width - band, 0.0, band, (bounds.size.height - header_height).max(1.0)), &resize_cursor(ResizeEdge::East));
+            let regions = sidebar_resize_regions(
+                &crate::sidebar_dock::native_edge(),
+                (bounds.size.width, bounds.size.height),
+                crate::sidebar_dock::native_resize_band(),
+                crate::sidebar_dock::native_header_metrics(),
+            );
+            for (edge, region) in regions {
+                let y = if self.isFlipped() { region.y }
+                    else { bounds.size.height - region.y - region.height };
+                let rect = NSRect::new(
+                    NSPoint::new(bounds.origin.x + region.x, bounds.origin.y + y),
+                    objc2_foundation::NSSize::new(region.width, region.height),
+                );
+                self.addCursorRect_cursor(rect, &resize_cursor(edge));
             }
         }
 
@@ -190,21 +249,13 @@ impl WidgetHoverView {
             bounds.size.height - (point.y - bounds.origin.y)
         };
         if self.ivars().window.label() == "sidebar" {
-            if x < 0.0 || y < 0.0 || x > bounds.size.width || y > bounds.size.height { return None; }
-            let band = crate::sidebar_dock::native_resize_band();
-            let (header_height, controls_width) = crate::sidebar_dock::native_header_metrics();
-            let top_band = (header_height / 44.0 * 6.0).clamp(4.0, 8.0);
-            if crate::sidebar_dock::native_vertical() {
-                // Keep the header's close/pin buttons outside the widened top
-                // target; the lower edge remains one continuous easy target.
-                if y <= top_band && (x < bounds.size.width - controls_width || y <= 4.0)
-                    && !crate::sidebar_dock::native_undock_hit(x, y, bounds.size.width) { Some(ResizeEdge::North) }
-                else if y >= bounds.size.height - band { Some(ResizeEdge::South) }
-                else { None }
-            } else if y < header_height && x > 4.0 && x < bounds.size.width - 4.0 { None }
-            else if x <= band { Some(ResizeEdge::West) }
-            else if x >= bounds.size.width - band { Some(ResizeEdge::East) }
-            else { None }
+            sidebar_edge_at(
+                &crate::sidebar_dock::native_edge(),
+                (x, y),
+                (bounds.size.width, bounds.size.height),
+                crate::sidebar_dock::native_resize_band(),
+                crate::sidebar_dock::native_header_metrics(),
+            )
         } else {
             geometry::edge_at(x, y, bounds.size.width, bounds.size.height)
         }
@@ -458,4 +509,45 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {
             }
         })
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod sidebar_resize_tests {
+    use super::{sidebar_edge_at, Frame, ResizeEdge};
+    use super::geometry::resize_frame;
+
+    const START: Frame = Frame { x: 100.0, y: 200.0, width: 320.0, height: 400.0 };
+
+    #[test]
+    fn sidebar_free_inner_edges_resize_thickness_in_all_orientations() {
+        for (dock, point, expected, docked_point) in [
+            ("right", (4.0, 200.0), ResizeEdge::West, (319.0, 200.0)),
+            ("left", (319.0, 200.0), ResizeEdge::East, (4.0, 200.0)),
+            ("top", (160.0, 395.0), ResizeEdge::South, (160.0, 4.0)),
+            ("bottom", (160.0, 4.0), ResizeEdge::North, (160.0, 395.0)),
+        ] {
+            assert_eq!(sidebar_edge_at(dock, point, (320.0, 400.0), 14.0, (44.0, 84.0)), Some(expected));
+            assert_eq!(sidebar_edge_at(dock, docked_point, (320.0, 400.0), 14.0, (44.0, 84.0)), None);
+            for point in [(20.0, 20.0), (310.0, 20.0), (160.0, 200.0), (-1.0, 200.0)] {
+                assert_eq!(sidebar_edge_at(dock, point, (320.0, 400.0), 14.0, (44.0, 84.0)), None);
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_length_edges_remain_available_and_keep_screen_edge_anchored() {
+        for dock in ["left", "right"] {
+            assert_eq!(sidebar_edge_at(dock, (160.0, 3.0), (320.0, 400.0), 14.0, (44.0, 84.0)), Some(ResizeEdge::North));
+            assert_eq!(sidebar_edge_at(dock, (160.0, 395.0), (320.0, 400.0), 14.0, (44.0, 84.0)), Some(ResizeEdge::South));
+        }
+        for dock in ["top", "bottom"] {
+            assert_eq!(sidebar_edge_at(dock, (3.0, 200.0), (320.0, 400.0), 14.0, (44.0, 84.0)), Some(ResizeEdge::West));
+            assert_eq!(sidebar_edge_at(dock, (315.0, 200.0), (320.0, 400.0), 14.0, (44.0, 84.0)), Some(ResizeEdge::East));
+        }
+        let enlarged = resize_frame(START, ResizeEdge::West, -100.0, 0.0, (320.0, 360.0), (1440.0, 900.0));
+        assert_eq!(enlarged.width, 420.0);
+        assert_eq!(enlarged.x + enlarged.width, START.x + START.width);
+        assert_eq!(enlarged.height, START.height);
+    }
+
 }

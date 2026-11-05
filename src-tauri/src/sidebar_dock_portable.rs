@@ -463,8 +463,8 @@ pub fn native_undock_hit(x: f64, y: f64, width: f64) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub fn native_vertical() -> bool {
-    lock_runtime().map(|runtime| matches!(runtime.state.edge.as_str(), "left" | "right")).unwrap_or(true)
+pub fn native_edge() -> String {
+    lock_runtime().map(|runtime| runtime.state.edge.clone()).unwrap_or_else(|_| "right".into())
 }
 
 #[cfg(target_os = "macos")]
@@ -1003,6 +1003,26 @@ fn sidebar_monitor(app: &AppHandle, anchor: Option<(i32, i32)>) -> Result<Monito
     }
 }
 
+#[cfg(target_os = "macos")]
+fn mac_sidebar_size_limits(
+    work_size: PhysicalSize<u32>,
+    scale: f64,
+    edge: &str,
+) -> (tauri::LogicalSize<f64>, PhysicalSize<u32>) {
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    let (min_width, min_height) = if matches!(edge, "left" | "right") {
+        (DEFAULT_THICKNESS_LOGICAL, 360.0)
+    } else {
+        (360.0, DEFAULT_THICKNESS_LOGICAL)
+    };
+    let maximum = PhysicalSize::new(work_size.width.max(1), work_size.height.max(1));
+    let minimum = tauri::LogicalSize::new(
+        min_width.min(maximum.width as f64 / scale),
+        min_height.min(maximum.height as f64 / scale),
+    );
+    (minimum, maximum)
+}
+
 fn position_sidebar(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
     let runtime = lock_runtime()?;
     #[cfg(target_os = "macos")]
@@ -1064,15 +1084,9 @@ fn position_sidebar(app: &AppHandle, window: &WebviewWindow) -> Result<(), Strin
     };
     #[cfg(target_os = "macos")]
     {
-        let minimum: (f64, f64) = if vertical { (width as f64 / scale, 360.0) } else { (360.0, height as f64 / scale) };
-        window.set_min_size(Some(tauri::LogicalSize::new(
-            minimum.0.min(area.size.width as f64 / scale),
-            minimum.1.min(area.size.height as f64 / scale),
-        ))).map_err(|error| error.to_string())?;
-        window.set_max_size(Some(PhysicalSize::new(
-            if vertical { width } else { area.size.width },
-            if vertical { area.size.height } else { height })))
-            .map_err(|error| error.to_string())?;
+        let (minimum, maximum) = mac_sidebar_size_limits(area.size, scale, &edge);
+        window.set_min_size(Some(minimum)).map_err(|error| error.to_string())?;
+        window.set_max_size(Some(maximum)).map_err(|error| error.to_string())?;
     }
     window
         .set_size(PhysicalSize::new(width, height))
@@ -1085,6 +1099,48 @@ fn position_sidebar(app: &AppHandle, window: &WebviewWindow) -> Result<(), Strin
 #[cfg(all(test, target_os = "macos"))]
 mod mac_hover_tests {
     use super::*;
+
+    #[test]
+    fn sidebar_native_limits_allow_thickness_changes_in_both_orientations() {
+        for edge in ["left", "right", "top", "bottom"] {
+            let (minimum, maximum) = mac_sidebar_size_limits(PhysicalSize::new(2880, 1800), 2.0, edge);
+            let vertical = matches!(edge, "left" | "right");
+            assert_eq!(minimum, tauri::LogicalSize::new(
+                if vertical { 320.0 } else { 360.0 },
+                if vertical { 360.0 } else { 320.0 },
+            ));
+            assert_eq!(maximum, PhysicalSize::new(2880, 1800));
+            assert!(maximum.width as f64 / 2.0 > minimum.width);
+            assert!(maximum.height as f64 / 2.0 > minimum.height);
+            let (small_minimum, small_maximum) = mac_sidebar_size_limits(PhysicalSize::new(500, 400), 2.0, edge);
+            assert_eq!(small_minimum, tauri::LogicalSize::new(250.0, 200.0));
+            assert_eq!(small_maximum, PhysicalSize::new(500, 400));
+        }
+    }
+
+    #[test]
+    fn resized_thickness_survives_geometry_save_reload_and_reveal() {
+        for (edge, width, height, thickness, length) in [
+            ("right", 900, 1000, 450.0, 500.0),
+            ("left", 760, 1200, 380.0, 600.0),
+            ("top", 1600, 800, 400.0, 800.0),
+            ("bottom", 1800, 720, 360.0, 900.0),
+        ] {
+            let mut config = AppConfig { sidebar_edge: Some(edge.into()), ..AppConfig::default() };
+            let mut runtime = DockRuntime::from_config(&config);
+            runtime.remember_native_size(width, height, 2.0);
+            runtime.offset = 0.72;
+            runtime.remember_current_geometry();
+            runtime.geometry.write_config(&mut config);
+            let saved: AppConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            runtime.state.expanded = false;
+            runtime.apply_config(&saved);
+            runtime.state.expanded = true;
+            assert_eq!(runtime.thickness, thickness);
+            assert_eq!(runtime.length, Some(length));
+            assert_eq!(runtime.offset, 0.72);
+        }
+    }
 
     #[test]
     fn reveal_requires_the_primary_edge_and_sidebar_span() {
