@@ -11,8 +11,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowRect, IsChild, IsWindowVisible, SetWindowPos, ShowWindow,
-    WindowFromPoint, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    GetCursorPos, GetParent, GetWindowRect, IsChild, IsWindowVisible, SetWindowPos, ShowWindow,
+    WindowFromPoint, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SW_HIDE,
 };
 
 use crate::config_store;
@@ -254,6 +255,9 @@ struct DockRuntime {
     drag_preview_area: Option<WorkArea>,
     drag_preview_offset: Option<f64>,
     resizing: bool,
+    /// Window rectangle at mouse-down. A stable difference from the rect we
+    /// requested is the window frame, not a user resize.
+    press_rect: Option<RectPx>,
     was_left_down: bool,
     managed_rect: Option<RectPx>,
     last_emitted: Option<SidebarDockState>,
@@ -400,6 +404,7 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         drag_preview_area: None,
         drag_preview_offset: None,
         resizing: false,
+        press_rect: None,
         was_left_down: false,
         managed_rect: None,
         last_emitted: None,
@@ -829,9 +834,12 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                 should_persist = true;
             }
         } else if left_down {
-            if let (Some(actual), Some(managed)) = (current_rect, state.managed_rect) {
-                if (actual.width - managed.width).abs() > 2
-                    || (actual.height - managed.height).abs() > 2
+            if state.press_rect.is_none() {
+                state.press_rect = current_rect;
+            }
+            if let (Some(actual), Some(press)) = (current_rect, state.press_rect) {
+                if (actual.width - press.width).abs() > 2
+                    || (actual.height - press.height).abs() > 2
                 {
                     state.resizing = true;
                 }
@@ -874,11 +882,15 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
                 should_persist = true;
             }
             state.resizing = false;
+            state.press_rect = None;
             state.awaiting_pointer_entry = true;
             state.leave_at = None;
             state.grace_until = now + SHOW_GRACE;
         }
 
+        if !left_down {
+            state.press_rect = None;
+        }
         state.was_left_down = left_down;
 
         // Resize and drop may change the visible span during this same tick.
@@ -933,8 +945,13 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
             state.awaiting_pointer_entry = false;
             state.leave_at = None;
         } else if state.requested_expanded && !state.dragging && !left_down {
+            // The live frame can be wider than the rect we last requested.
+            // Testing the requested rect made the inner edge count as "outside",
+            // so the sidebar hid and the edge trigger immediately opened it again.
             let pointer_inside = cursor
-                .map(|point| pointer_inside_sidebar(&window, shown_rect, point))
+                .map(|point| {
+                    pointer_inside_sidebar(&window, current_rect.unwrap_or(shown_rect), point)
+                })
                 .unwrap_or(false);
             if pointer_inside {
                 state.awaiting_pointer_entry = false;
@@ -957,8 +974,20 @@ fn dock_tick(app: &AppHandle, window: &WebviewWindow, runtime: &Arc<Mutex<DockRu
             && !state.dragging
             && !state.resizing
         {
-            if current_rect.is_none_or(|actual| !rects_close(actual, shown_rect)) {
-                state.layout_dirty = true;
+            match current_rect {
+                None => state.layout_dirty = true,
+                Some(actual) if !rects_close(actual, shown_rect) => {
+                    let already_applied = state
+                        .managed_rect
+                        .is_some_and(|managed| rects_close(managed, shown_rect));
+                    // DWM often reports the frame a few pixels away from the
+                    // rect we just set. Moving it again every tick repaints
+                    // the glass window and makes the sidebar flicker.
+                    if !already_applied || rects_far(actual, shown_rect) {
+                        state.layout_dirty = true;
+                    }
+                }
+                Some(_) => {}
             }
         }
 
@@ -1378,20 +1407,45 @@ fn rects_close(actual: RectPx, expected: RectPx) -> bool {
         && (actual.height - expected.height).abs() <= 2
 }
 
+fn rects_far(actual: RectPx, expected: RectPx) -> bool {
+    (actual.left - expected.left).abs() > 16
+        || (actual.top - expected.top).abs() > 16
+        || (actual.width - expected.width).abs() > 16
+        || (actual.height - expected.height).abs() > 16
+}
+
 fn native_is_visible(window: &WebviewWindow) -> bool {
     native_hwnd(window)
         .is_ok_and(|hwnd| unsafe { IsWindowVisible(hwnd).as_bool() })
 }
 
 fn pointer_inside_sidebar(window: &WebviewWindow, rect: RectPx, point: POINT) -> bool {
-    if !rect.contains(point) {
-        return false;
+    if let Ok(hwnd) = native_hwnd(window) {
+        let hovered = unsafe { WindowFromPoint(point) };
+        // Ownership wins over the calculated rectangle: the visible frame can
+        // extend past the rect we last asked Windows to use.
+        if !hovered.0.is_null() && belongs_to_window(hwnd, hovered) {
+            return true;
+        }
     }
-    let Ok(hwnd) = native_hwnd(window) else {
-        return false;
-    };
-    let hovered = unsafe { WindowFromPoint(point) };
-    hovered == hwnd || unsafe { IsChild(hwnd, hovered).as_bool() }
+    rect.contains(point)
+}
+
+fn belongs_to_window(root: HWND, hovered: HWND) -> bool {
+    if hovered == root || unsafe { IsChild(root, hovered).as_bool() } {
+        return true;
+    }
+    let mut current = hovered;
+    for _ in 0..8 {
+        let Ok(parent) = (unsafe { GetParent(current) }) else {
+            return false;
+        };
+        if parent == root {
+            return true;
+        }
+        current = parent;
+    }
+    false
 }
 
 fn native_set_window_rect(window: &WebviewWindow, rect: RectPx) -> Result<(), String> {

@@ -143,6 +143,15 @@ test("a new edit during reconciliation remains optimistic and is saved in the ne
   assert.deepEqual(f.writer.current(), { ...initial, theme: "dark", language: "zh-CN" });
 });
 
+test("shuffled map keys are the same snapshot and do not republish", () => {
+  const f = fixture();
+  f.writer.receive({ ...initial, sidebar_widgets: { quota: true, gpu: true, arxiv: true } });
+  const applied = f.applied.length;
+  f.writer.receive({ ...initial, sidebar_widgets: { arxiv: true, quota: true, gpu: true } });
+  assert.equal(f.applied.length, applied);
+  assert.equal(f.writer.current().sidebar_widgets?.gpu, true);
+});
+
 test("UI snapshots cannot change native-owned visibility and unchanged fields do not write", async () => {
   const f = fixture();
   await f.writer.save(initial, { ...initial, active_widgets: { "widget-quota-default": true }, widgets_hidden: true,

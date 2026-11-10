@@ -2,6 +2,21 @@ import type { AppConfig } from "../types/config";
 
 type AppConfigPatch = Partial<AppConfig>;
 
+/** Object key order is not part of the settings. Rust HashMaps shuffle it. */
+export function stableConfigText(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(item => stableConfigText(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const body = Object.keys(record)
+      .filter(key => record[key] !== undefined)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${stableConfigText(record[key])}`)
+      .join(",");
+    return `{${body}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 // Native window commands own these fields, even when a UI snapshot contains
 // older values from before a pin, show or hide operation.
 const WINDOW_OWNED_FIELDS = new Set<keyof AppConfig>(["active_widgets", "widgets_hidden", "sidebar_axis_geometry"]);
@@ -11,7 +26,7 @@ export function appConfigPatch(base: AppConfig, edited: AppConfig): AppConfigPat
   const keys = new Set([...Object.keys(base), ...Object.keys(edited)] as (keyof AppConfig)[]);
   for (const key of keys) {
     if (!WINDOW_OWNED_FIELDS.has(key)
-      && JSON.stringify(base[key] ?? null) !== JSON.stringify(edited[key] ?? null)) {
+      && stableConfigText(base[key] ?? null) !== stableConfigText(edited[key] ?? null)) {
       Object.assign(patch, { [key]: edited[key] });
     }
   }
@@ -51,7 +66,7 @@ export function createAppConfigWriter(options: AppConfigWriterOptions) {
 
   const publish = () => {
     const next = project(confirmed);
-    if (JSON.stringify(next) !== JSON.stringify(current)) {
+    if (stableConfigText(next) !== stableConfigText(current)) {
       current = next;
       options.apply(current);
     }

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.1] - 2026-11-10
+
+### 中文
+
+- **Claude Code 额度**：从 Claude Desktop 的本地凭据读取登录状态，并显示 5 小时用量。未处于当前限制的 5 小时窗口仍会保留；未使用的模型窗口继续隐藏。
+- **GPU SSH**：SSH 配置里的主机别名改走系统 OpenSSH，避免把别名当成域名解析。
+- **侧边栏**：配置保存不再因键顺序变化反复刷新。鼠标是否在侧边栏上按真实窗口判断，避免边缘轻微错位时反复展开和收起。
+- **Windows 稳定性**：无边框窗口判断鼠标位置时不再泄漏 GDI 设备上下文，避免运行一段时间后耗尽配额、窗口无法打开。
+
+### English
+
+- **Claude Code quota**: Read the signed-in account from Claude Desktop's local credentials and show the 5-hour usage window. Keep that window visible when it is not the active limit, and continue hiding unused model windows.
+- **GPU SSH**: Route SSH-config host aliases through the system OpenSSH client instead of resolving the alias as a hostname.
+- **Sidebar**: Stop republishing configuration when only object key order changes. Hit-test the real sidebar window so a few pixels of frame drift no longer open and close it repeatedly.
+- **Windows stability**: Stop leaking a GDI device context on every undecorated hit test, which previously exhausted the process quota and prevented windows from opening.
+
 ## [0.3.0] - 2026-11-04
 
 ### 中文

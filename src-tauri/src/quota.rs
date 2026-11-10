@@ -2433,6 +2433,8 @@ enum ClaudeOAuthSource {
     Keyring { service: String },
     CredentialsFile,
     Env,
+    /// Claude Desktop `config.json` field `oauth:tokenCacheV2`, sealed with Electron safeStorage.
+    DesktopConfig { config_path: PathBuf, entry_key: String },
 }
 
 #[derive(Debug, Clone)]
@@ -2608,6 +2610,7 @@ fn read_claude_oauth_bundle_from_credentials_file() -> Option<ClaudeOAuthBundle>
 fn load_claude_oauth_bundle() -> Option<ClaudeOAuthBundle> {
     read_claude_oauth_bundle_from_keyring()
         .or_else(read_claude_oauth_bundle_from_credentials_file)
+        .or_else(read_claude_oauth_bundle_from_desktop_config)
         .or_else(|| {
             oauth_token_from_process_env().map(|access_token| ClaudeOAuthBundle {
                 access_token,
@@ -2696,8 +2699,234 @@ fn persist_claude_oauth_bundle(bundle: &ClaudeOAuthBundle) -> Result<(), String>
             }
         }
         ClaudeOAuthSource::Env => {}
+        ClaudeOAuthSource::DesktopConfig {
+            config_path,
+            entry_key,
+        } => {
+            persist_claude_desktop_oauth(config_path, entry_key, bundle)?;
+        }
     }
     Ok(())
+}
+
+fn claude_desktop_config_paths() -> Vec<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut paths = Vec::new();
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            if !local.is_empty() {
+                let root = PathBuf::from(local).join("Claude-Data");
+                if let Ok(entries) = std::fs::read_dir(root) {
+                    for entry in entries.flatten() {
+                        let config = entry.path().join("config.json");
+                        if config.is_file() {
+                            paths.push(config);
+                        }
+                    }
+                    paths.sort();
+                }
+            }
+        }
+        return paths;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}
+
+/// Claude Desktop's token cache is a map of account keys to `{token, refreshToken, expiresAt}`.
+/// Prefer the Claude Code OAuth client over the profile-only desktop token.
+fn select_claude_desktop_oauth(cache: &serde_json::Value) -> Option<(String, ClaudeOAuthBundle)> {
+    let entries = cache.as_object()?;
+    let mut best: Option<(i32, i64, String, ClaudeOAuthBundle)> = None;
+    for (key, value) in entries {
+        let Some(access_token) = value
+            .get("token")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        else {
+            continue;
+        };
+        let refresh_token = value
+            .get("refreshToken")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string);
+        let expires_at_ms = value.get("expiresAt").and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_u64().map(|n| n as i64))
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        });
+        let rank = if key.contains(CLAUDE_OAUTH_CLIENT_ID) || key.contains("claude_code") {
+            2
+        } else {
+            1
+        };
+        let expires = expires_at_ms.unwrap_or(0);
+        let replace = match &best {
+            None => true,
+            Some((best_rank, best_expires, _, _)) => {
+                rank > *best_rank || (rank == *best_rank && expires > *best_expires)
+            }
+        };
+        if replace {
+            best = Some((
+                rank,
+                expires,
+                key.clone(),
+                ClaudeOAuthBundle {
+                    access_token: access_token.to_string(),
+                    refresh_token,
+                    expires_at_ms,
+                    source: ClaudeOAuthSource::CredentialsFile,
+                    document: Some(cache.clone()),
+                },
+            ));
+        }
+    }
+    best.map(|(_, _, key, bundle)| (key, bundle))
+}
+
+fn read_claude_oauth_bundle_from_desktop_config() -> Option<ClaudeOAuthBundle> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        return None;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for config_path in claude_desktop_config_paths() {
+            let Some(config) = read_json_file(&config_path) else {
+                continue;
+            };
+            let Some(encoded) = config
+                .get("oauth:tokenCacheV2")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let Some(parent) = config_path.parent() else {
+                continue;
+            };
+            let local_state = parent.join("Local State");
+            let plaintext = match vscode_secrets::decrypt_windows_safe_storage(&local_state, encoded)
+            {
+                Ok(text) => text,
+                Err(err) => {
+                    log::debug!(
+                        "Claude Desktop token cache decrypt failed for {}: {}",
+                        config_path.display(),
+                        err
+                    );
+                    continue;
+                }
+            };
+            let cache: serde_json::Value = match serde_json::from_str(&plaintext) {
+                Ok(cache) => cache,
+                Err(err) => {
+                    log::debug!("Claude Desktop token cache parse failed: {}", err);
+                    continue;
+                }
+            };
+            if let Some((entry_key, mut bundle)) = select_claude_desktop_oauth(&cache) {
+                bundle.source = ClaudeOAuthSource::DesktopConfig {
+                    config_path: config_path.clone(),
+                    entry_key,
+                };
+                bundle.document = Some(cache);
+                log::info!(
+                    "Loaded Claude OAuth credentials from Claude Desktop ({})",
+                    config_path.display()
+                );
+                return Some(bundle);
+            }
+        }
+        None
+    }
+}
+
+fn persist_claude_desktop_oauth(
+    config_path: &std::path::Path,
+    entry_key: &str,
+    bundle: &ClaudeOAuthBundle,
+) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (config_path, entry_key, bundle);
+        return Err(
+            "Claude Desktop credential persistence is only implemented on Windows".to_string(),
+        );
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let parent = config_path.parent().ok_or_else(|| {
+            "Claude Desktop config has no parent directory".to_string()
+        })?;
+        let local_state = parent.join("Local State");
+        let mut config = read_json_file(&config_path.to_path_buf()).ok_or_else(|| {
+            format!(
+                "Claude Desktop config missing at {}",
+                config_path.display()
+            )
+        })?;
+        let encoded = config
+            .get("oauth:tokenCacheV2")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Claude Desktop config is missing oauth:tokenCacheV2".to_string())?;
+        let plaintext = vscode_secrets::decrypt_windows_safe_storage(&local_state, encoded)?;
+        let mut cache: serde_json::Value = serde_json::from_str(&plaintext)
+            .map_err(|e| format!("Failed to parse Claude Desktop token cache: {}", e))?;
+        let entry = cache
+            .get_mut(entry_key)
+            .and_then(|value| value.as_object_mut())
+            .ok_or_else(|| {
+                format!(
+                    "Claude Desktop token cache entry disappeared: {}",
+                    entry_key
+                )
+            })?;
+        entry.insert(
+            "token".to_string(),
+            serde_json::Value::String(bundle.access_token.clone()),
+        );
+        if let Some(refresh_token) = bundle.refresh_token.as_ref() {
+            entry.insert(
+                "refreshToken".to_string(),
+                serde_json::Value::String(refresh_token.clone()),
+            );
+        }
+        if let Some(expires_at_ms) = bundle.expires_at_ms {
+            entry.insert("expiresAt".to_string(), serde_json::json!(expires_at_ms));
+        }
+        let updated = serde_json::to_string(&cache)
+            .map_err(|e| format!("Failed to serialize Claude Desktop token cache: {}", e))?;
+        let sealed = vscode_secrets::encrypt_windows_safe_storage(&local_state, &updated)?;
+        if let Some(obj) = config.as_object_mut() {
+            obj.insert(
+                "oauth:tokenCacheV2".to_string(),
+                serde_json::Value::String(sealed),
+            );
+        }
+        let serialized = serde_json::to_string(&config).map_err(|e| {
+            format!("Failed to serialize Claude Desktop config: {}", e)
+        })?;
+        std::fs::write(config_path, serialized).map_err(|e| {
+            format!(
+                "Failed to write Claude Desktop config {}: {}",
+                config_path.display(),
+                e
+            )
+        })?;
+        log::info!(
+            "Persisted refreshed Claude OAuth credentials to {}",
+            config_path.display()
+        );
+        Ok(())
+    }
 }
 
 async fn refresh_claude_oauth_bundle(bundle: &mut ClaudeOAuthBundle) -> Result<(), String> {
@@ -2885,6 +3114,7 @@ async fn resolve_claude_oauth_access_token(force_refresh: bool) -> Result<String
             let mut checked_paths = vec![
                 "Windows Credential Manager (Claude Code-credentials)".to_string(),
                 credentials_path.display().to_string(),
+                "Claude Desktop config.json (oauth:tokenCacheV2)".to_string(),
             ];
             if let Some(claude_path) = resolve_claude_cli_path() {
                 checked_paths.insert(0, format!("{} auth status", claude_path.display()));
@@ -3253,6 +3483,23 @@ fn claude_limit_kind_label(kind: &str, scope: Option<&serde_json::Value>) -> Str
     }
 }
 
+fn claude_limit_is_visible(limit: &serde_json::Value) -> bool {
+    let active = limit
+        .get("is_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if active {
+        return true;
+    }
+    // `is_active` means this window is the one currently binding the account.
+    // The 5-hour session meter still has a utilization when it is not binding,
+    // and that is the usage the Claude Code card needs to show.
+    matches!(
+        limit.get("kind").and_then(|v| v.as_str()).unwrap_or(""),
+        "session" | "weekly_all"
+    )
+}
+
 fn parse_claude_limits_array(parsed: &serde_json::Value) -> Vec<QuotaBar> {
     let Some(limits) = parsed.get("limits").and_then(|v| v.as_array()) else {
         return Vec::new();
@@ -3260,12 +3507,7 @@ fn parse_claude_limits_array(parsed: &serde_json::Value) -> Vec<QuotaBar> {
 
     limits
         .iter()
-        .filter(|limit| {
-            limit
-                .get("is_active")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true)
-        })
+        .filter(|limit| claude_limit_is_visible(limit))
         .filter_map(|limit| {
             let utilization = claude_window_utilization(limit)?;
             let kind = limit.get("kind").and_then(|v| v.as_str()).unwrap_or("Usage");
@@ -3306,8 +3548,15 @@ fn parse_claude_oauth_usage_response(text: &str, item: &QuotaItem) -> Result<Quo
 
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut bars = parse_claude_limits_array(&parsed);
+    let mut legacy = parse_claude_legacy_usage_windows(&parsed);
     if bars.is_empty() {
-        bars = parse_claude_legacy_usage_windows(&parsed);
+        bars = legacy;
+    } else {
+        legacy.retain(|bar| !bars.iter().any(|existing| existing.name == bar.name));
+        if let Some(index) = legacy.iter().position(|bar| bar.name == "5h Usage") {
+            bars.insert(0, legacy.remove(index));
+        }
+        bars.append(&mut legacy);
     }
 
     if let Some(extra) = parsed.get("extra_usage") {
@@ -4403,6 +4652,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desktop_token_cache_prefers_the_claude_code_client() {
+        let cache = serde_json::json!({
+            "acct:profile|other-client:org:https://api.anthropic.com:user:profile": {
+                "token": "profile-token",
+                "refreshToken": "profile-refresh",
+                "expiresAt": 10
+            },
+            "acct:user|9d1c250a-e61b-44d9-88ed-5944d1962f5e:org:https://api.anthropic.com:user:sessions:claude_code": {
+                "token": "code-token",
+                "refreshToken": "code-refresh",
+                "expiresAt": 20
+            }
+        });
+        let (key, bundle) = select_claude_desktop_oauth(&cache).unwrap();
+        assert!(key.contains("claude_code"));
+        assert_eq!(bundle.access_token, "code-token");
+        assert_eq!(bundle.refresh_token.as_deref(), Some("code-refresh"));
+        assert_eq!(bundle.expires_at_ms, Some(20));
+    }
+
+    #[test]
     fn local_quota_edits_update_custom_limits_and_manual_values_without_fetching() {
         let previous = QuotaConfig { items: vec![
             QuotaItem { id: "custom".into(), provider: "custom".into(), max_quota: Some(100.0), ..Default::default() },
@@ -4645,6 +4915,52 @@ mod tests {
         assert_eq!(bars[0].value, 65.0);
         assert_eq!(bars[1].name, "7d Usage");
         assert_eq!(bars[1].value, 83.0);
+    }
+
+    #[test]
+    fn inactive_session_limit_still_shows_five_hour_usage() {
+        let json = r#"{
+            "five_hour": {"utilization": 3.0, "resets_at": "2026-11-10T14:50:00Z"},
+            "seven_day": {"utilization": 7.0, "resets_at": "2026-11-14T11:00:00Z"},
+            "limits": [
+                {"kind": "session", "percent": 3.0, "resets_at": "2026-11-10T14:50:00Z", "is_active": false},
+                {"kind": "weekly_all", "percent": 7.0, "resets_at": "2026-11-14T11:00:00Z", "is_active": true},
+                {"kind": "weekly_scoped", "percent": 0.0, "is_active": false, "scope": {"model": {"display_name": "Opus"}}}
+            ]
+        }"#;
+        let item = QuotaItem {
+            id: "claude-code-1".to_string(),
+            name: "Claude Code".to_string(),
+            provider: "claude-code".to_string(),
+            ..Default::default()
+        };
+        let res = parse_claude_oauth_usage_response(json, &item).expect("should parse");
+        let bars = res.bars.unwrap();
+        assert_eq!(bars[0].name, "5h Usage");
+        assert_eq!(bars[0].value, 97.0);
+        assert!(bars.iter().any(|bar| bar.name == "7d Usage"));
+        assert!(bars.iter().all(|bar| bar.name != "7d Opus"));
+    }
+
+    #[test]
+    fn five_hour_window_is_kept_when_limits_omit_the_session() {
+        let json = r#"{
+            "five_hour": {"utilization": 3.0, "resets_at": "2026-11-10T14:50:00Z"},
+            "limits": [
+                {"kind": "weekly_all", "percent": 7.0, "resets_at": "2026-11-14T11:00:00Z", "is_active": true}
+            ]
+        }"#;
+        let item = QuotaItem {
+            id: "claude-code-1".to_string(),
+            name: "Claude Code".to_string(),
+            provider: "claude-code".to_string(),
+            ..Default::default()
+        };
+        let res = parse_claude_oauth_usage_response(json, &item).expect("should parse");
+        let bars = res.bars.unwrap();
+        assert_eq!(bars[0].name, "5h Usage");
+        assert_eq!(bars[0].value, 97.0);
+        assert_eq!(bars[1].name, "7d Usage");
     }
 
     #[test]

@@ -85,6 +85,16 @@ impl SystemSampler {
         self.latest.clone()
     }
 
+    fn remote_openssh(&mut self, server: &ServerConfig) -> Option<SystemMetrics> {
+        if self.due() {
+            self.latest = remote_exec(server, None, REMOTE_SYSTEM_COMMAND)
+                .ok()
+                .filter(|(status, _)| *status == 0)
+                .and_then(|(_, output)| self.parse_remote(&output));
+        }
+        self.latest.clone()
+    }
+
     fn parse_remote(&mut self, output: &str) -> Option<SystemMetrics> {
         let (ticks, total, available) = parse_linux_system_counters(output)?;
         let cpu_percent = self.previous_cpu.and_then(|(old_total, old_idle)| {
@@ -252,6 +262,13 @@ fn parse_squeue_allocation_lines(
 }
 
 /// True when squeue stdout looks like a controller/error dump rather than a job table.
+fn squeue_dead_message(detail: Option<&str>) -> String {
+    match detail.map(str::trim).filter(|detail| !detail.is_empty()) {
+        Some(detail) => format!("Failed to query squeue: {}", detail),
+        None => "Failed to query squeue. SSH session may be dead.".to_string(),
+    }
+}
+
 fn squeue_output_looks_like_error(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     lower.contains("socket timed out")
@@ -770,6 +787,17 @@ pub fn ssh_config_has_host(host: &str) -> bool {
     read_ssh_config_file_for_host(host.trim()).is_some_and(|state| state.matched_alias)
 }
 
+/// Use the system OpenSSH client when the user opted in, or when Host is an
+/// alias from ~/.ssh/config. libssh2 cannot resolve those aliases (LRZ is
+/// `login.ai.lrz.de` in config, not a DNS name) and does not honor ProxyJump.
+fn server_uses_openssh_config(server: &ServerConfig) -> bool {
+    let host = server.host.trim();
+    if host.is_empty() || host == "localhost" || host == "127.0.0.1" {
+        return false;
+    }
+    server.use_ssh_config.unwrap_or(false) || ssh_config_has_host(host)
+}
+
 #[cfg(test)]
 mod ssh_config_tests {
     use super::*;
@@ -1103,7 +1131,7 @@ fn resolve_server_connection_config(server: &ServerConfig) -> ServerConfig {
 }
 
 fn openssh_target(server: &ServerConfig) -> String {
-    if server.use_ssh_config.unwrap_or(false) {
+    if server_uses_openssh_config(server) {
         server.host.trim().to_string()
     } else if let Some(user) = server.user.as_deref() {
         if !user.trim().is_empty() {
@@ -1116,11 +1144,11 @@ fn openssh_target(server: &ServerConfig) -> String {
     }
 }
 
-fn run_openssh_command(
+fn openssh_exec(
     server: &ServerConfig,
     remote_cmd: &str,
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<(i32, String, String), String> {
     let target = openssh_target(server);
     if target.is_empty() {
         return Err("SSH target is empty".to_string());
@@ -1136,7 +1164,7 @@ fn run_openssh_command(
         ))
         .arg("-T");
 
-    if !server.use_ssh_config.unwrap_or(false) {
+    if !server_uses_openssh_config(server) {
         if let Some(port) = server.port {
             cmd.arg("-p").arg(port.to_string());
         }
@@ -1182,19 +1210,62 @@ fn run_openssh_command(
     let output = child
         .wait_with_output()
         .map_err(|e| format!("Failed to collect ssh output for {}: {}", target, e))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let code = output.status.code().unwrap_or(-1);
+    Ok((
+        code,
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    ))
+}
+
+fn run_openssh_command(
+    server: &ServerConfig,
+    remote_cmd: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let target = openssh_target(server);
+    let (code, stdout, stderr) = openssh_exec(server, remote_cmd, timeout)?;
+    if code == 0 {
+        Ok(stdout)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stdout = stdout.trim();
         let detail = if !stderr.is_empty() {
             stderr
         } else if !stdout.is_empty() {
-            stdout
+            stdout.to_string()
         } else {
-            output.status.to_string()
+            format!("exit {}", code)
         };
         Err(format!("ssh {} failed: {}", target, detail))
+    }
+}
+
+fn remote_exec(
+    server: &ServerConfig,
+    sess: Option<&Session>,
+    cmd: &str,
+) -> Result<(i32, String), String> {
+    if server_uses_openssh_config(server) {
+        let (code, stdout, stderr) = openssh_exec(server, cmd, Duration::from_secs(45))?;
+        if code != 0 && stdout.trim().is_empty() && !stderr.is_empty() {
+            return Err(format!(
+                "ssh {} failed: {}",
+                openssh_target(server),
+                stderr
+            ));
+        }
+        return Ok((code, stdout));
+    }
+    let sess = sess.ok_or_else(|| "SSH session is not connected".to_string())?;
+    ssh_exec_capture(sess, cmd)
+}
+
+fn cancel_remote_gpu_steps(server: &ServerConfig, sess: Option<&Session>, job_id: Option<&str>) {
+    if server_uses_openssh_config(server) {
+        cancel_widgitron_gpu_steps_openssh(server, job_id);
+    } else if let Some(sess) = sess {
+        let user = server.user.as_deref().unwrap_or("root");
+        cancel_widgitron_gpu_steps(sess, user, job_id);
     }
 }
 
@@ -1216,7 +1287,7 @@ where
         .arg("ConnectTimeout=30")
         .arg("-T");
 
-    if !server.use_ssh_config.unwrap_or(false) {
+    if !server_uses_openssh_config(server) {
         if let Some(port) = server.port {
             cmd.arg("-p").arg(port.to_string());
         }
@@ -1678,7 +1749,7 @@ pub fn start_ssh_monitor_task(
                     ),
                 };
 
-                if s_m.use_ssh_config.unwrap_or(false) {
+                if server_uses_openssh_config(&s_m) {
                     if j_m.is_some() {
                         cancel_widgitron_gpu_steps_openssh(&s_m, j_m.as_deref());
                     }
@@ -2214,7 +2285,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                         emit_gpu_update_if_changed(&app_task, state_task.as_ref(), &gpu_data);
 
                                         Ok((None, vec![], HashMap::new(), HashMap::new(), HashMap::new(), vec![], None))
-                                    } else if s.use_ssh_config.unwrap_or(false) && !s.use_slurm.unwrap_or(false) {
+                                    } else if server_uses_openssh_config(&s) && !s.use_slurm.unwrap_or(false) {
                                         let sample_system = system_sampler.lock().ok()
                                             .is_some_and(|mut sampler| sampler.due());
                                         let remote_command = if sample_system {
@@ -2252,15 +2323,28 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
 
                                         Ok((None, vec![], HashMap::new(), HashMap::new(), HashMap::new(), vec![], None))
                                     } else {
-                                        // SSH Logic
-                                        let sess = reuse_or_connect_ssh_session(sess_opt, &s)?;
+                                        // SSH config aliases (and the Use ~/.ssh/config toggle) go
+                                        // through the system ssh client. Direct hosts keep libssh2.
+                                        let use_openssh = server_uses_openssh_config(&s);
+                                        let sess = if use_openssh {
+                                            None
+                                        } else {
+                                            Some(reuse_or_connect_ssh_session(sess_opt, &s)?)
+                                        };
 
                                         gpu_data.is_online = true;
-                                        gpu_data.system = system_sampler.lock().ok().and_then(|mut sampler| sampler.remote_session(&sess));
+                                        gpu_data.system = system_sampler.lock().ok().and_then(|mut sampler| {
+                                            if use_openssh {
+                                                sampler.remote_openssh(&s)
+                                            } else {
+                                                sess.as_ref().and_then(|session| sampler.remote_session(session))
+                                            }
+                                        });
                                         let mut desired_monitor_keys = Vec::new();
 
                                         if s.use_slurm.unwrap_or(false) {
                                              let user = s.user.as_deref().unwrap_or("root");
+                                             let mut squeue_detail: Option<String> = None;
                                              if squeue_needed {
                                                  let mut squeue_success = false;
                                                  // Include CONFIGURING/COMPLETING — interactive
@@ -2277,7 +2361,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                       || squeue -t RUNNING -u {} -h -o \"%A|%D|%N|%M\"",
                                                      user
                                                  );
-                                                 match ssh_exec_capture(&sess, &q_cmd) {
+                                                 match remote_exec(&s, sess.as_ref(), &q_cmd) {
                                                      Ok((status, s_q))
                                                          if status == 0 && !squeue_output_looks_like_error(&s_q) =>
                                                      {
@@ -2297,6 +2381,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                          );
                                                      }
                                                      Err(e) => {
+                                                         squeue_detail = Some(e.clone());
                                                          log::warn!(
                                                              "squeue exec failed for {}: {}",
                                                              s.host,
@@ -2366,19 +2451,19 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                                      );
                                                                  } else if !has_cached_jobs {
                                                                      return Err(
-                                                                         "Failed to query squeue. SSH session may be dead."
+                                                                         squeue_dead_message(squeue_detail.as_deref())
                                                                              .to_string(),
                                                                      );
                                                                  }
                                                              } else if !has_cached_jobs {
                                                                  return Err(
-                                                                     "Failed to query squeue. SSH session may be dead."
+                                                                     squeue_dead_message(squeue_detail.as_deref())
                                                                          .to_string(),
                                                                  );
                                                              }
                                                          } else if !has_cached_jobs {
                                                              return Err(
-                                                                 "Failed to query squeue. SSH session may be dead."
+                                                                 squeue_dead_message(squeue_detail.as_deref())
                                                                      .to_string(),
                                                              );
                                                          }
@@ -2399,17 +2484,16 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                  for jid in &job_ids {
                                                      let mut expanded = Vec::new();
                                                      if let Some(nodelist) = nodelists.get(jid) {
-                                                         if let Ok(mut channel) = sess.channel_session() {
-                                                             let host_cmd = format!("scontrol show hostnames {}", nodelist);
-                                                             if channel.exec(&host_cmd).is_ok() {
-                                                                 let mut host_out = String::new();
-                                                                 if channel.read_to_string(&mut host_out).is_ok() {
-                                                                     expanded = host_out
-                                                                         .lines()
-                                                                         .map(|line| line.trim().to_string())
-                                                                         .filter(|line| !line.is_empty())
-                                                                         .collect();
-                                                                 }
+                                                         let host_cmd = format!("scontrol show hostnames {}", nodelist);
+                                                         if let Ok((status, host_out)) =
+                                                             remote_exec(&s, sess.as_ref(), &host_cmd)
+                                                         {
+                                                             if status == 0 {
+                                                                 expanded = host_out
+                                                                     .lines()
+                                                                     .map(|line| line.trim().to_string())
+                                                                     .filter(|line| !line.is_empty())
+                                                                     .collect();
                                                              }
                                                          }
 
@@ -2433,11 +2517,9 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                 // Now, if we have job_ids, query sacct for SubmitLine of these job steps!
                                                 let mut submit_lines = HashMap::new();
                                                 if !job_ids.is_empty() {
-                                                    if let Ok(mut channel) = sess.channel_session() {
-                                                        let sacct_cmd = format!("sacct -j {} -o JobID,SubmitLine%250 -n -P", job_ids.join(","));
-                                                        if let Ok(_) = channel.exec(&sacct_cmd) {
-                                                            let mut s_acct = String::new();
-                                                            let _ = channel.read_to_string(&mut s_acct);
+                                                    let sacct_cmd = format!("sacct -j {} -o JobID,SubmitLine%250 -n -P", job_ids.join(","));
+                                                    if let Ok((status, s_acct)) = remote_exec(&s, sess.as_ref(), &sacct_cmd) {
+                                                        if status == 0 {
                                                             let lines: Vec<String> = s_acct.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
                                                             for line in lines {
                                                                 let parts: Vec<&str> = line.split('|').collect();
@@ -2461,7 +2543,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                      || squeue -s -u {} -h -o \"%i|%j|%M\"",
                                                     user
                                                 );
-                                                if let Ok((status, s_s)) = ssh_exec_capture(&sess, &s_cmd) {
+                                                if let Ok((status, s_s)) = remote_exec(&s, sess.as_ref(), &s_cmd) {
                                                     if status == 0 && !squeue_output_looks_like_error(&s_s) {
                                                         let lines: Vec<String> = s_s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
                                                         let mut new_steps = HashMap::new();
@@ -2570,7 +2652,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                     // Only replace the panel on a confirmed success so
                                                     // transient controller errors do not flash empty.
                                                     if let Ok((status, list_out)) =
-                                                        ssh_exec_capture(&sess, &list_cmd)
+                                                        remote_exec(&s, sess.as_ref(), &list_cmd)
                                                     {
                                                         if status == 0
                                                             && !squeue_output_looks_like_error(&list_out)
@@ -2668,11 +2750,9 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                         }
                                                     }
                                                     if let Some(ref id) = jid {
-                                                        let user =
-                                                            s.user.as_deref().unwrap_or("root");
-                                                        cancel_widgitron_gpu_steps(
-                                                            &sess,
-                                                            user,
+                                                        cancel_remote_gpu_steps(
+                                                            &s,
+                                                            sess.as_ref(),
                                                             Some(id),
                                                         );
                                                     }
@@ -2730,13 +2810,12 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                             });
 
                                             if !removed_targets.is_empty() {
-                                                let user = s.user.as_deref().unwrap_or("root");
                                                 for (removed_jid, _) in &removed_targets {
                                                     // Free probe step IDs when the allocation ends.
-                                                    cancel_widgitron_gpu_steps(
-                                                        &sess,
-                                                        user,
-                                                        Some(removed_jid),
+                                                    cancel_remote_gpu_steps(
+                                                        &s,
+                                                        sess.as_ref(),
+                                                        Some(removed_jid.as_str()),
                                                     );
                                                 }
                                                 if let Ok(mut data) = state_task.gpu_data.lock() {
@@ -2787,22 +2866,26 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
 
                                          // Fallback poll if no jobs or no data yet
                                          if gpu_data.gpu_list.is_empty() && !s.use_slurm.unwrap_or(false) {
-                                             let mut query_success = false;
-                                             if let Ok(mut channel) = sess.channel_session() {
-                                                 if let Ok(_) = channel.exec(&smi) {
-                                                     let mut s_out = String::new();
-                                                     if channel.read_to_string(&mut s_out).is_ok() {
-                                                         gpu_data.gpu_list = parse_nvidia_smi_output(&s_out);
-                                                         query_success = true;
-                                                         gpu_data.is_online = true;
-                                                         gpu_data.error = gpu_data.gpu_list.is_empty()
-                                                             .then(|| "No GPU detected".to_string());
-                                                         gpu_data.last_update = Some(Utc::now().format("%H:%M:%S").to_string());
-                                                     }
+                                             match remote_exec(&s, sess.as_ref(), &smi) {
+                                                 Ok((status, s_out)) if status == 0 => {
+                                                     gpu_data.gpu_list = parse_nvidia_smi_output(&s_out);
+                                                     gpu_data.is_online = true;
+                                                     gpu_data.error = gpu_data.gpu_list.is_empty()
+                                                         .then(|| "No GPU detected".to_string());
+                                                     gpu_data.last_update = Some(Utc::now().format("%H:%M:%S").to_string());
                                                  }
-                                             }
-                                             if !query_success {
-                                                 return Err("Failed to query nvidia-smi. SSH session may be dead.".to_string());
+                                                 Ok((status, _)) => {
+                                                     return Err(format!(
+                                                         "Failed to query nvidia-smi (exit {}). SSH session may be dead.",
+                                                         status
+                                                     ));
+                                                 }
+                                                 Err(err) => {
+                                                     return Err(format!(
+                                                         "Failed to query nvidia-smi: {}",
+                                                         err
+                                                     ));
+                                                 }
                                              }
                                          } else if gpu_data.gpu_list.is_empty() && s.use_slurm.unwrap_or(false) {
                                              let cached_snapshot = state_task
@@ -2811,36 +2894,32 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                                  .ok()
                                                  .and_then(|data| data.get(&s.host).cloned());
                                              let mut smi_error: Option<String> = None;
-                                             if let Ok(mut channel) = sess.channel_session() {
-                                                 if channel.exec(&smi).is_ok() {
-                                                     let mut s_out = String::new();
-                                                     if channel.read_to_string(&mut s_out).is_ok() {
-                                                         let parsed = parse_nvidia_smi_output(&s_out);
-                                                         if parsed.is_empty() {
-                                                             smi_error = Some(
-                                                                 "nvidia-smi returned no GPU data on login node".to_string(),
-                                                             );
-                                                         } else {
-                                                             gpu_data.gpu_list = parsed;
-                                                             gpu_data.is_online = true;
-                                                             gpu_data.error = None;
-                                                             gpu_data.last_update =
-                                                                 Some(Utc::now().format("%H:%M:%S").to_string());
-                                                         }
-                                                     } else {
+                                             match remote_exec(&s, sess.as_ref(), &smi) {
+                                                 Ok((status, s_out)) if status == 0 => {
+                                                     let parsed = parse_nvidia_smi_output(&s_out);
+                                                     if parsed.is_empty() {
                                                          smi_error = Some(
-                                                             "Failed to read nvidia-smi output".to_string(),
+                                                             "nvidia-smi returned no GPU data on login node".to_string(),
                                                          );
+                                                     } else {
+                                                         gpu_data.gpu_list = parsed;
+                                                         gpu_data.is_online = true;
+                                                         gpu_data.error = None;
+                                                         gpu_data.last_update =
+                                                             Some(Utc::now().format("%H:%M:%S").to_string());
                                                      }
-                                                 } else {
+                                                 }
+                                                 Ok(_) => {
                                                      smi_error = Some(
                                                          "Failed to exec nvidia-smi on login node".to_string(),
                                                      );
                                                  }
-                                             } else {
-                                                 smi_error = Some(
-                                                     "Failed to open SSH channel for nvidia-smi".to_string(),
-                                                 );
+                                                 Err(err) => {
+                                                     smi_error = Some(format!(
+                                                         "Failed to open SSH channel for nvidia-smi: {}",
+                                                         err
+                                                     ));
+                                                 }
                                              }
                                              if let Some(err) = smi_error {
                                                  // Only keep login-node smi cache on transient query
@@ -2942,7 +3021,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                          log::debug!("Main Worker for {} emitting update", s.host);
                                         emit_gpu_update_if_changed(&app_task, state_task.as_ref(), &emitted_gpu_data);
 
-                                         Ok((Some(sess), job_ids, nodelists, times, steps, queue_jobs, squeue_outcome))
+                                         Ok((sess, job_ids, nodelists, times, steps, queue_jobs, squeue_outcome))
                                      }
                                  }
                              }).await;
@@ -2970,10 +3049,15 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                         None => {}
                                     }
                                 }
-                                _ => {
+                                other => {
+                                    let err_msg = match other {
+                                        Ok(Err(err)) => err,
+                                        _ => "SSH connection failed or disconnected".to_string(),
+                                    };
                                     log::warn!(
-                                        "Worker for {} failed or disconnected, retrying in 10s",
-                                        server_inner.host
+                                        "Worker for {} failed: {} — retrying in 10s",
+                                        server_inner.host,
+                                        err_msg
                                     );
                                     session = None;
                                     consecutive_failures =
@@ -3017,7 +3101,7 @@ pub async fn start_gpu_monitor(app: AppHandle, state: Arc<GlobalState>) {
                                         && !gpu_data.gpu_list.is_empty();
                                     apply_offline_gpu_state(
                                         &mut gpu_data,
-                                        "SSH connection failed or disconnected",
+                                        &err_msg,
                                         keep_cached,
                                     );
                                     if !keep_cached {

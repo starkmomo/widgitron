@@ -1,6 +1,32 @@
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// HashMap iteration order changes every time config is loaded. The sidebar
+/// compares snapshots with JSON text, so that shuffle was committing a new
+/// React tree about twice a second and flashing the glass surface.
+fn serialize_optional_string_map<S, V>(
+    value: &Option<HashMap<String, V>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    V: Serialize,
+{
+    match value {
+        None => serializer.serialize_none(),
+        Some(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut output = serializer.serialize_map(Some(keys.len()))?;
+            for key in keys {
+                output.serialize_entry(key, &map[key])?;
+            }
+            output.end()
+        }
+    }
+}
 
 // --- Config Models ---
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -108,7 +134,9 @@ pub struct ArxivPaper {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub theme: Option<String>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub always_on_top: Option<HashMap<String, bool>>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub embedded: Option<HashMap<String, bool>>,
     pub gpu_enabled: Option<bool>,
     pub deadline_enabled: Option<bool>,
@@ -131,17 +159,24 @@ pub struct AppConfig {
     pub sidebar_offset: Option<f64>,
     /// Independent window geometry for left/right and top/bottom docking.
     #[serde(default)]
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub sidebar_axis_geometry: Option<HashMap<String, SidebarAxisGeometry>>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub sidebar_widgets: Option<HashMap<String, bool>>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub sidebar_layout: Option<HashMap<String, f64>>,
     pub sidebar_order: Option<Vec<String>>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub sidebar_tile_sizes: Option<HashMap<String, String>>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub sidebar_tile_layout: Option<HashMap<String, SidebarTileLayoutConfig>>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub sidebar_horizontal_tile_widths: Option<HashMap<String, f64>>,
     /// 1–10. Lower = harder to open from the screen edge (default 4, current feel).
     pub sidebar_reveal_sensitivity: Option<u8>,
     /// 1–10. Higher = hides sooner after the pointer leaves (default 8, current feel).
     pub sidebar_hide_sensitivity: Option<u8>,
+    #[serde(serialize_with = "serialize_optional_string_map")]
     pub active_widgets: Option<HashMap<String, bool>>,
     /// Temporarily hide selected widgets without changing their module switches.
     #[serde(default)]

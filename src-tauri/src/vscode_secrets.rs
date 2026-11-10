@@ -118,6 +118,19 @@ fn decrypt_v10_secret(raw: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("AES decrypt failed: {}", e))
 }
 
+fn seal_v10(plaintext: &[u8], key: &[u8], nonce_bytes: &[u8; 12]) -> Result<Vec<u8>, String> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid AES key: {}", e))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| format!("AES encrypt failed: {}", e))?;
+    let mut sealed = Vec::with_capacity(3 + nonce_bytes.len() + ciphertext.len());
+    sealed.extend_from_slice(b"v10");
+    sealed.extend_from_slice(nonce_bytes);
+    sealed.extend_from_slice(&ciphertext);
+    Ok(sealed)
+}
+
 /// Electron / Chromium OSCrypt on macOS & Linux uses AES-128-CBC with a 16-space IV.
 #[cfg(not(target_os = "windows"))]
 fn decrypt_v10_aes128_cbc(raw: &[u8], key: &[u8; 16]) -> Result<Vec<u8>, String> {
@@ -412,6 +425,41 @@ fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(output.pbData as _)));
         Ok(decrypted)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn random_nonce_12() -> Result<[u8; 12], String> {
+    use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+
+    let mut nonce = [0u8; 12];
+    unsafe {
+        BCryptGenRandom(None, &mut nonce, BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+            .ok()
+            .map_err(|e| format!("Failed to generate nonce: {}", e))?;
+    }
+    Ok(nonce)
+}
+
+/// Decrypt an Electron safeStorage blob (`base64(v10 || nonce || ciphertext)`)
+/// using the Chromium `Local State` os_crypt key. Claude Desktop stores OAuth
+/// this way in `config.json`.
+#[cfg(target_os = "windows")]
+pub fn decrypt_windows_safe_storage(local_state_path: &Path, encoded: &str) -> Result<String, String> {
+    let encrypted = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .map_err(|e| format!("Failed to decode safeStorage payload: {}", e))?;
+    let master_key = load_os_crypt_master_key(local_state_path, "Claude")?;
+    let plain = decrypt_v10_secret(&encrypted, &master_key)?;
+    String::from_utf8(plain).map_err(|_| "Decrypted safeStorage payload is not UTF-8".to_string())
+}
+
+/// Encrypt plaintext back into the same Electron safeStorage encoding.
+#[cfg(target_os = "windows")]
+pub fn encrypt_windows_safe_storage(local_state_path: &Path, plaintext: &str) -> Result<String, String> {
+    let master_key = load_os_crypt_master_key(local_state_path, "Claude")?;
+    let nonce = random_nonce_12()?;
+    let sealed = seal_v10(plaintext.as_bytes(), &master_key, &nonce)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(sealed))
 }
 
 fn session_score(scopes: &[String]) -> i32 {
@@ -762,4 +810,18 @@ pub fn read_qoder_cn_auth_token() -> Result<Option<(String, Option<String>)>, St
             Some((session.token, session.label))
         }
     }))
+}
+
+#[cfg(test)]
+mod safe_storage_tests {
+    use super::*;
+
+    #[test]
+    fn v10_safe_storage_round_trips() {
+        let key = [9u8; 32];
+        let nonce = [3u8; 12];
+        let sealed = seal_v10(b"{\"token\":\"abc\"}", &key, &nonce).unwrap();
+        let opened = decrypt_v10_secret(&sealed, &key).unwrap();
+        assert_eq!(opened, b"{\"token\":\"abc\"}");
+    }
 }
