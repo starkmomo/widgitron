@@ -1483,10 +1483,32 @@ struct CopilotMonthlyQuotas {
 struct CopilotUserResponse {
     copilot_plan: Option<String>,
     quota_reset_date: Option<String>,
+    quota_reset_date_utc: Option<String>,
     limited_user_reset_date: Option<String>,
     quota_snapshots: Option<CopilotQuotaSnapshots>,
     limited_user_quotas: Option<CopilotLimitedQuotas>,
     monthly_quotas: Option<CopilotMonthlyQuotas>,
+}
+
+impl CopilotUserResponse {
+    fn monthly_reset_time(&self) -> Option<String> {
+        use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, Utc};
+
+        if let Some(utc) = self.quota_reset_date_utc.as_deref()
+            .and_then(|value| value.trim().parse::<DateTime<Utc>>().ok())
+        {
+            return Some(utc.to_rfc3339_opts(SecondsFormat::Secs, true));
+        }
+
+        let raw = self.quota_reset_date.as_deref()?.trim();
+        // GitHub's monthly allowance resets at midnight UTC on the first.
+        if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+            if date.day() == 1 {
+                return Some(format!("{date}T00:00:00Z"));
+            }
+        }
+        format_iso_to_local(raw)
+    }
 }
 
 const COPILOT_API_VERSION: &str = "2025-05-01";
@@ -1561,24 +1583,17 @@ async fn fetch_copilot_quota(
             Err(e) => return Err(format!("Failed to parse Copilot usage response: {}", e)),
         };
 
-        let (remaining_pct, bar_name, reset_raw) = if let Some(premium) = resp
+        let (remaining_pct, bar_name, reset_time) = if let Some(premium) = resp
             .quota_snapshots
             .as_ref()
             .and_then(|s| s.premium_interactions.as_ref())
         {
-            if premium.unlimited == Some(true) {
-                (
-                    100.0,
-                    "Premium Requests".to_string(),
-                    resp.quota_reset_date.clone(),
-                )
+            let remaining = if premium.unlimited == Some(true) {
+                100.0
             } else {
-                (
-                    premium.percent_remaining.unwrap_or(0.0).clamp(0.0, 100.0),
-                    "Premium Requests".to_string(),
-                    resp.quota_reset_date.clone(),
-                )
-            }
+                premium.percent_remaining.unwrap_or(0.0).clamp(0.0, 100.0)
+            };
+            (remaining, "Premium Requests".to_string(), resp.monthly_reset_time())
         } else if let (Some(limited), Some(monthly)) = (
             resp.limited_user_quotas.as_ref(),
             resp.monthly_quotas.as_ref(),
@@ -1593,19 +1608,18 @@ async fn fetch_copilot_quota(
             (
                 pct,
                 "Chat".to_string(),
-                resp.limited_user_reset_date.clone(),
+                resp.limited_user_reset_date.as_deref().and_then(format_iso_to_local),
             )
         } else if let Some(chat) = resp.quota_snapshots.as_ref().and_then(|s| s.chat.as_ref()) {
             (
                 chat.percent_remaining.unwrap_or(0.0).clamp(0.0, 100.0),
                 "Chat".to_string(),
-                resp.quota_reset_date.clone(),
+                resp.monthly_reset_time(),
             )
         } else {
             return Err("No quota information returned from Copilot API".to_string());
         };
 
-        let reset_time = reset_raw.as_deref().and_then(format_iso_to_local);
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         return Ok(QuotaItem {
@@ -4807,6 +4821,29 @@ mod tests {
             bars.iter().map(|bar| bar.value).collect::<Vec<_>>(),
             vec![90.0, 55.0]
         );
+    }
+
+    #[test]
+    fn copilot_prefers_the_utc_reset_timestamp() {
+        let response: CopilotUserResponse = serde_json::from_value(serde_json::json!({
+            "quota_reset_date": "2026-12-01",
+            "quota_reset_date_utc": "2026-12-01T01:30:00.000Z"
+        })).unwrap();
+        assert_eq!(response.monthly_reset_time().as_deref(), Some("2026-12-01T01:30:00Z"));
+    }
+
+    #[test]
+    fn copilot_uses_midnight_utc_only_for_a_known_monthly_reset_date() {
+        for (date, expected) in [
+            ("2026-12-01", "2026-12-01T00:00:00Z"),
+            ("2026-12-14", "2026-12-14"),
+        ] {
+            let response: CopilotUserResponse = serde_json::from_value(serde_json::json!({
+                "quota_reset_date": date,
+                "quota_reset_date_utc": ""
+            })).unwrap();
+            assert_eq!(response.monthly_reset_time().as_deref(), Some(expected));
+        }
     }
 
     #[test]

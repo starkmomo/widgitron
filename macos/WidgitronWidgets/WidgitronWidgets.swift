@@ -8,6 +8,7 @@ private let quotaWidgetKind = "com.evan.widgitron.quota"
 private let gpuWidgetKind = "com.evan.widgitron.gpu"
 private let deadlineWidgetKind = "com.evan.widgitron.deadlines"
 private let quotaAppURL = URL(string: "widgitron://open/quota")
+private let quotaRefreshURL = URL(string: "widgitron://open/quota?refresh=1")!
 private let gpuAppURL = URL(string: "widgitron://open/gpu")
 private let deadlineAppURL = URL(string: "widgitron://open/deadlines")
 private let snapshotBaseURL = URL(string: "http://127.0.0.1:42837")!
@@ -68,6 +69,12 @@ private struct QuotaSnapshot: Decodable {
     }
 }
 
+private struct QuotaBar: Decodable {
+    let name: String
+    let value: Double
+    let reset: String?
+}
+
 private struct QuotaItem: Decodable {
     let name: String
     let provider: String
@@ -76,12 +83,13 @@ private struct QuotaItem: Decodable {
     let unit: String?
     let primaryName: String?
     let primaryReset: String?
+    let bars: [QuotaBar]?
     let lastUpdate: String?
     let planType: String?
     let errorMessage: String?
 
     enum CodingKeys: String, CodingKey {
-        case name, provider, unit
+        case name, provider, unit, bars
         case currentValue = "current_value"
         case maxQuota = "max_quota"
         case primaryName = "primary_name"
@@ -103,10 +111,66 @@ private struct QuotaItem: Decodable {
         return [number, unit].compactMap { $0 }.joined(separator: " ")
     }
 
-    func usageLabel(chinese: Bool) -> String? {
-        guard let primaryName, !primaryName.isEmpty else { return nil }
-        if chinese && primaryName == "7d Usage" { return "7 天用量" }
-        return primaryName
+    var visibleBars: [QuotaBar] {
+        let windows = bars ?? []
+        let standardNames = ["5h Usage", "7d Usage"]
+        let standard = standardNames.compactMap { name in windows.first { $0.name == name } }
+        return Array((standard + windows.filter { !standardNames.contains($0.name) }).prefix(2))
+    }
+
+    var cardReset: String? {
+        visibleBars.isEmpty || provider == "cursor" || provider == "copilot" ? primaryReset : nil
+    }
+
+    var resetTimes: [Date] {
+        ([cardReset] + visibleBars.map(\.reset)).compactMap { $0.flatMap(QuotaTime.date) }
+    }
+}
+
+private enum QuotaTime {
+    static let minute: TimeInterval = 60
+    static let hour = 60 * minute
+
+    private static let localFormatters = ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"].map { format in
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    private static let isoFormatters = [false, true].map { fractional in
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = fractional ? [.withInternetDateTime, .withFractionalSeconds] : [.withInternetDateTime]
+        return formatter
+    }
+
+    static func date(_ text: String) -> Date? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let iso = value.replacingOccurrences(of: " ", with: "T")
+        if value.count == 16 || value.count == 19 {
+            return localFormatters[value.count == 16 ? 0 : 1].date(from: iso.replacingOccurrences(of: "T", with: " "))
+        }
+        return isoFormatters.lazy.compactMap { $0.date(from: iso) }.first
+    }
+
+    static func countdown(_ reset: String, at now: Date, chinese: Bool) -> String {
+        guard let target = date(reset) else { return chinese ? "重置：\(reset)" : "Reset: \(reset)" }
+        let remaining = target.timeIntervalSince(now)
+        guard remaining > 0 else { return chinese ? "重置时间已到" : "Reset due" }
+        let hours = Int(remaining / hour)
+        if hours == 0 {
+            let minutes = Int(remaining / minute)
+            return minutes > 0 ? "\(minutes)m" : "<1m"
+        }
+        let days = hours / 24
+        let hoursAfterDays = hours % 24
+        return (days > 0 ? "\(days)d" : "") + (hoursAfterDays > 0 ? "\(hoursAfterDays)h" : "")
+    }
+
+    static func shortUpdate(_ value: String) -> String {
+        let parts = value.split(whereSeparator: { $0 == " " || $0 == "T" })
+        guard let time = parts.dropFirst().first, time.contains(":") else { return value }
+        return String(time.prefix(5))
     }
 }
 
@@ -117,11 +181,17 @@ private struct QuotaEntry: TimelineEntry {
 
 private struct QuotaProvider: TimelineProvider {
     func placeholder(in context: Context) -> QuotaEntry {
-        QuotaEntry(date: .now, snapshot: QuotaSnapshot(
+        let now = Date.now
+        return QuotaEntry(date: now, snapshot: QuotaSnapshot(
             language: "zh-CN", showPlanType: true,
             items: [QuotaItem(name: "Codex", provider: "codex", currentValue: 55,
                               maxQuota: 100, unit: "%", primaryName: "7d Usage",
-                              primaryReset: nil, lastUpdate: nil,
+                              primaryReset: nil,
+                              bars: [
+                                QuotaBar(name: "5h Usage", value: 80, reset: now.addingTimeInterval(45 * 60 + 30).ISO8601Format()),
+                                QuotaBar(name: "7d Usage", value: 55, reset: now.addingTimeInterval(166 * 3600 + 30).ISO8601Format()),
+                              ],
+                              lastUpdate: now.ISO8601Format(),
                               planType: "Pro", errorMessage: nil)]))
     }
 
@@ -134,8 +204,27 @@ private struct QuotaProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<QuotaEntry>) -> Void) {
         loadSnapshot("quota-snapshot.json", as: QuotaSnapshot.self) { snapshot in
-            let entry = QuotaEntry(date: .now, snapshot: snapshot)
-            completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
+            let now = Date.now
+            let count = context.family == .systemSmall ? 1 : 2
+            let resets = (snapshot?.items ?? []).prefix(count).flatMap(\.resetTimes)
+            let spacing = 5 * QuotaTime.minute
+            let horizon = now.addingTimeInterval(6 * QuotaTime.hour)
+            var updates: Set<Date> = [now]
+            for reset in resets {
+                var date = now
+                while reset > date {
+                    let remaining = reset.timeIntervalSince(date)
+                    let unit = remaining < QuotaTime.hour ? QuotaTime.minute : QuotaTime.hour
+                    let nextChange = min(remaining, remaining.truncatingRemainder(dividingBy: unit) + 1)
+                    // Coalesce changes into WidgetKit's five-minute timeline spacing.
+                    let slot = ceil((date.timeIntervalSince(now) + nextChange) / spacing)
+                    date = now.addingTimeInterval(slot * spacing)
+                    if date > horizon { break }
+                    updates.insert(date)
+                }
+            }
+            let entries = updates.sorted().map { QuotaEntry(date: $0, snapshot: snapshot) }
+            completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(spacing))))
         }
     }
 }
@@ -170,8 +259,11 @@ private struct QuotaView: View {
                     .foregroundStyle(colors.secondary)
                 Spacer(minLength: 0)
             } else {
-                ForEach(visibleItems.indices, id: \.self) { index in
-                    quotaRow(visibleItems[index])
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(visibleItems.indices, id: \.self) { index in
+                        quotaRow(visibleItems[index])
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -182,36 +274,60 @@ private struct QuotaView: View {
     }
 
     private func quotaRow(_ item: QuotaItem) -> some View {
-        VStack(alignment: .leading, spacing: isSmall ? 4 : 5) {
+        let bars = item.visibleBars
+        let reset = item.cardReset
+        return VStack(alignment: .leading, spacing: isSmall ? 4 : 5) {
             HStack(spacing: 6) {
                 Text(item.name)
                     .font((isSmall ? Font.caption : Font.subheadline).weight(.semibold))
-                    .lineLimit(1)
+                    .lineLimit(1).layoutPriority(1)
                 if !isSmall, entry.snapshot?.showPlanType == true,
                    let plan = item.planType, !plan.isEmpty {
                     Text(plan.uppercased()).font(.caption2).foregroundStyle(colors.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                if let amount = item.amount {
+                if bars.isEmpty, let amount = item.amount {
                     Text(amount)
                         .font((isSmall ? Font.caption : Font.subheadline).weight(.bold))
                         .foregroundStyle(colors.accent).widgetAccentable()
                         .lineLimit(1)
                 }
+                quotaRefreshLink(item.lastUpdate)
             }
-            if let progress = item.progress {
-                ProgressView(value: progress).tint(colors.progress).widgetAccentable()
+            if !bars.isEmpty {
+                ForEach(bars.indices, id: \.self) { index in
+                    let bar = bars[index]
+                    let percent = min(max(bar.value, 0), 100)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(usageLabel(bar.name)).font(.caption2).lineLimit(1).layoutPriority(1)
+                            Spacer(minLength: 0)
+                            if let barReset = bar.reset, barReset != reset {
+                                resetLabel(barReset)
+                            }
+                            Text("\(Int(percent.rounded()))%")
+                                .font(.caption2.weight(.bold)).monospacedDigit().fixedSize()
+                                .foregroundStyle(colors.accent).widgetAccentable()
+                        }
+                        ProgressView(value: percent / 100).controlSize(.small).tint(colors.progress).widgetAccentable()
+                    }
+                }
+            } else if let progress = item.progress {
+                ProgressView(value: progress).controlSize(.small).tint(colors.progress).widgetAccentable()
             } else if let error = item.errorMessage, !error.isEmpty {
                 Text(error).font(.caption2).foregroundStyle(colors.secondary).lineLimit(1)
             } else {
                 Text(chinese ? "等待更新" : "Waiting for update")
                     .font(.caption2).foregroundStyle(colors.secondary)
             }
-            if let label = item.usageLabel(chinese: chinese) {
+            if reset != nil || (bars.isEmpty && item.primaryName != nil) {
                 HStack(spacing: 4) {
-                    Text(label)
-                    if !isSmall, let reset = item.primaryReset, !reset.isEmpty {
-                        Text("(\(reset))")
+                    if bars.isEmpty, let label = item.primaryName {
+                        Text(usageLabel(label)).lineLimit(1)
+                    }
+                    if let reset, !reset.isEmpty {
+                        Spacer(minLength: 0)
+                        resetLabel(reset)
                     }
                 }
                 .font(.caption2)
@@ -219,6 +335,36 @@ private struct QuotaView: View {
                 .lineLimit(1)
             }
         }
+    }
+
+    private func usageLabel(_ label: String) -> String {
+        guard chinese else { return label }
+        switch label {
+        case "5h Usage": return "5 小时用量"
+        case "7d Usage": return "7 天用量"
+        default: return label
+        }
+    }
+
+    private func quotaRefreshLink(_ updated: String?) -> some View {
+        let fullTime = updated ?? (chinese ? "从未更新" : "Never")
+        let lastUpdate = chinese ? "上次更新：\(fullTime)" : "Last Update: \(fullTime)"
+        let action = chinese ? "打开 Widgitron 并刷新额度" : "Open Widgitron and refresh quotas"
+        return Link(destination: quotaRefreshURL) {
+            HStack(spacing: 3) {
+                Image(systemName: "clock")
+                if let updated { Text(QuotaTime.shortUpdate(updated)) }
+            }
+            .font(.caption2).monospacedDigit().foregroundStyle(colors.secondary).fixedSize()
+        }
+        .help("\(lastUpdate)\n\(action)").accessibilityLabel(action).accessibilityHint(lastUpdate)
+    }
+
+    private func resetLabel(_ reset: String) -> some View {
+        let tooltip = chinese ? "重置：\(reset)" : "Reset: \(reset)"
+        return Text(QuotaTime.countdown(reset, at: entry.date, chinese: chinese))
+            .font(.caption2).monospacedDigit().foregroundStyle(colors.secondary)
+            .lineLimit(1).minimumScaleFactor(0.8).help(tooltip).accessibilityHint(tooltip)
     }
 }
 

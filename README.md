@@ -31,7 +31,7 @@
 </p>
 
 > [!TIP]
-> Windows users can download the pre-compiled standalone executable directly from the [Releases](https://github.com/starkmomo/widgitron/releases) page.
+> Download prebuilt packages from [Releases](https://github.com/starkmomo/widgitron/releases). On Windows (x64), run the `.exe` installer. On macOS (Apple Silicon), unzip `Widgitron-macOS-arm64.zip` to get `Widgitron.app`.
 
 Widgitron is a modern, cross-platform dashboard built with **Tauri**, **Rust**, and **React**. It provides a premium, glassmorphic UI for monitoring GPUs, conference deadlines, and arxiv research papers.
 

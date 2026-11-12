@@ -19,6 +19,7 @@ export interface ToggleWidgetResponse {
 export interface MainNavigationRequest {
   destination: "quota" | "gpu" | "deadlines";
   conference_view: "all" | "followed" | null;
+  refresh_quota?: boolean;
 }
 
 export interface SshConfigHostEntry {

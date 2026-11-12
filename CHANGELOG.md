@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### 中文
+
+- **额度重置倒计时**。主界面、浮窗、侧边栏和 macOS 系统小组件都会在有重置时间的额度条旁显示倒计时，不到一小时显示分钟。Copilot 优先使用接口提供的 UTC 重置时间。
+- **手动刷新额度**。额度卡片在右上角显示上次更新时间，点击即可刷新。点击 macOS 系统小组件上的时间会打开 Widgitron 并刷新额度。
+
+### English
+
+- **Quota reset countdowns** appear on the dashboard, in floating widgets and the sidebar, and in the native macOS widget when a reset time is available. Countdown labels show minutes when less than an hour remains. Copilot uses the API's UTC reset time when available.
+- **Manual quota refresh** is available by clicking the last-updated time in the top-right corner of a quota card. Clicking the timestamp in the native macOS widget opens Widgitron and refreshes quotas.
+
 ## [0.3.1] - 2026-11-10
 
 ### 中文

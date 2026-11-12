@@ -9,7 +9,7 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>WidgitronWidgets</string>
     <key>CFBundlePackageType</key><string>XPC!</string>
-    <key>CFBundleShortVersionString</key><string>0.3.0</string>
+    <key>CFBundleShortVersionString</key><string>0.3.1</string>
     <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
     <key>CFBundleVersion</key><string>1</string>
     <key>WidgitronAppGroupIdentifier</key><string>$(WIDGITRON_APP_GROUP_ID)</string>
