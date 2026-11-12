@@ -3,6 +3,7 @@
 //! Never put credentials or raw provider responses in this file.
 
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use libloading::{Library, Symbol};
 use tauri::AppHandle;
 use objc2_foundation::{NSFileManager, NSString};
 
-use crate::models::{AppConfig, GlobalState, GpuConfig, PaperConfig, PaperDeadlineInfo, QuotaConfig, QuotaItem, ServerGpuData};
+use crate::models::{AppConfig, GlobalState, GpuConfig, PaperConfig, PaperDeadlineInfo, QuotaBar, QuotaConfig, QuotaItem, ServerGpuData};
 
 const GROUP_ID: &str = match option_env!("WIDGITRON_APP_GROUP_ID") {
     Some(value) => value,
@@ -75,6 +76,8 @@ struct QuotaSnapshotItem<'a> {
     unit: Option<&'a str>,
     primary_name: Option<&'a str>,
     primary_reset: Option<&'a str>,
+    #[serde(skip_serializing_if = "<[QuotaBar]>::is_empty")]
+    bars: Cow<'a, [QuotaBar]>,
     last_update: Option<&'a str>,
     plan_type: Option<&'a str>,
     error_msg: Option<&'a str>,
@@ -281,6 +284,24 @@ fn shared_container() -> Result<PathBuf, String> {
 }
 
 fn display_item(item: &QuotaItem) -> QuotaSnapshotItem<'_> {
+    let bars: Cow<'_, [QuotaBar]> = match item.bars.as_deref().filter(|bars| !bars.is_empty()) {
+        Some(bars) => Cow::Borrowed(bars),
+        None if item.secondary_value.is_some() || item.tertiary_value.is_some() => {
+            let bars = [
+                (item.current_value, &item.primary_name, &item.primary_reset),
+                (item.secondary_value, &item.secondary_name, &item.secondary_reset),
+                (item.tertiary_value, &item.tertiary_name, &item.tertiary_reset),
+            ].into_iter().filter_map(|(value, name, reset)| {
+                Some(QuotaBar {
+                    name: name.clone().unwrap_or_else(|| "Usage".into()),
+                    value: value?,
+                    reset: reset.clone(),
+                })
+            }).collect();
+            Cow::Owned(bars)
+        }
+        None => Cow::Borrowed(&[]),
+    };
     QuotaSnapshotItem {
         name: &item.name,
         provider: &item.provider,
@@ -289,6 +310,7 @@ fn display_item(item: &QuotaItem) -> QuotaSnapshotItem<'_> {
         unit: item.unit.as_deref(),
         primary_name: item.primary_name.as_deref(),
         primary_reset: item.primary_reset.as_deref(),
+        bars,
         last_update: item.last_update.as_deref(),
         plan_type: item.plan_type.as_deref(),
         error_msg: item.error_msg.as_deref(),
@@ -298,6 +320,27 @@ fn display_item(item: &QuotaItem) -> QuotaSnapshotItem<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_snapshot_includes_all_legacy_windows_and_their_reset_times() {
+        let item = QuotaItem {
+            provider: "codex".into(),
+            api_key: "secret".into(),
+            current_value: Some(88.0),
+            primary_name: Some("5h Usage".into()),
+            primary_reset: Some("2026-11-12 18:00".into()),
+            secondary_value: Some(0.0),
+            secondary_name: Some("7d Usage".into()),
+            secondary_reset: Some("2026-11-18 17:00".into()),
+            ..Default::default()
+        };
+        let snapshot = serde_json::to_value(display_item(&item)).unwrap();
+        assert_eq!(snapshot["bars"][0]["name"], "5h Usage");
+        assert_eq!(snapshot["bars"][0]["reset"], "2026-11-12 18:00");
+        assert_eq!(snapshot["bars"][1]["value"], 0.0);
+        assert_eq!(snapshot["bars"][1]["reset"], "2026-11-18 17:00");
+        assert!(snapshot.get("api_key").is_none());
+    }
 
     fn deadline(title: &str, days_from_now: i64) -> PaperDeadlineInfo {
         PaperDeadlineInfo {

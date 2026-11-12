@@ -31,7 +31,7 @@
 </p>
 
 > [!TIP]
-> Windows 用户可直接从 [Releases](https://github.com/starkmomo/widgitron/releases) 下载已编译的独立程序。
+> 可从 [Releases](https://github.com/starkmomo/widgitron/releases) 下载预编译包。Windows（x64）用户运行 `.exe` 安装程序，macOS（Apple 芯片）用户解压 `Widgitron-macOS-arm64.zip` 即可获得 `Widgitron.app`。
 
 Widgitron 是基于 **Tauri**、**Rust** 和 **React** 的跨平台桌面仪表板，提供玻璃拟态界面，用于监控 GPU、论文截止日期和 arXiv 论文。
 

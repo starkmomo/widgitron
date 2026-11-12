@@ -147,7 +147,7 @@ const ZH: Record<string, string> = {
   "Refresh failed — showing cached papers.": "刷新失败，正在显示缓存的论文。",
   "Update failed — showing cached quota data.": "更新失败，正在显示缓存的额度数据。",
   "Refresh failed — showing cached quota data.": "刷新失败，正在显示缓存的额度数据。",
-  "7d Usage": "7 天用量",
+  "5h Usage": "5 小时用量", "7d Usage": "7 天用量",
   "Monitored Agents": "监控的 Agent", "No Sidebar Widgets": "侧边栏暂无模块",
   "Open Settings": "打开设置", "No Agents Configured": "尚未配置 Agent",
   "No Servers Configured": "尚未配置服务器", "No Conferences Tracked": "尚未关注会议",
@@ -320,6 +320,8 @@ const ZH: Record<string, string> = {
   "Job:": "任务：", "JOB:": "任务：", "jobs": "个任务", "papers": "篇论文",
   "Load": "负载", "Move": "移动", "Name": "名称", "JSON Path": "JSON 路径",
   "Last Update:": "上次更新：", "Reset:": "重置：", "Never": "从未更新",
+  "Click to refresh quotas": "点击刷新额度",
+  "Just now": "刚刚", "Reset due": "重置时间已到",
   "Remaining": "剩余",
   "% remaining": "% 剩余", "used": "已使用", "Server #": "服务器 #",
   "No new papers. Adjust keywords in Settings or wait for update.": "暂无新论文，可在设置中调整关键词或等待更新。",
@@ -393,6 +395,11 @@ function translated(source: string): string {
   const [, before, core, after] = whitespace;
   const normalized = core.replace(/\s+/g, " ").trim();
   if (ZH[normalized]) return before + ZH[normalized] + after;
+  const quotaTime = core.match(/^(Last Update:|Reset:) ([^\n]+)(?:\n(Click to refresh quotas))?$/);
+  if (quotaTime) {
+    const [, label, time, action] = quotaTime;
+    return `${before}${ZH[label]}${ZH[time] ?? time}${action ? `\n${ZH[action]}` : ""}${after}`;
+  }
   const count = core.match(/^(All|Latest|Saved|Discarded) \((\d+)\)$/);
   if (count) return `${before}${ZH[count[1]]} (${count[2]})${after}`;
   const online = core.match(/^(\d+)\/(\d+) servers online$/i);

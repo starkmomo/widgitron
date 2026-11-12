@@ -311,12 +311,6 @@ export interface QuotaBar {
   reset?: string | null;
 }
 
-export interface QuotaBarDisplay {
-  val: number;
-  name: string;
-  reset?: string | null;
-}
-
 export interface QuotaItem {
   id: string;
   name: string;

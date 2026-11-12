@@ -37,6 +37,8 @@ pub enum ConferenceView {
 pub struct MainNavigationRequest {
     destination: MainDestination,
     conference_view: Option<ConferenceView>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    refresh_quota: bool,
 }
 
 impl MainNavigationRequest {
@@ -51,7 +53,7 @@ impl MainNavigationRequest {
                 || config.subscribed_titles.as_ref().is_some_and(|titles| !titles.is_empty());
             if has_follows { ConferenceView::Followed } else { ConferenceView::All }
         });
-        Self { destination, conference_view }
+        Self { destination, conference_view, refresh_quota: false }
     }
 }
 
@@ -83,7 +85,11 @@ pub fn handle_widget_url(app: &tauri::AppHandle, url: &tauri::Url) -> bool {
         } else {
             crate::models::PaperConfig::default()
         };
-        let request = MainNavigationRequest::for_widget(destination, &config);
+        let mut request = MainNavigationRequest::for_widget(destination, &config);
+        if destination == MainDestination::Quota && url.query() == Some("refresh=1") {
+            let app_config = crate::config_store::read_config::<crate::models::AppConfig>(app, "app_config.json");
+            request.refresh_quota = app_config.quota_enabled.unwrap_or(true);
+        }
         match app.state::<MainNavigation>().request(request) {
             Ok(()) => {
                 if let Err(error) = app.emit_to("main", "main_navigation_pending", ()) {

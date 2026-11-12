@@ -8,7 +8,7 @@ import { useFloatingContentMinimum } from "../hooks/useFloatingContentMinimum";
 import { widgetCardStyle } from "../utils/glassCardBackground";
 import { hexToRgba, adjustColorOpacity, isLightColor } from "../utils/color";
 import { providerLogoToneClass } from "../utils/providerLogo";
-import { isStaleQuotaWarning, quotaHasDisplayValue, orderQuotaByConfig } from "../utils/quotaDisplay";
+import { getQuotaBarDisplay, isStaleQuotaWarning, quotaHasDisplayValue, orderQuotaByConfig } from "../utils/quotaDisplay";
 import { handleWidgetAppConfigUpdate } from "../utils/widgetLifecycle";
 import { listenQuotaMonitorStatus, type QuotaMonitorStatus } from "../utils/quotaMonitorStatus";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
@@ -17,6 +17,7 @@ import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import type { QuotaItem, QuotaItemConfig, QuotaVisualizationConfig } from "../types/config";
 import { QuotaVisualizations } from "../components/QuotaVisualizations";
+import { QuotaLastUpdated, QuotaResetCountdown } from "../components/QuotaTimes";
 import type { AntigravitySetupStatus } from "../types/tauri";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
@@ -398,94 +399,51 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
         ) : displayedQuotas.length > 0 ? (
           displayedQuotas.map((q) => {
             const hasValue = q.current_value !== null && q.current_value !== undefined;
-            const usesQuotaBarLayout =
-              q.provider === "codex" ||
-              q.provider === "cursor" ||
-              q.provider === "antigravity" ||
-              q.provider === "copilot" ||
-              q.provider === "pioneer" ||
-              q.provider === "qoder-cn" ||
-              q.provider === "claude-code";
+            const { bars, cardReset } = getQuotaBarDisplay(q);
+            const updated = <QuotaLastUpdated updated={q.last_update} onRefresh={handleRefresh}
+              refreshing={isRefreshing} className="text-[9px] text-(--widget-secondary-color)" />;
+            const reset = cardReset && (
+              <QuotaResetCountdown reset={cardReset} className="self-end max-w-full truncate text-[9px] text-(--widget-secondary-color)" />
+            );
 
-            const isMultiBar =
-              hasValue &&
-              usesQuotaBarLayout &&
-              ((q.bars && q.bars.length > 0) ||
-                q.provider === "copilot" ||
-                (q.secondary_value !== undefined && q.secondary_value !== null) ||
-                (q.tertiary_value !== undefined && q.tertiary_value !== null));
-
-            if (isMultiBar) {
-              const bars =
-                q.bars && q.bars.length > 0
-                  ? q.bars.map((bar) => ({
-                      val: bar.value,
-                      name: bar.name,
-                      reset: bar.reset,
-                    }))
-                  : [
-                      { val: q.current_value ?? 0, name: q.primary_name || "Usage", reset: q.primary_reset },
-                      ...(q.secondary_value !== undefined && q.secondary_value !== null
-                        ? [{ val: q.secondary_value, name: q.secondary_name || "", reset: q.secondary_reset }]
-                        : []),
-                      ...(q.tertiary_value !== undefined && q.tertiary_value !== null
-                        ? [{ val: q.tertiary_value, name: q.tertiary_name || "", reset: q.tertiary_reset }]
-                        : []),
-                    ];
-
+            if (bars.length > 0) {
               const getBarColor = (pct: number) =>
                 pct < 15 ? danger : pct < 40 ? warning : success;
-
-              // Cursor / Copilot: shared reset shown in header
-              const headerReset =
-                q.provider === "cursor" || q.provider === "copilot" ? q.primary_reset : null;
-              // Codex: each bar shows its own reset inline (not in header)
-              const showBarReset =
-                q.provider === "codex" ||
-                q.provider === "antigravity" ||
-                q.provider === "claude-code";
 
               return (
                 <div
                   key={q.id}
                   data-widget-minimum-card=""
-                  className="widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
+                  className="@container widget-item-card bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
                   style={widgetCardStyle(currentTheme)}
                 >
                   <div className="relative z-10 flex flex-col gap-2">
-                    {/* Header: Title + optional shared reset */}
-                    <div className="flex items-center justify-between w-full min-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="flex items-center justify-between gap-1.5 w-full min-w-0">
+                      <div className="flex items-center gap-1 min-w-0">
                         {renderProviderIcon(q.provider)}
-                        <span className="text-[10px] font-black truncate" style={{ color: mainText }} title={displayName(q)}>
+                        <span className="min-w-0 break-words text-[10px] font-black leading-tight @[11rem]:truncate" style={{ color: mainText }} title={displayName(q)}>
                           {displayName(q)}
                         </span>
                         {showPlanType && q.plan_type && (
-                          <span className="text-[8px] font-extrabold uppercase tracking-widest px-1 py-0.5 rounded bg-white/5 border border-white/5 opacity-70 flex-shrink-0" style={{ color: subText }}>
+                          <span className="hidden @[11rem]:inline-block text-[8px] font-extrabold uppercase tracking-widest px-1 py-0.5 rounded bg-white/5 border border-white/5 opacity-70 flex-shrink-0" style={{ color: subText }}>
                             {q.plan_type}
                           </span>
                         )}
                       </div>
-                      {headerReset && (
-                        <span className="text-[8px] opacity-60 font-medium whitespace-nowrap" style={{ color: subText }}>
-                          Reset: {headerReset}
-                        </span>
-                      )}
+                      {updated}
                     </div>
 
                     {/* Bars */}
                     {bars.map((bar, i) => {
-                      const pct = bar.val;
+                      const pct = bar.value;
                       const color = getBarColor(pct);
                       return (
                         <div key={i} className={`flex flex-col gap-1 ${i > 0 ? "mt-0.5" : ""}`}>
-                          <div className="flex justify-between items-center text-[9px] font-bold">
-                            <span style={{ color: subText }} className="flex items-center gap-1 min-w-0">
-                              <span className="truncate">{bar.name}</span>
-                              {showBarReset && bar.reset && (
-                                <span className="text-[8px] opacity-50 font-normal whitespace-nowrap">
-                                  ({bar.reset})
-                                </span>
+                          <div className="flex justify-between items-baseline text-[9px] font-bold">
+                            <span style={{ color: subText }} className="flex flex-wrap items-baseline gap-x-1.5 min-w-0">
+                              <span className="min-w-0 break-words">{bar.name}</span>
+                              {bar.reset && bar.reset !== cardReset && (
+                                <QuotaResetCountdown reset={bar.reset} className="text-[8px] font-normal" />
                               )}
                             </span>
                             <span style={{ color }} className="tabular-nums ml-2 flex-shrink-0">
@@ -506,6 +464,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                       );
                     })}
 
+                    {reset}
                     {renderQuotaAlert(q, expandedErrors, toggleErrorExpand)}
 
                     <QuotaVisualizations
@@ -528,7 +487,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                   {/* Glowing Background Blob */}
                   <div
                     className="absolute top-0 right-0 w-16 h-16 rounded-full blur-2xl -mr-8 -mt-8 pointer-events-none opacity-20 transition-opacity group-hover:opacity-40"
-                    style={{ backgroundColor: getBarColor(bars[0].val) }}
+                    style={{ backgroundColor: getBarColor(bars[0].value) }}
                   />
                 </div>
               );
@@ -563,7 +522,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                 key={q.id}
                 data-widget-minimum-card=""
                 data-widget-surface="true"
-                className="bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
+                className="@container bg-white/5 rounded-xl p-3 border border-white/5 relative overflow-hidden group transition-all hover:bg-white/10 hover:border-white/10"
                 style={widgetCardStyle(currentTheme)}
               >
                 <div className="relative z-10 flex flex-col gap-1.5">
@@ -576,23 +535,16 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                           {displayName(q)}
                         </span>
                         {showPlanType && q.plan_type && (
-                          <span className="text-[8px] font-extrabold uppercase tracking-widest px-1 py-0.5 rounded bg-white/5 border border-white/5 opacity-70 flex-shrink-0" style={{ color: subText }}>
+                          <span className="hidden @[11rem]:inline-block text-[8px] font-extrabold uppercase tracking-widest px-1 py-0.5 rounded bg-white/5 border border-white/5 opacity-70 flex-shrink-0" style={{ color: subText }}>
                             {q.plan_type}
                           </span>
                         )}
                       </div>
-                      {/* Antigravity model label + reset time */}
+                      {/* Antigravity model label */}
                       {q.provider === "antigravity" && q.primary_name && (
-                        <div className="flex items-center justify-between mt-0.5 pl-4">
-                          <span className="text-[8px] font-semibold truncate" style={{ color: subText }}>
-                            {q.primary_name}
-                          </span>
-                          {q.primary_reset && (
-                            <span className="text-[8px] opacity-60 font-medium whitespace-nowrap ml-2" style={{ color: subText }}>
-                              Reset: {q.primary_reset}
-                            </span>
-                          )}
-                        </div>
+                        <span className="mt-0.5 truncate pl-4 text-[8px] font-semibold" style={{ color: subText }}>
+                          {q.primary_name}
+                        </span>
                       )}
                     </div>
 
@@ -646,6 +598,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                           <Edit2 size={8} />
                         </button>
                       )}
+                      {updated}
                     </div>
                   </div>
 
@@ -663,13 +616,7 @@ export function QuotaWidgetContent({ hideHeader = false, headerControls }: { hid
                     </div>
                   )}
 
-                  {/* Reset Time for non-antigravity single-bar items */}
-                  {q.primary_reset && q.provider !== "antigravity" && (
-
-                    <div className="text-[8px] opacity-60 font-medium text-right mt-0.5" style={{ color: subText }}>
-                      Reset: {q.primary_reset}
-                    </div>
-                  )}
+                  {reset}
 
                   {/* Manual Controls */}
                   {isManual && (

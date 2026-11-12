@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { APP_VERSION, APP_NAME } from "./constants";
-import { isStaleQuotaWarning, quotaHasDisplayValue, orderQuotaByConfig } from "./utils/quotaDisplay";
+import { getQuotaBarDisplay, isStaleQuotaWarning, quotaHasDisplayValue, orderQuotaByConfig } from "./utils/quotaDisplay";
 import { orderGpuServersByConfig, sortGpuJobGroups } from "./utils/gpuDisplay";
 import {
   gpuStatHint as computeGpuStatHint,
@@ -60,7 +60,7 @@ import { ArxivReadingActions } from "./components/ArxivReadingActions";
 import { ArxivSkippedDialog } from "./components/ArxivSkippedDialog";
 import { formatCpuPercent, formatSystemMemory } from "./utils/systemMetrics";
 import { formatArxivKeywordLabel, groupArxivPapersByKeyword, hasArxivKeywords } from "./utils/arxivKeywords";
-import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaBarDisplay, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
+import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
 import type { SidebarDockState, UpdateInfo } from "./types/tauri";
 import { resolveWidgetTheme } from "./utils/widgetTheme";
 import { isMacOS, isWindows } from "./utils/platform";
@@ -73,6 +73,7 @@ import { MasterSwitch } from "./components/MasterSwitch";
 import { DashboardServiceToggleError, ToggleErrorBanner } from "./components/SettingsRefreshError";
 import { ServiceErrorBanners } from "./components/ServiceErrorBanners";
 import { QuotaVisualizations } from "./components/QuotaVisualizations";
+import { QuotaLastUpdated, QuotaResetCountdown } from "./components/QuotaTimes";
 import { StatCard } from "./components/StatCard";
 import { SectionEmptyState } from "./components/SectionEmptyState";
 import { FloatingWindowControls } from "./components/FloatingWindowControls";
@@ -428,6 +429,7 @@ const renderProviderIcon = (provider: string, isManual = false, lightBackground 
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
+  const [quotaRefreshRequested, setQuotaRefreshRequested] = useState(false);
   const [conferenceNavigation, setConferenceNavigation] = useState<ConferenceNavigationRequest | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [inlineSettingsSection, setInlineSettingsSection] = useState<SettingsSection | null>(null);
@@ -451,6 +453,7 @@ function App() {
               setConferenceNavigation(previous => ({ view, id: (previous?.id ?? 0) + 1 }));
             }
             setActiveTab(request.destination);
+            if (request.destination === "quota" && request.refresh_quota) setQuotaRefreshRequested(true);
           }
         } catch (error) {
           console.error("Widget navigation failed", error);
@@ -671,6 +674,11 @@ function App() {
     });
   }
   const appConfigWriter = appConfigWriterRef.current;
+  useEffect(() => {
+    if (!quotaRefreshRequested) return;
+    setQuotaRefreshRequested(false);
+    if (appConfig.quota_enabled !== false) void handleRefreshQuota();
+  }, [quotaRefreshRequested, appConfig.quota_enabled, handleRefreshQuota]);
   const appConfigSync = useRef<ReturnType<typeof startWindowSnapshotSync<AppConfig>> | null>(null);
   useUiLocalization(resolveLanguage(appConfig.language));
   const pagedArxivView = arxivView === "all" || (arxivView === "unread" && hasReadingKeywords && arxivDate !== "");
@@ -3158,55 +3166,20 @@ function App() {
                         }
                       }
 
-                      const usesQuotaBarLayout =
-                        q.provider === "codex" ||
-                        q.provider === "cursor" ||
-                        q.provider === "antigravity" ||
-                        q.provider === "copilot" ||
-                        q.provider === "pioneer" ||
-                        q.provider === "qoder-cn" ||
-                        q.provider === "claude-code";
-
-                      const isMultiBar =
-                        hasValue &&
-                        usesQuotaBarLayout &&
-                        ((q.bars && q.bars.length > 0) ||
-                          q.provider === "copilot" ||
-                          (q.secondary_value !== undefined && q.secondary_value !== null) ||
-                          (q.tertiary_value !== undefined && q.tertiary_value !== null));
-
-                      const bars: QuotaBarDisplay[] =
-                        q.bars && q.bars.length > 0
-                          ? q.bars.map((bar) => ({
-                              val: bar.value,
-                              name: bar.name,
-                              reset: bar.reset,
-                            }))
-                          : [
-                              { val: q.current_value ?? 0, name: q.primary_name || "Usage", reset: q.primary_reset },
-                              ...(q.secondary_value !== undefined && q.secondary_value !== null
-                                ? [{ val: q.secondary_value, name: q.secondary_name || "", reset: q.secondary_reset }]
-                                : []),
-                              ...(q.tertiary_value !== undefined && q.tertiary_value !== null
-                                ? [{ val: q.tertiary_value, name: q.tertiary_name || "", reset: q.tertiary_reset }]
-                                : []),
-                            ];
-
-                      const showBarReset =
-                        q.provider === "codex" ||
-                        q.provider === "antigravity" ||
-                        q.provider === "claude-code";
+                      const { bars, cardReset } = getQuotaBarDisplay(q);
+                      const isMultiBar = bars.length > 0;
+                      const hasTwoBars = bars.length === 2;
                       const isManual = q.provider === "manual";
 
                       return (
                         <div
                           key={q.id}
-                          className={`glass-card p-6 border border-[var(--dashboard-border)] rounded-2xl relative overflow-hidden group ${
+                          className={`@container/quota-card glass-card p-6 border border-[var(--dashboard-border)] rounded-2xl relative overflow-hidden group ${
                             appConfig.theme === "light" ? "bg-white" : "bg-white/5"
                           }`}
                         >
                           <div className="relative z-10 flex flex-col gap-4">
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center gap-2 min-w-0">
                                 {renderProviderIcon(q.provider, isManual, appConfig.theme === "light")}
                                 <h3 className={`text-sm font-bold truncate ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
@@ -3220,27 +3193,32 @@ function App() {
                                   </span>
                                 )}
                               </div>
-                              {!isMultiBar && (
-                                <span className={`text-sm font-black ${textColor}`}>
-                                  {hasValue ? (
-                                    <>
-                                      {q.unit === "%"
-                                        ? Math.round(current)
-                                        : current.toFixed(current % 1 === 0 ? 0 : 2)}
-                                      {q.unit === "%" ? "%" : q.unit ? ` ${q.unit}` : ""}
-                                      {hasMax && q.unit !== "%" && ` / ${max}`}
-                                    </>
-                                  ) : (
-                                    "-"
-                                  )}
-                                </span>
-                              )}
+                              <div className="flex shrink-0 items-center gap-2">
+                                {!isMultiBar && (
+                                  <span className={`text-sm font-black ${textColor}`}>
+                                    {hasValue ? (
+                                      <>
+                                        {q.unit === "%"
+                                          ? Math.round(current)
+                                          : current.toFixed(current % 1 === 0 ? 0 : 2)}
+                                        {q.unit === "%" ? "%" : q.unit ? ` ${q.unit}` : ""}
+                                        {hasMax && q.unit !== "%" && ` / ${max}`}
+                                      </>
+                                    ) : (
+                                      "-"
+                                    )}
+                                  </span>
+                                )}
+                                <QuotaLastUpdated updated={q.last_update} onRefresh={handleRefreshQuota}
+                                  refreshing={isRefreshingQuota} disabled={appConfig.quota_enabled === false}
+                                  className="text-[10px] text-slate-500" />
+                              </div>
                             </div>
 
                             {isMultiBar ? (
-                              <div className="space-y-3">
+                              <div className={`grid grid-cols-1 gap-3 ${hasTwoBars ? "@[20rem]/quota-card:grid-cols-2" : ""}`}>
                                 {bars.map((bar, i) => {
-                                  const pct = bar.val;
+                                  const pct = bar.value;
                                   let colorClass = "bg-emerald-500";
                                   let textClass = "text-emerald-400";
                                   if (pct < 15) {
@@ -3253,11 +3231,18 @@ function App() {
                                   return (
                                     <div key={i} className="space-y-2">
                                       <div className="flex items-baseline justify-between gap-3">
-                                        <span className={`min-w-0 break-words text-xs font-semibold ${appConfig.theme === "light" ? "text-slate-600" : "text-slate-300"}`}>
-                                          {bar.name}
-                                        </span>
+                                        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                          <span className={`min-w-0 break-words text-xs font-semibold ${appConfig.theme === "light" ? "text-slate-600" : "text-slate-300"}`}>
+                                            {bar.name}
+                                          </span>
+                                          {bar.reset && bar.reset !== cardReset && (
+                                            <QuotaResetCountdown reset={bar.reset} className="text-[10px] leading-4 text-slate-500" />
+                                          )}
+                                        </div>
                                         <span className="flex shrink-0 items-baseline gap-1.5">
-                                          <span className="text-[10px] font-medium text-slate-500">Remaining</span>
+                                          <span className={`text-[10px] font-medium text-slate-500 ${hasTwoBars ? "@[20rem]/quota-card:sr-only" : ""}`}>
+                                            Remaining
+                                          </span>
                                           <span className={`tabular-nums text-base font-bold ${textClass}`}>
                                             {pct.toFixed(0)}%
                                           </span>
@@ -3269,11 +3254,6 @@ function App() {
                                           style={{ width: `${pct}%` }}
                                         />
                                       </div>
-                                      {showBarReset && bar.reset && (
-                                        <div className="flex flex-wrap items-baseline gap-x-1 text-[11px] leading-4 text-slate-500">
-                                          <span>Reset:</span><span className="tabular-nums">{bar.reset}</span>
-                                        </div>
-                                      )}
                                     </div>
                                   );
                                 })}
@@ -3295,12 +3275,9 @@ function App() {
                               )
                             )}
 
-                            <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-[10px] text-slate-500 pt-2 border-t border-[var(--dashboard-border)] mt-1">
-                              <span>Last Update: {q.last_update ? q.last_update.split(" ")[1] || q.last_update : "Never"}</span>
-                              {q.primary_reset && (q.provider === "cursor" || q.provider === "copilot" || !isMultiBar) && (
-                                <span>Reset: {q.primary_reset}</span>
-                              )}
-                            </div>
+                            {cardReset && (
+                              <QuotaResetCountdown reset={cardReset} className="self-end text-[10px] leading-4 text-slate-500" />
+                            )}
 
                             {q.error_msg && (
                               <div className={`mt-2 text-xs italic p-3 rounded-xl border ${
